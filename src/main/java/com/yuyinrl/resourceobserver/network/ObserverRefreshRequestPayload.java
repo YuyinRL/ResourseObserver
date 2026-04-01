@@ -10,7 +10,12 @@ import net.minecraft.resources.ResourceLocation;
 /**
  * Client-to-server refresh request while terminal GUI is open.
  */
-public record ObserverRefreshRequestPayload(BlockPos observerPos) implements CustomPacketPayload {
+public record ObserverRefreshRequestPayload(
+        BlockPos observerPos,
+        ChartWindow chartWindow,
+        ChartScope chartScope,
+        String scopeItemId
+) implements CustomPacketPayload {
     public static final Type<ObserverRefreshRequestPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(ResourceObserverMod.MODID, "observer_refresh_request"));
 
@@ -18,12 +23,23 @@ public record ObserverRefreshRequestPayload(BlockPos observerPos) implements Cus
             new StreamCodec<>() {
                 @Override
                 public ObserverRefreshRequestPayload decode(FriendlyByteBuf buf) {
-                    return new ObserverRefreshRequestPayload(buf.readBlockPos());
+                    BlockPos observerPos = buf.readBlockPos();
+                    ChartWindow chartWindow = ChartWindow.fromId(buf.readVarInt());
+                    ChartScope chartScope = ChartScope.fromId(buf.readVarInt());
+                    String scopeItemId = buf.readBoolean() ? buf.readUtf(256) : "";
+                    return new ObserverRefreshRequestPayload(observerPos, chartWindow, chartScope, scopeItemId);
                 }
 
                 @Override
                 public void encode(FriendlyByteBuf buf, ObserverRefreshRequestPayload payload) {
                     buf.writeBlockPos(payload.observerPos());
+                    buf.writeVarInt(payload.chartWindow().id());
+                    buf.writeVarInt(payload.chartScope().id());
+                    boolean hasScope = payload.scopeItemId() != null && !payload.scopeItemId().isBlank();
+                    buf.writeBoolean(hasScope);
+                    if (hasScope) {
+                        buf.writeUtf(payload.scopeItemId(), 256);
+                    }
                 }
             };
 
@@ -32,4 +48,3 @@ public record ObserverRefreshRequestPayload(BlockPos observerPos) implements Cus
         return TYPE;
     }
 }
-

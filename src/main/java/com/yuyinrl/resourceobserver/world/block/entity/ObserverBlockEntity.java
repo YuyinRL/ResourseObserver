@@ -8,6 +8,7 @@ import appeng.api.networking.storage.IStorageService;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
 import appeng.api.stacks.KeyCounter;
+import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -18,6 +19,7 @@ import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
@@ -171,9 +173,13 @@ public class ObserverBlockEntity extends BlockEntity {
 
             BindingStats oldStats = statsMap.getOrDefault(binding.networkId(), BindingStats.empty());
             BindingStats newStats;
+            Map<String, Long> itemDeltaSnapshot = Map.of();
+            Map<String, Long> itemAmountSnapshot = Map.of();
 
             if ("AE2_ITEMS".equals(binding.networkType())) {
                 newStats = sampleAe2Network(binding.networkId(), targetPos, oldStats);
+                itemDeltaSnapshot = getAe2ItemDeltasFor(binding.networkId());
+                itemAmountSnapshot = getAe2ItemAmountsFor(binding.networkId());
             } else if ("FLUX_ENERGY".equals(binding.networkType())) {
                 newStats = sampleEnergy(targetPos, oldStats);
                 debugInfoMap.put(binding.networkId(), "channel=neoforge.energy;target=" + targetPos.toShortString());
@@ -181,6 +187,21 @@ public class ObserverBlockEntity extends BlockEntity {
                 continue;
             }
             statsMap.put(binding.networkId(), newStats);
+
+            if (level instanceof ServerLevel serverLevel) {
+                long producedDelta = Math.max(0L, newStats.totalProduced() - oldStats.totalProduced());
+                long consumedDelta = Math.max(0L, newStats.totalConsumed() - oldStats.totalConsumed());
+                HistoryRecorder.recordSample(
+                        serverLevel,
+                        worldPosition,
+                        binding,
+                        producedDelta,
+                        consumedDelta,
+                        newStats.currentValue(),
+                        itemDeltaSnapshot,
+                        itemAmountSnapshot
+                );
+            }
         }
         setChanged();
     }
@@ -190,6 +211,7 @@ public class ObserverBlockEntity extends BlockEntity {
         debugInfoMap.put(networkId, readResult.debugInfo());
         Map<String, Long> snapshot = readResult.snapshot();
         if (snapshot == null) {
+            ae2ItemDeltas.put(networkId, Map.of());
             return oldStats;
         }
 
