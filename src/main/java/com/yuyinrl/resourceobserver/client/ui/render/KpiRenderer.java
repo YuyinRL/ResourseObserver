@@ -9,6 +9,7 @@ import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -59,10 +60,32 @@ public final class KpiRenderer {
         int trendColor = statusColor(metric.status());
 
         int x = card.x() + 8;
-        int y = card.y() + 8;
-        gfx.drawString(font, Component.translatable(metric.label()), x, y, labelColor);
-        gfx.drawString(font, metric.value(), x, y + 12, valueColor);
-        gfx.drawString(font, metric.trend(), x, y + 26, trendColor);
+        int y = card.y() + 6;
+        int textMaxWidth = Math.max(24, card.width() - 40);
+        List<TextLine> lines = new ArrayList<>();
+        lines.add(new TextLine(Component.translatable(metric.label()).getString(), labelColor));
+        appendMultiline(lines, metric.value(), valueColor);
+        appendMultiline(lines, metric.trend(), trendColor);
+        int textClipRight = card.right() - 28;
+        int lineHeight = 9;
+        int maxLines = Math.max(1, (card.height() - 12) / lineHeight);
+        if (textClipRight > x + 4) {
+            gfx.enableScissor(x, card.y() + 2, textClipRight, card.bottom() - 2);
+            int lineCount = Math.min(lines.size(), maxLines);
+            for (int i = 0; i < lineCount; i++) {
+                TextLine line = lines.get(i);
+                String text = RenderUtils.ellipsis(font, line.text(), textMaxWidth);
+                gfx.drawString(font, text, x, y + i * lineHeight, line.color());
+            }
+            gfx.disableScissor();
+        } else {
+            int lineCount = Math.min(lines.size(), maxLines);
+            for (int i = 0; i < lineCount; i++) {
+                TextLine line = lines.get(i);
+                String text = RenderUtils.ellipsis(font, line.text(), textMaxWidth);
+                gfx.drawString(font, text, x, y + i * lineHeight, line.color());
+            }
+        }
 
         int iconBg = 0x4016253C;
         int bx = card.right() - 24;
@@ -80,5 +103,21 @@ public final class KpiRenderer {
             case NEGATIVE -> UiThemeTokens.ROSE;
             case NEUTRAL -> UiThemeTokens.TEXT;
         };
+    }
+
+    private static void appendMultiline(List<TextLine> lines, String text, int color) {
+        if (text == null || text.isBlank()) {
+            return;
+        }
+        String[] parts = text.split("\\R");
+        for (String part : parts) {
+            if (part == null || part.isBlank()) {
+                continue;
+            }
+            lines.add(new TextLine(part, color));
+        }
+    }
+
+    private record TextLine(String text, int color) {
     }
 }

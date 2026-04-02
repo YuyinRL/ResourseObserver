@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.world.item;
 
+import appeng.api.networking.IGrid;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
@@ -26,9 +27,12 @@ import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.network.PacketDistributor;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 资源终端物品 —— 用于打开 GUI 查看观察者绑定的资源网络数据与图表。
@@ -191,10 +195,11 @@ public class ResourceTerminalItem extends Item {
     ) {
         // 获取玩家 UI 偏好快照（关注列表、分组、排序模式等）
         PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs = PlayerUiPrefsSavedData.get(level).getSnapshot(player.getUUID());
+        List<ObserverBlockEntity.BoundEntry> effectiveBindings = deduplicateBindingsForPayload(observer);
 
         // 构建各绑定网络的数据条目
         List<ObserverDataPayload.BindingEntry> entries = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : observer.getBindings()) {
+        for (ObserverBlockEntity.BoundEntry binding : effectiveBindings) {
             ObserverBlockEntity.BindingStats stats = observer.getStatsFor(binding.networkId());
             List<ObserverDataPayload.ItemDeltaEntry> itemDeltas = new ArrayList<>();
             // AE2 网络需要构建每种物品的增量数据
@@ -204,11 +209,13 @@ public class ResourceTerminalItem extends Item {
                 // 遍历当前库存中的所有物品
                 for (Map.Entry<String, Long> amountEntry : amounts.entrySet()) {
                     String itemId = amountEntry.getKey();
+                    ObserverDataPayload.EntryType entryType = entryTypeForId(itemId);
                     itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            entryType,
                             itemId,
-                            toDisplayName(itemId),   // 将 item_id 转为可读显示名
+                            toDisplayName(itemId, entryType),   // 将 item_id 转为可读显示名
                             uiPrefs.groupKeyForItem(itemId), // 获取玩家自定义分组
-                            "resourceobserver:terminal/table_item",
+                            iconSpriteForEntryType(entryType),
                             amountEntry.getValue(),
                             deltas.getOrDefault(itemId, 0L)
                     ));
@@ -219,17 +226,22 @@ public class ResourceTerminalItem extends Item {
                     if (amounts.containsKey(itemId)) {
                         continue; // 已在上面处理过
                     }
+                    ObserverDataPayload.EntryType entryType = entryTypeForId(itemId);
                     itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            entryType,
                             itemId,
-                            toDisplayName(itemId),
+                            toDisplayName(itemId, entryType),
                             uiPrefs.groupKeyForItem(itemId),
-                            "resourceobserver:terminal/table_item",
+                            iconSpriteForEntryType(entryType),
                             0L,
                             deltaEntry.getValue()
                     ));
                 }
                 // 按物品 ID 排序保证顺序一致性
-                itemDeltas.sort(Comparator.comparing(ObserverDataPayload.ItemDeltaEntry::itemId));
+                itemDeltas.sort(
+                        Comparator.comparing(ObserverDataPayload.ItemDeltaEntry::entryType)
+                                .thenComparing(ObserverDataPayload.ItemDeltaEntry::itemId)
+                );
             }
             entries.add(new ObserverDataPayload.BindingEntry(
                     binding.networkType(),
@@ -239,6 +251,7 @@ public class ResourceTerminalItem extends Item {
                     bindingIcon(binding),
                     stats.currentValue(),
                     stats.capacity(),
+                    toCellCapacityMetrics(observer, binding),
                     stats.totalProduced(),
                     stats.totalConsumed(),
                     itemDeltas,
@@ -250,7 +263,7 @@ public class ResourceTerminalItem extends Item {
         List<ObserverDataPayload.ChartPoint> chartSeries = HistoryRecorder.querySeries(
                 level,
                 observerPos,
-                observer.getBindings(),
+                effectiveBindings,
                 chartWindow,
                 chartScope,
                 scopeItemId
@@ -304,13 +317,79 @@ public class ResourceTerminalItem extends Item {
         return "resourceobserver:terminal/kpi_efficiency";
     }
 
+    private static List<ObserverBlockEntity.BoundEntry> deduplicateBindingsForPayload(ObserverBlockEntity observer) {
+        List<ObserverBlockEntity.BoundEntry> source = observer.getBindings();
+        if (source.size() <= 1) {
+            return source;
+        }
+
+        Set<IGrid> seenAe2Grids = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<ObserverBlockEntity.BoundEntry> deduped = new ArrayList<>(source.size());
+        for (ObserverBlockEntity.BoundEntry binding : source) {
+            if (!"AE2_ITEMS".equals(binding.networkType())) {
+                deduped.add(binding);
+                continue;
+            }
+            IGrid grid = observer.resolveAe2GridForNetwork(binding.networkId());
+            if (grid == null || seenAe2Grids.add(grid)) {
+                deduped.add(binding);
+            }
+        }
+        return deduped;
+    }
+
+    private static ObserverDataPayload.CellCapacityMetrics toCellCapacityMetrics(
+            ObserverBlockEntity observer,
+            ObserverBlockEntity.BoundEntry binding
+    ) {
+        if (!"AE2_ITEMS".equals(binding.networkType())) {
+            return ObserverDataPayload.CellCapacityMetrics.unavailable();
+        }
+        ObserverBlockEntity.Ae2CellCapacityMetrics metrics = observer.getAe2CellCapacityMetricsFor(binding.networkId());
+        return new ObserverDataPayload.CellCapacityMetrics(
+                metrics.itemUsedBytes(),
+                metrics.itemTotalBytes(),
+                metrics.itemUsedTypes(),
+                metrics.itemTotalTypes(),
+                metrics.itemUsedUnits(),
+                metrics.itemMaxUnits(),
+                metrics.fluidUsedBytes(),
+                metrics.fluidTotalBytes(),
+                metrics.fluidUsedTypes(),
+                metrics.fluidTotalTypes(),
+                metrics.fluidUsedUnits(),
+                metrics.fluidMaxUnits(),
+                metrics.scope(),
+                metrics.reliable(),
+                metrics.available()
+        );
+    }
+
     /**
      * 将物品 ID（如 "minecraft:iron_ingot"）转换为可读的显示名称（如 "Iron Ingot"）。
      * 提取冒号后的路径部分，按下划线分割后首字母大写拼接。
      */
-    private static String toDisplayName(String itemId) {
-        int idx = itemId.indexOf(':');
-        String path = idx >= 0 ? itemId.substring(idx + 1) : itemId;
+    private static ObserverDataPayload.EntryType entryTypeForId(String itemId) {
+        if (itemId != null && itemId.startsWith("fluid:")) {
+            return ObserverDataPayload.EntryType.FLUID;
+        }
+        return ObserverDataPayload.EntryType.ITEM;
+    }
+
+    private static String iconSpriteForEntryType(ObserverDataPayload.EntryType entryType) {
+        if (entryType == ObserverDataPayload.EntryType.FLUID) {
+            return "resourceobserver:terminal/watch_item";
+        }
+        return "resourceobserver:terminal/table_item";
+    }
+
+    private static String toDisplayName(String itemId, ObserverDataPayload.EntryType entryType) {
+        String id = itemId == null ? "" : itemId;
+        if (entryType == ObserverDataPayload.EntryType.FLUID && id.startsWith("fluid:")) {
+            id = id.substring("fluid:".length());
+        }
+        int idx = id.indexOf(':');
+        String path = idx >= 0 ? id.substring(idx + 1) : id;
         String[] parts = path.split("_");
         StringBuilder sb = new StringBuilder();
         for (String part : parts) {

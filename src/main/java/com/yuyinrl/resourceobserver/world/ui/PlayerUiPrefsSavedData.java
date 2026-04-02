@@ -54,6 +54,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
     private static final String TAG_GROUP_NAME = "group_name";
     private static final String TAG_GROUP_SYSTEM = "group_system";
     private static final String TAG_ITEM_GROUPS = "item_groups";
+    private static final String TAG_DEBUG_MODE = "debug_mode";
     /** 分组名称最大长度 */
     private static final int GROUP_NAME_MAX_LEN = 24;
 
@@ -76,6 +77,28 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return PlayerUiPrefsSnapshot.defaults();
         }
         return prefs.snapshot();
+    }
+
+    public boolean isObserverDebugEnabled(UUID playerId) {
+        PlayerPrefs prefs = players.get(playerId);
+        return prefs != null && prefs.debugMode;
+    }
+
+    public boolean setObserverDebugEnabled(UUID playerId, boolean enabled) {
+        PlayerPrefs prefs = players.computeIfAbsent(playerId, ignored -> PlayerPrefs.defaults());
+        if (prefs.debugMode == enabled) {
+            return false;
+        }
+        prefs.debugMode = enabled;
+        setDirty();
+        return true;
+    }
+
+    public boolean toggleObserverDebugEnabled(UUID playerId) {
+        PlayerPrefs prefs = players.computeIfAbsent(playerId, ignored -> PlayerPrefs.defaults());
+        prefs.debugMode = !prefs.debugMode;
+        setDirty();
+        return prefs.debugMode;
     }
 
     /**
@@ -144,6 +167,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             playerTag.putString(TAG_SORT_MODE, entry.getValue().sortMode.key());
             playerTag.putBoolean(TAG_SORT_DESC, entry.getValue().sortDesc);
             playerTag.putString(TAG_STATUS_FILTER, entry.getValue().statusFilter.key());
+            playerTag.putBoolean(TAG_DEBUG_MODE, entry.getValue().debugMode);
             playersTag.add(playerTag);
         }
         tag.put(TAG_PLAYERS, playersTag);
@@ -219,9 +243,10 @@ public class PlayerUiPrefsSavedData extends SavedData {
             }
 
             prefs.groupFilterKey = sanitizeGroupFilterKey(playerTag.getString(TAG_GROUP_FILTER_KEY), prefs.groups);
-            prefs.sortMode = TableSortMode.fromKey(playerTag.getString(TAG_SORT_MODE));
+            prefs.sortMode = PlayerPrefs.normalizeSortMode(TableSortMode.fromKey(playerTag.getString(TAG_SORT_MODE)));
             prefs.sortDesc = !playerTag.contains(TAG_SORT_DESC, Tag.TAG_BYTE) || playerTag.getBoolean(TAG_SORT_DESC);
             prefs.statusFilter = TableStatusFilter.fromKey(playerTag.getString(TAG_STATUS_FILTER));
+            prefs.debugMode = playerTag.contains(TAG_DEBUG_MODE, Tag.TAG_BYTE) && playerTag.getBoolean(TAG_DEBUG_MODE);
             data.players.put(playerId, prefs);
         }
         return data;
@@ -310,11 +335,13 @@ public class PlayerUiPrefsSavedData extends SavedData {
         /** 当前分组筛选键 */
         private String groupFilterKey = GROUP_FILTER_ALL;
         /** 当前排序模式 */
-        private TableSortMode sortMode = TableSortMode.NET_ABS;
+        private TableSortMode sortMode = TableSortMode.NET;
         /** 是否降序排列 */
         private boolean sortDesc = true;
         /** 当前状态筛选 */
         private TableStatusFilter statusFilter = TableStatusFilter.ALL;
+        /** 观察者调试模式开关 */
+        private boolean debugMode = false;
 
         /** 创建默认偏好（包含系统分组） */
         private static PlayerPrefs defaults() {
@@ -379,6 +406,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
          * 如果模式不同，设为新模式并默认降序。
          */
         private ActionResult setSortMode(TableSortMode mode) {
+            mode = normalizeSortMode(mode);
             if (sortMode == mode) {
                 sortDesc = !sortDesc;
                 return ActionResult.changedSuccess();
@@ -400,14 +428,18 @@ public class PlayerUiPrefsSavedData extends SavedData {
         /** 重置所有筛选条件为默认值 */
         private ActionResult resetFilters() {
             boolean changed = !GROUP_FILTER_ALL.equals(groupFilterKey)
-                    || sortMode != TableSortMode.NET_ABS
+                    || sortMode != TableSortMode.NET
                     || !sortDesc
                     || statusFilter != TableStatusFilter.ALL;
             groupFilterKey = GROUP_FILTER_ALL;
-            sortMode = TableSortMode.NET_ABS;
+            sortMode = TableSortMode.NET;
             sortDesc = true;
             statusFilter = TableStatusFilter.ALL;
             return changed ? ActionResult.changedSuccess() : ActionResult.NO_CHANGE;
+        }
+
+        private static TableSortMode normalizeSortMode(TableSortMode mode) {
+            return mode == null ? TableSortMode.NET : TableSortMode.fromKey(mode.key());
         }
 
         /** 合并单个 itemId 和 itemIds 列表为去重列表 */
@@ -594,7 +626,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
                     GROUP_FILTER_ALL,
                     List.of(new GroupDefinition(GROUP_UNGROUPED, defaultUngroupedName(), true)),
                     Map.of(),
-                    TableSortMode.NET_ABS,
+                    TableSortMode.NET,
                     true,
                     TableStatusFilter.ALL
             );

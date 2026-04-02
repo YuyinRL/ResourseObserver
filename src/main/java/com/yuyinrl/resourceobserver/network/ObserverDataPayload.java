@@ -59,6 +59,7 @@ public record ObserverDataPayload(
         List<GroupEntry> groups,
         List<BindingEntry> bindings
 ) implements CustomPacketPayload {
+    private static final int MAX_DEBUG_INFO_UTF = 2048;
 
     /**
      * 分组条目 —— 物品分组的定义信息。
@@ -71,6 +72,66 @@ public record ObserverDataPayload(
             String displayName,
             boolean systemGroup
     ) {
+    }
+
+    public enum EntryType {
+        ITEM(0),
+        FLUID(1);
+
+        private final int id;
+
+        EntryType(int id) {
+            this.id = id;
+        }
+
+        public int id() {
+            return id;
+        }
+
+        public static EntryType fromId(int id) {
+            if (id == FLUID.id) {
+                return FLUID;
+            }
+            return ITEM;
+        }
+    }
+
+    public record CellCapacityMetrics(
+            long itemUsedBytes,
+            long itemTotalBytes,
+            long itemUsedTypes,
+            long itemTotalTypes,
+            long itemUsedUnits,
+            long itemMaxUnits,
+            long fluidUsedBytes,
+            long fluidTotalBytes,
+            long fluidUsedTypes,
+            long fluidTotalTypes,
+            long fluidUsedUnits,
+            long fluidMaxUnits,
+            String scope,
+            boolean reliable,
+            boolean available
+    ) {
+        public static CellCapacityMetrics unavailable() {
+            return new CellCapacityMetrics(
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    "AE2_CELLS_ONLY",
+                    false,
+                    false
+            );
+        }
     }
 
     /**
@@ -95,6 +156,7 @@ public record ObserverDataPayload(
             String iconSprite,
             long currentValue,
             long capacity,
+            CellCapacityMetrics cellCapacityMetrics,
             long totalProduced,
             long totalConsumed,
             List<ItemDeltaEntry> itemDeltas,
@@ -112,6 +174,7 @@ public record ObserverDataPayload(
      * @param delta       与上次采样的变化量（正=生产，负=消耗）
      */
     public record ItemDeltaEntry(
+            EntryType entryType,
             String itemId,
             String displayName,
             String groupKey,
@@ -181,10 +244,11 @@ public record ObserverDataPayload(
                                 buf.readUtf(256),
                                 buf.readLong(),
                                 buf.readLong(),
+                                readCellCapacityMetrics(buf),
                                 buf.readLong(),
                                 buf.readLong(),
                                 readItemDeltas(buf),
-                                buf.readUtf(512)
+                                buf.readUtf(MAX_DEBUG_INFO_UTF)
                         ));
                     }
                     return new ObserverDataPayload(
@@ -236,11 +300,61 @@ public record ObserverDataPayload(
                         buf.writeUtf(entry.iconSprite(), 256);
                         buf.writeLong(entry.currentValue);
                         buf.writeLong(entry.capacity);
+                        writeCellCapacityMetrics(buf, entry.cellCapacityMetrics());
                         buf.writeLong(entry.totalProduced);
                         buf.writeLong(entry.totalConsumed);
                         writeItemDeltas(buf, entry.itemDeltas());
-                        buf.writeUtf(entry.debugInfo(), 512);
+                        buf.writeUtf(clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
                     }
+                }
+
+                private static String clampUtf(String text, int maxLength) {
+                    if (text == null || text.isBlank()) {
+                        return "";
+                    }
+                    if (text.length() <= maxLength) {
+                        return text;
+                    }
+                    return text.substring(0, maxLength);
+                }
+
+                private static CellCapacityMetrics readCellCapacityMetrics(FriendlyByteBuf buf) {
+                    return new CellCapacityMetrics(
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readUtf(64),
+                            buf.readBoolean(),
+                            buf.readBoolean()
+                    );
+                }
+
+                private static void writeCellCapacityMetrics(FriendlyByteBuf buf, CellCapacityMetrics metrics) {
+                    CellCapacityMetrics safeMetrics = metrics == null ? CellCapacityMetrics.unavailable() : metrics;
+                    buf.writeLong(safeMetrics.itemUsedBytes());
+                    buf.writeLong(safeMetrics.itemTotalBytes());
+                    buf.writeLong(safeMetrics.itemUsedTypes());
+                    buf.writeLong(safeMetrics.itemTotalTypes());
+                    buf.writeLong(safeMetrics.itemUsedUnits());
+                    buf.writeLong(safeMetrics.itemMaxUnits());
+                    buf.writeLong(safeMetrics.fluidUsedBytes());
+                    buf.writeLong(safeMetrics.fluidTotalBytes());
+                    buf.writeLong(safeMetrics.fluidUsedTypes());
+                    buf.writeLong(safeMetrics.fluidTotalTypes());
+                    buf.writeLong(safeMetrics.fluidUsedUnits());
+                    buf.writeLong(safeMetrics.fluidMaxUnits());
+                    buf.writeUtf(safeMetrics.scope(), 64);
+                    buf.writeBoolean(safeMetrics.reliable());
+                    buf.writeBoolean(safeMetrics.available());
                 }
 
                 /** 反序列化物品增量列表 */
@@ -249,6 +363,7 @@ public record ObserverDataPayload(
                     List<ItemDeltaEntry> result = new ArrayList<>(count);
                     for (int i = 0; i < count; i++) {
                         result.add(new ItemDeltaEntry(
+                                EntryType.fromId(buf.readVarInt()),
                                 buf.readUtf(256),
                                 buf.readUtf(256),
                                 buf.readUtf(128),
@@ -264,6 +379,8 @@ public record ObserverDataPayload(
                 private static void writeItemDeltas(FriendlyByteBuf buf, List<ItemDeltaEntry> itemDeltas) {
                     buf.writeVarInt(itemDeltas.size());
                     for (ItemDeltaEntry itemDelta : itemDeltas) {
+                        EntryType entryType = itemDelta.entryType() == null ? EntryType.ITEM : itemDelta.entryType();
+                        buf.writeVarInt(entryType.id());
                         buf.writeUtf(itemDelta.itemId(), 256);
                         buf.writeUtf(itemDelta.displayName(), 256);
                         buf.writeUtf(itemDelta.groupKey(), 128);

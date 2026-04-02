@@ -47,16 +47,14 @@ public final class OverviewViewModelMapper {
         // 汇总所有绑定网络的 KPI 总量
         long totalProduced = 0L;
         long totalConsumed = 0L;
-        long totalCurrent = 0L;
-        long totalCapacity = 0L;
+        CellCapacityAggregation cellCapacityAggregation = CellCapacityAggregation.empty();
 
         // 遍历所有绑定，构建表格行数据
         List<OverviewViewModel.TableRow> allRows = new ArrayList<>();
         for (ObserverDataPayload.BindingEntry binding : payload.bindings()) {
             totalProduced += binding.totalProduced();
             totalConsumed += binding.totalConsumed();
-            totalCurrent += binding.currentValue();
-            totalCapacity += Math.max(0L, binding.capacity());
+            cellCapacityAggregation = cellCapacityAggregation.merge(binding);
 
             // 为每种物品创建表格行
             for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
@@ -64,7 +62,7 @@ public final class OverviewViewModelMapper {
                 long consumption = Math.max(0L, -item.delta());   // 负增量 → 消耗
                 long net = item.delta();
                 long capacity = estimateCapacity(item.amount());  // 估算容量（用于进度条显示）
-                String localizedName = localizeItemName(item.itemId(), item.displayName());
+                String localizedName = localizeEntryName(item.entryType(), item.itemId(), item.displayName());
                 allRows.add(new OverviewViewModel.TableRow(
                         item.itemId(),
                         localizedName,
@@ -87,7 +85,7 @@ public final class OverviewViewModelMapper {
         }
 
         // 构建四个 KPI 指标卡
-        List<OverviewViewModel.KpiMetric> kpis = buildKpis(totalProduced, totalConsumed, totalCurrent, totalCapacity);
+        List<OverviewViewModel.KpiMetric> kpis = buildKpis(totalProduced, totalConsumed, cellCapacityAggregation);
         // 转换图表数据点
         List<OverviewViewModel.FlowPoint> chartSeries = new ArrayList<>(payload.chartSeries().size());
         for (ObserverDataPayload.ChartPoint point : payload.chartSeries()) {
@@ -137,11 +135,9 @@ public final class OverviewViewModelMapper {
     private static List<OverviewViewModel.KpiMetric> buildKpis(
             long totalProduced,
             long totalConsumed,
-            long totalCurrent,
-            long totalCapacity
+            CellCapacityAggregation cellCapacityAggregation
     ) {
         long net = totalProduced - totalConsumed;
-        double fillRatio = totalCapacity > 0 ? (double) totalCurrent / (double) totalCapacity : 0.0;
         double efficiency = totalProduced > 0 ? (double) totalConsumed / (double) totalProduced : 0.0;
 
         List<OverviewViewModel.KpiMetric> result = new ArrayList<>(4);
@@ -159,13 +155,7 @@ public final class OverviewViewModelMapper {
                 totalConsumed > totalProduced ? OverviewViewModel.Status.WARNING : OverviewViewModel.Status.NEUTRAL,
                 "resourceobserver:terminal/kpi_consumption"
         ));
-        result.add(new OverviewViewModel.KpiMetric(
-                "screen.resourceobserver.overview.section.kpi_storage",
-                String.format(Locale.ROOT, "%.1f%%", fillRatio * 100.0),
-                formatCompact(totalCurrent) + " / " + formatCompact(totalCapacity),
-                fillRatio > 0.9 ? OverviewViewModel.Status.WARNING : OverviewViewModel.Status.POSITIVE,
-                "resourceobserver:terminal/kpi_storage"
-        ));
+        result.add(buildStorageKpi(cellCapacityAggregation));
         result.add(new OverviewViewModel.KpiMetric(
                 "screen.resourceobserver.overview.section.kpi_efficiency",
                 String.format(Locale.ROOT, "%.1f%%", Math.max(0.0, (1.0 - Math.max(0.0, efficiency - 1.0)) * 100.0)),
@@ -174,6 +164,98 @@ public final class OverviewViewModelMapper {
                 "resourceobserver:terminal/kpi_efficiency"
         ));
         return result;
+    }
+
+    private static OverviewViewModel.KpiMetric buildStorageKpi(CellCapacityAggregation aggregation) {
+        if (!aggregation.hasAe2Binding()) {
+            return new OverviewViewModel.KpiMetric(
+                    "screen.resourceobserver.overview.section.kpi_storage",
+                    "N/A",
+                    Component.translatable("screen.resourceobserver.overview.kpi.storage.not_ae2").getString(),
+                    OverviewViewModel.Status.NEUTRAL,
+                    "resourceobserver:terminal/kpi_storage"
+            );
+        }
+        if (!aggregation.available()) {
+            return new OverviewViewModel.KpiMetric(
+                    "screen.resourceobserver.overview.section.kpi_storage",
+                    "N/A",
+                    Component.translatable("screen.resourceobserver.overview.kpi.storage.cells_unavailable").getString(),
+                    OverviewViewModel.Status.WARNING,
+                "resourceobserver:terminal/kpi_storage"
+            );
+        }
+        boolean hasReadableTotals = aggregation.itemTotalBytes() > 0L
+                || aggregation.itemTotalTypes() > 0L
+                || aggregation.itemUsedBytes() > 0L
+                || aggregation.itemUsedTypes() > 0L
+                || aggregation.fluidTotalBytes() > 0L
+                || aggregation.fluidTotalTypes() > 0L
+                || aggregation.fluidUsedBytes() > 0L
+                || aggregation.fluidUsedTypes() > 0L;
+        if (!aggregation.reliable() && !hasReadableTotals) {
+            return new OverviewViewModel.KpiMetric(
+                    "screen.resourceobserver.overview.section.kpi_storage",
+                    "N/A",
+                    Component.translatable("screen.resourceobserver.overview.kpi.storage.unreliable").getString(),
+                    OverviewViewModel.Status.WARNING,
+                "resourceobserver:terminal/kpi_storage"
+            );
+        }
+
+        long itemUsedBytes = aggregation.itemUsedBytes();
+        long itemTotalBytes = Math.max(aggregation.itemTotalBytes(), itemUsedBytes);
+        long itemUsedTypes = aggregation.itemUsedTypes();
+        long itemTotalTypes = Math.max(aggregation.itemTotalTypes(), itemUsedTypes);
+        long fluidUsedBytes = aggregation.fluidUsedBytes();
+        long fluidTotalBytes = Math.max(aggregation.fluidTotalBytes(), fluidUsedBytes);
+        long fluidUsedTypes = aggregation.fluidUsedTypes();
+        long fluidTotalTypes = Math.max(aggregation.fluidTotalTypes(), fluidUsedTypes);
+
+        String value = Component.translatable(
+                "screen.resourceobserver.overview.kpi.storage.item_capacity",
+                formatByteLike(itemUsedBytes),
+                formatByteLike(itemTotalBytes)
+        ).getString() + "\n" + Component.translatable(
+                "screen.resourceobserver.overview.kpi.storage.item_types",
+                formatCompact(itemUsedTypes),
+                formatCompact(itemTotalTypes)
+        ).getString();
+        String trend = Component.translatable(
+                "screen.resourceobserver.overview.kpi.storage.fluid_capacity",
+                formatByteLike(fluidUsedBytes),
+                formatByteLike(fluidTotalBytes)
+        ).getString() + "\n" + Component.translatable(
+                "screen.resourceobserver.overview.kpi.storage.fluid_types",
+                formatCompact(fluidUsedTypes),
+                formatCompact(fluidTotalTypes)
+        ).getString();
+
+        OverviewViewModel.Status status = OverviewViewModel.Status.POSITIVE;
+        if (!aggregation.reliable()) {
+            status = OverviewViewModel.Status.WARNING;
+            trend = trend + " - "
+                    + Component.translatable("screen.resourceobserver.overview.kpi.storage.partial_read").getString();
+        } else if ((itemTotalTypes > 0 && itemUsedTypes >= itemTotalTypes)
+                || (fluidTotalTypes > 0 && fluidUsedTypes >= fluidTotalTypes)) {
+            status = OverviewViewModel.Status.WARNING;
+            trend = trend + " - "
+                    + Component.translatable("screen.resourceobserver.overview.kpi.storage.types_full").getString();
+        } else {
+            double itemFill = itemTotalBytes > 0 ? (double) itemUsedBytes / (double) itemTotalBytes : 0.0d;
+            double fluidFill = fluidTotalBytes > 0 ? (double) fluidUsedBytes / (double) fluidTotalBytes : 0.0d;
+            if (Math.max(itemFill, fluidFill) >= 0.9d) {
+                status = OverviewViewModel.Status.WARNING;
+            }
+        }
+
+        return new OverviewViewModel.KpiMetric(
+                "screen.resourceobserver.overview.section.kpi_storage",
+                value,
+                trend,
+                status,
+                "resourceobserver:terminal/kpi_storage"
+        );
     }
 
     /** 构建分组选项列表，确保"未分组"始终在首位 */
@@ -349,9 +431,16 @@ public final class OverviewViewModelMapper {
      * 尝试使用客户端注册表本地化物品名称。
      * 优先使用 Minecraft 的物品翻译系统，失败时回退到服务端提供的显示名。
      */
-    private static String localizeItemName(String itemId, String fallbackDisplayName) {
+    private static String localizeEntryName(
+            ObserverDataPayload.EntryType entryType,
+            String itemId,
+            String fallbackDisplayName
+    ) {
         if (itemId == null || itemId.isBlank()) {
             return fallbackDisplayName;
+        }
+        if (entryType == ObserverDataPayload.EntryType.FLUID) {
+            return fallbackDisplayName == null || fallbackDisplayName.isBlank() ? itemId : fallbackDisplayName;
         }
         try {
             ResourceLocation id = ResourceLocation.parse(itemId);
@@ -418,24 +507,15 @@ public final class OverviewViewModelMapper {
      */
     private static Comparator<OverviewViewModel.TableRow> comparatorFor(TableSortMode sortMode, boolean sortDesc) {
         Comparator<OverviewViewModel.TableRow> comparator = switch (sortMode) {
-            case NET_ABS -> Comparator.comparingLong((OverviewViewModel.TableRow row) -> Math.abs(row.net()));
-            case NET -> Comparator.comparingLong(OverviewViewModel.TableRow::net);
+            case NET_ABS, NET -> Comparator.comparingLong(OverviewViewModel.TableRow::net);
             case PRODUCTION -> Comparator.comparingLong(OverviewViewModel.TableRow::production);
             case CONSUMPTION -> Comparator.comparingLong(OverviewViewModel.TableRow::consumption);
-            case STOCK_RATIO -> Comparator.comparingDouble(OverviewViewModelMapper::stockRatio);
+            case STOCK -> Comparator.comparingLong(OverviewViewModel.TableRow::stock);
         };
         if (sortDesc) {
             comparator = comparator.reversed();
         }
         return comparator.thenComparing(OverviewViewModel.TableRow::displayName);
-    }
-
-    /** 计算库存比率（stock / capacity） */
-    private static double stockRatio(OverviewViewModel.TableRow row) {
-        if (row.capacity() <= 0) {
-            return 0.0;
-        }
-        return (double) row.stock() / (double) row.capacity();
     }
 
     /** 判断物品是否处于严重亏损状态（净消耗且库存低于 15%） */
@@ -450,6 +530,73 @@ public final class OverviewViewModelMapper {
      * 将大数值格式化为紧凑表示（K/M/B 后缀）。
      * 例如：1234 → "1.2K"，1234567 → "1.2M"
      */
+    private static String formatByteLike(long value) {
+        return formatCompact(value) + " B";
+    }
+
+    private record CellCapacityAggregation(
+            long itemUsedBytes,
+            long itemTotalBytes,
+            long itemUsedTypes,
+            long itemTotalTypes,
+            long fluidUsedBytes,
+            long fluidTotalBytes,
+            long fluidUsedTypes,
+            long fluidTotalTypes,
+            boolean hasAe2Binding,
+            boolean available,
+            boolean reliable
+    ) {
+        private static CellCapacityAggregation empty() {
+            return new CellCapacityAggregation(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, false, false, true);
+        }
+
+        private CellCapacityAggregation merge(ObserverDataPayload.BindingEntry binding) {
+            if (!"AE2_ITEMS".equals(binding.networkType())) {
+                return this;
+            }
+            ObserverDataPayload.CellCapacityMetrics metrics = binding.cellCapacityMetrics();
+            if (metrics == null) {
+                return new CellCapacityAggregation(
+                        itemUsedBytes,
+                        itemTotalBytes,
+                        itemUsedTypes,
+                        itemTotalTypes,
+                        fluidUsedBytes,
+                        fluidTotalBytes,
+                        fluidUsedTypes,
+                        fluidTotalTypes,
+                        true,
+                        available,
+                        false
+                );
+            }
+            return new CellCapacityAggregation(
+                    saturatingAdd(itemUsedBytes, Math.max(0L, metrics.itemUsedBytes())),
+                    saturatingAdd(itemTotalBytes, Math.max(0L, metrics.itemTotalBytes())),
+                    saturatingAdd(itemUsedTypes, Math.max(0L, metrics.itemUsedTypes())),
+                    saturatingAdd(itemTotalTypes, Math.max(0L, metrics.itemTotalTypes())),
+                    saturatingAdd(fluidUsedBytes, Math.max(0L, metrics.fluidUsedBytes())),
+                    saturatingAdd(fluidTotalBytes, Math.max(0L, metrics.fluidTotalBytes())),
+                    saturatingAdd(fluidUsedTypes, Math.max(0L, metrics.fluidUsedTypes())),
+                    saturatingAdd(fluidTotalTypes, Math.max(0L, metrics.fluidTotalTypes())),
+                    true,
+                    available || metrics.available(),
+                    reliable && metrics.reliable()
+            );
+        }
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
     private static String formatCompact(long value) {
         long abs = Math.abs(value);
         if (abs >= 1_000_000_000L) {

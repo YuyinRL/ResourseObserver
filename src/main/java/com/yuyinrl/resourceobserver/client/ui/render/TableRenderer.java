@@ -4,6 +4,7 @@ import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.TerminalSprites;
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
+import com.yuyinrl.resourceobserver.ui.state.TableSortMode;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.network.chat.Component;
@@ -13,28 +14,14 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-/**
- * 资源表格渲染器 —— 绘制分组物品数据表格。
- * <p>
- * 功能包括：
- * - 表头（列名：节点、生产、消耗、净流量、库存）
- * - 分组折叠/展开控制（点击分组标题切换）
- * - 行高亮（图表选中行、多选行）
- * - 星标/关注标记（点击切换关注状态）
- * - 筛选控件（分组、排序、状态筛选、重置按钮）
- * - 物品图标和库存进度条
- */
 public final class TableRenderer {
-    private static final int ROW_HEIGHT = 12;           // 每行高度（像素）
-    private static final int GROUP_HEADER_HEIGHT = 12;  // 分组标题高度（像素）
+    private static final int ROW_HEIGHT = 12;
+    private static final int GROUP_HEADER_HEIGHT = 12;
+    private static final int HEADER_HEIGHT = 10;
 
     private TableRenderer() {
     }
 
-    /**
-     * 计算表格所需的总高度（用于滚动计算）。
-     * 包括筛选控件、表头和所有展开的行。
-     */
     public static int measureHeight(
             List<OverviewViewModel.TableGroup> groups,
             Map<String, Boolean> expandedState
@@ -43,14 +30,6 @@ public final class TableRenderer {
         return 62 + rows * ROW_HEIGHT;
     }
 
-    /**
-     * 渲染完整的表格区域，返回所有可交互热区。
-     * @param expandedState     各分组的展开状态
-     * @param selectedItemId    图表选中的物品 ID（行高亮）
-     * @param multiSelectedItemIds 多选的物品 ID 集合
-     * @param filterPressState  筛选按钮按下状态
-     * @return 渲染结果，包含分组热区、行热区、星标热区和筛选按钮热区
-     */
     public static RenderResult render(
             GuiGraphics gfx,
             Font font,
@@ -66,7 +45,6 @@ public final class TableRenderer {
     ) {
         RenderUtils.fillPanel(gfx, area, UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER);
         UiRect content = area.inset(8);
-        // 绘制区段标题和物品计数
         gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.section.table"), content.x(), content.y(), UiThemeTokens.TEXT);
 
         int totalItems = groups.stream().mapToInt(group -> group.rows().size()).sum();
@@ -78,10 +56,8 @@ public final class TableRenderer {
                 UiThemeTokens.TEXT_MUTED
         );
 
-        // 绘制筛选控件（分组/排序/状态/重置按钮）
         FilterControls controls = drawFilterControls(gfx, font, content, uiState, mouseX, mouseY, filterPressState);
 
-        // 绘制表格主体
         int tableTop = content.y() + 30;
         int tableHeight = Math.max(24, content.height() - 32);
         UiRect table = new UiRect(content.x(), tableTop, content.width(), tableHeight);
@@ -96,12 +72,21 @@ public final class TableRenderer {
         int colInvX = table.x() + (int) (table.width() * 0.83f);
 
         int y = table.y() + 4;
-        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.table.col_node"), colNameX, y, UiThemeTokens.TEXT_MUTED);
-        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.table.col_production"), colProdX, y, UiThemeTokens.TEXT_MUTED);
-        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.table.col_consumption"), colConsX, y, UiThemeTokens.TEXT_MUTED);
-        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.table.col_net"), colNetX, y, UiThemeTokens.TEXT_MUTED);
-        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.table.col_inventory"), colInvX, y, UiThemeTokens.TEXT_MUTED);
-        y += 10;
+        List<SortHeaderHitbox> sortHeaderHitboxes = drawTableHeaders(
+                gfx,
+                font,
+                table,
+                uiState,
+                mouseX,
+                mouseY,
+                colNameX,
+                colProdX,
+                colConsX,
+                colNetX,
+                colInvX,
+                y
+        );
+        y += HEADER_HEIGHT;
         gfx.fill(table.x() + 2, y, table.right() - 2, y + 1, UiThemeTokens.DIVIDER);
         y += 2;
 
@@ -125,6 +110,7 @@ public final class TableRenderer {
             if (entry.row() == null) {
                 continue;
             }
+
             OverviewViewModel.TableRow row = entry.row();
             UiRect rowRect = new UiRect(table.x() + 2, y, table.width() - 4, ROW_HEIGHT);
             boolean chartSelected = row.itemId().equals(selectedItemId);
@@ -157,8 +143,7 @@ public final class TableRenderer {
                 gfx.drawString(font, "!", colNetX - 7, y + 2, UiThemeTokens.ROSE);
             }
 
-            double ratio = row.capacity() > 0 ? (double) row.stock() / (double) row.capacity() : 0.0;
-            RenderUtils.drawProgressBar(gfx, colInvX, y + 4, 36, 3, ratio, 0xFF1E293B, UiThemeTokens.BLUE);
+            gfx.drawString(font, Long.toString(row.stock()), colInvX, y + 2, UiThemeTokens.TEXT_MUTED);
             rowHitboxes.add(new RowHitbox(rowRect, row.itemId(), row.groupKey()));
             rowStarHitboxes.add(new RowStarHitbox(starRect, row.itemId()));
             y += ROW_HEIGHT;
@@ -168,17 +153,13 @@ public final class TableRenderer {
                 groupHitboxes,
                 rowHitboxes,
                 rowStarHitboxes,
+                sortHeaderHitboxes,
                 controls.groupButton(),
-                controls.sortButton(),
                 controls.statusButton(),
                 controls.resetButton()
         );
     }
 
-    /**
-     * 绘制筛选控件行（分组、排序、状态筛选和重置按钮）。
-     * 按钮从右向左排列在内容区域右侧。
-     */
     private static FilterControls drawFilterControls(
             GuiGraphics gfx,
             Font font,
@@ -195,11 +176,9 @@ public final class TableRenderer {
         int y = content.y();
         int resetX = content.right() - resetW;
         int statusX = resetX - buttonGap - buttonW;
-        int sortX = statusX - buttonGap - buttonW;
-        int groupX = sortX - buttonGap - buttonW;
+        int groupX = statusX - buttonGap - buttonW;
 
         UiRect groupRect = new UiRect(groupX, y, buttonW, buttonH);
-        UiRect sortRect = new UiRect(sortX, y, buttonW, buttonH);
         UiRect statusRect = new UiRect(statusX, y, buttonW, buttonH);
         UiRect resetRect = new UiRect(resetX, y, resetW, buttonH);
 
@@ -210,14 +189,6 @@ public final class TableRenderer {
                 Component.translatable("screen.resourceobserver.overview.filter.group.button").getString(),
                 uiState.groupNameByKey(uiState.groupFilterKey()),
                 resolveButtonState(groupRect, mouseX, mouseY, filterPressState.groupPressed())
-        );
-        drawFilterButton(
-                gfx,
-                font,
-                sortRect,
-                Component.translatable("screen.resourceobserver.overview.filter.sort.button").getString(),
-                Component.translatable(uiState.sortMode().translationKey()).getString() + (uiState.sortDesc() ? " v" : " ^"),
-                resolveButtonState(sortRect, mouseX, mouseY, filterPressState.sortPressed())
         );
         drawFilterButton(
                 gfx,
@@ -242,13 +213,114 @@ public final class TableRenderer {
 
         return new FilterControls(
                 new FilterButtonHitbox(groupRect, MenuType.GROUP),
-                new FilterButtonHitbox(sortRect, MenuType.SORT),
                 new FilterButtonHitbox(statusRect, MenuType.STATUS),
                 new ResetHitbox(resetRect)
         );
     }
 
-    /** 绘制单个筛选按钮（带标题和当前值） */
+    private static List<SortHeaderHitbox> drawTableHeaders(
+            GuiGraphics gfx,
+            Font font,
+            UiRect table,
+            OverviewViewModel.UiState uiState,
+            int mouseX,
+            int mouseY,
+            int colNameX,
+            int colProdX,
+            int colConsX,
+            int colNetX,
+            int colInvX,
+            int y
+    ) {
+        List<SortHeaderHitbox> hitboxes = new ArrayList<>(4);
+        TableSortMode activeMode = displayedSortMode(uiState.sortMode());
+
+        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.table.col_node"), colNameX, y, UiThemeTokens.TEXT_MUTED);
+        hitboxes.add(drawSortableHeader(
+                gfx,
+                font,
+                mouseX,
+                mouseY,
+                y,
+                new UiRect(colProdX - 4, y - 1, Math.max(18, colConsX - colProdX), HEADER_HEIGHT),
+                Component.translatable("screen.resourceobserver.overview.table.col_production").getString(),
+                TableSortMode.PRODUCTION,
+                activeMode,
+                uiState.sortDesc(),
+                colProdX
+        ));
+        hitboxes.add(drawSortableHeader(
+                gfx,
+                font,
+                mouseX,
+                mouseY,
+                y,
+                new UiRect(colConsX - 4, y - 1, Math.max(18, colNetX - colConsX), HEADER_HEIGHT),
+                Component.translatable("screen.resourceobserver.overview.table.col_consumption").getString(),
+                TableSortMode.CONSUMPTION,
+                activeMode,
+                uiState.sortDesc(),
+                colConsX
+        ));
+        hitboxes.add(drawSortableHeader(
+                gfx,
+                font,
+                mouseX,
+                mouseY,
+                y,
+                new UiRect(colNetX - 4, y - 1, Math.max(18, colInvX - colNetX), HEADER_HEIGHT),
+                Component.translatable("screen.resourceobserver.overview.table.col_net").getString(),
+                TableSortMode.NET,
+                activeMode,
+                uiState.sortDesc(),
+                colNetX
+        ));
+        hitboxes.add(drawSortableHeader(
+                gfx,
+                font,
+                mouseX,
+                mouseY,
+                y,
+                new UiRect(colInvX - 4, y - 1, Math.max(18, table.right() - colInvX - 6), HEADER_HEIGHT),
+                Component.translatable("screen.resourceobserver.overview.table.col_inventory").getString(),
+                TableSortMode.STOCK,
+                activeMode,
+                uiState.sortDesc(),
+                colInvX
+        ));
+        return hitboxes;
+    }
+
+    private static SortHeaderHitbox drawSortableHeader(
+            GuiGraphics gfx,
+            Font font,
+            int mouseX,
+            int mouseY,
+            int y,
+            UiRect hitbox,
+            String label,
+            TableSortMode sortMode,
+            TableSortMode activeMode,
+            boolean sortDesc,
+            int textX
+    ) {
+        boolean active = sortMode == activeMode;
+        boolean hovered = hitbox.contains(mouseX, mouseY);
+        int color = active
+                ? UiThemeTokens.CYAN
+                : (hovered ? UiThemeTokens.TEXT : UiThemeTokens.TEXT_MUTED);
+        String suffix = active ? (sortDesc ? " ↓" : " ↑") : "";
+        gfx.drawString(font, label + suffix, textX, y, color);
+        return new SortHeaderHitbox(hitbox, sortMode);
+    }
+
+    private static TableSortMode displayedSortMode(TableSortMode sortMode) {
+        if (sortMode == TableSortMode.NET_ABS) {
+            return TableSortMode.NET;
+        }
+        return sortMode;
+    }
+
     private static void drawFilterButton(
             GuiGraphics gfx,
             Font font,
@@ -271,7 +343,6 @@ public final class TableRenderer {
         gfx.drawString(font, RenderUtils.ellipsis(font, text, rect.width() - 8), rect.x() + 4, rect.y() + 3, textColor);
     }
 
-    /** 根据鼠标位置和按下状态解析按钮视觉状态 */
     private static ButtonVisualState resolveButtonState(UiRect rect, int mouseX, int mouseY, boolean pressed) {
         if (pressed) {
             return ButtonVisualState.PRESSED;
@@ -282,10 +353,6 @@ public final class TableRenderer {
         return ButtonVisualState.NORMAL;
     }
 
-    /**
-     * 将分组数据扁平化为渲染行列表。
-     * 展开的分组会显示所有子行，折叠的分组只显示组标题。
-     */
     private static List<RowEntry> flatten(
             List<OverviewViewModel.TableGroup> groups,
             Map<String, Boolean> expandedState
@@ -303,7 +370,6 @@ public final class TableRenderer {
         return result;
     }
 
-    /** 扁平化行条目 —— 可以是分组标题行或物品数据行 */
     private record RowEntry(OverviewViewModel.TableGroup group, OverviewViewModel.TableRow row, boolean groupExpanded) {
         static RowEntry forGroup(OverviewViewModel.TableGroup group, boolean expanded) {
             return new RowEntry(group, null, expanded);
@@ -314,66 +380,56 @@ public final class TableRenderer {
         }
     }
 
-    /** 筛选控件的热区集合 */
     private record FilterControls(
             FilterButtonHitbox groupButton,
-            FilterButtonHitbox sortButton,
             FilterButtonHitbox statusButton,
             ResetHitbox resetButton
     ) {
     }
 
-    /** 筛选菜单类型 */
     public enum MenuType {
-        GROUP,    // 分组筛选
-        SORT,     // 排序模式
-        STATUS    // 状态筛选
+        GROUP,
+        STATUS
     }
 
-    /** 按钮视觉状态 */
     public enum ButtonVisualState {
-        NORMAL,   // 默认状态
-        HOVER,    // 鼠标悬停
-        PRESSED   // 按下状态
+        NORMAL,
+        HOVER,
+        PRESSED
     }
 
-    /** 筛选按钮按下状态记录 */
     public record FilterPressState(
             boolean groupPressed,
-            boolean sortPressed,
             boolean statusPressed,
             boolean resetPressed
     ) {
-        public static final FilterPressState NONE = new FilterPressState(false, false, false, false);
+        public static final FilterPressState NONE = new FilterPressState(false, false, false);
     }
 
-    /** 分组标题热区 */
     public record GroupHitbox(UiRect rect, String groupKey) {
     }
 
-    /** 数据行热区（用于点击选中物品） */
     public record RowHitbox(UiRect rect, String itemId, String groupKey) {
     }
 
-    /** 星标按钮热区（用于点击切换关注） */
     public record RowStarHitbox(UiRect rect, String itemId) {
     }
 
-    /** 筛选按钮热区 */
+    public record SortHeaderHitbox(UiRect rect, TableSortMode sortMode) {
+    }
+
     public record FilterButtonHitbox(UiRect rect, MenuType menuType) {
     }
 
-    /** 重置按钮热区 */
     public record ResetHitbox(UiRect rect) {
     }
 
-    /** 表格渲染结果 —— 包含所有可交互热区 */
     public record RenderResult(
             List<GroupHitbox> groupHitboxes,
             List<RowHitbox> rowHitboxes,
             List<RowStarHitbox> rowStarHitboxes,
+            List<SortHeaderHitbox> sortHeaderHitboxes,
             FilterButtonHitbox groupButtonHitbox,
-            FilterButtonHitbox sortButtonHitbox,
             FilterButtonHitbox statusButtonHitbox,
             ResetHitbox resetHitbox
     ) {

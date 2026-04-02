@@ -18,7 +18,6 @@ import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.network.ObserverRefreshRequestPayload;
 import com.yuyinrl.resourceobserver.network.ObserverUiActionPayload;
 import com.yuyinrl.resourceobserver.network.UiActionType;
-import com.yuyinrl.resourceobserver.ui.state.TableSortMode;
 import com.yuyinrl.resourceobserver.ui.state.TableStatusFilter;
 import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
 import net.minecraft.Util;
@@ -147,8 +146,8 @@ public class ResourceTerminalScreen extends Screen {
     private List<TableRenderer.GroupHitbox> groupHitboxes = List.of();
     private List<TableRenderer.RowHitbox> rowHitboxes = List.of();
     private List<TableRenderer.RowStarHitbox> rowStarHitboxes = List.of();
+    private List<TableRenderer.SortHeaderHitbox> sortHeaderHitboxes = List.of();
     private TableRenderer.FilterButtonHitbox groupFilterButtonHitbox;
-    private TableRenderer.FilterButtonHitbox sortButtonHitbox;
     private TableRenderer.FilterButtonHitbox statusButtonHitbox;
     private TableRenderer.ResetHitbox resetFiltersHitbox;
 
@@ -185,7 +184,6 @@ public class ResourceTerminalScreen extends Screen {
     private Button closeButton;
     private Button sizeModeButton;
     private long groupButtonPressedUntilMs;
-    private long sortButtonPressedUntilMs;
     private long statusButtonPressedUntilMs;
     private long resetButtonPressedUntilMs;
 
@@ -331,6 +329,10 @@ public class ResourceTerminalScreen extends Screen {
             }
 
             if (button == 0 && handleFilterButtonClick(mouseX, mouseY)) {
+                return true;
+            }
+
+            if (button == 0 && handleSortHeaderClick(mouseX, mouseY)) {
                 return true;
             }
 
@@ -523,7 +525,6 @@ public class ResourceTerminalScreen extends Screen {
                 mouseY,
                 new TableRenderer.FilterPressState(
                         isFilterPressed(groupButtonPressedUntilMs),
-                        isFilterPressed(sortButtonPressedUntilMs),
                         isFilterPressed(statusButtonPressedUntilMs),
                         isFilterPressed(resetButtonPressedUntilMs)
                 )
@@ -531,8 +532,8 @@ public class ResourceTerminalScreen extends Screen {
         groupHitboxes = tableResult.groupHitboxes();
         rowHitboxes = tableResult.rowHitboxes();
         rowStarHitboxes = tableResult.rowStarHitboxes();
+        sortHeaderHitboxes = tableResult.sortHeaderHitboxes();
         groupFilterButtonHitbox = tableResult.groupButtonHitbox();
-        sortButtonHitbox = tableResult.sortButtonHitbox();
         statusButtonHitbox = tableResult.statusButtonHitbox();
         resetFiltersHitbox = tableResult.resetHitbox();
         gfx.disableScissor();
@@ -783,14 +784,21 @@ public class ResourceTerminalScreen extends Screen {
             togglePopupMenu(PopupMenuType.GROUP_FILTER, groupFilterButtonHitbox.rect(), buildGroupFilterOptions());
             return true;
         }
-        if (sortButtonHitbox != null && sortButtonHitbox.rect().contains(mouseX, mouseY)) {
-            markFilterPressed(TableRenderer.MenuType.SORT);
-            togglePopupMenu(PopupMenuType.SORT, sortButtonHitbox.rect(), buildSortOptions());
-            return true;
-        }
         if (statusButtonHitbox != null && statusButtonHitbox.rect().contains(mouseX, mouseY)) {
             markFilterPressed(TableRenderer.MenuType.STATUS);
             togglePopupMenu(PopupMenuType.STATUS, statusButtonHitbox.rect(), buildStatusOptions());
+            return true;
+        }
+        return false;
+    }
+
+    private boolean handleSortHeaderClick(double mouseX, double mouseY) {
+        for (TableRenderer.SortHeaderHitbox hitbox : sortHeaderHitboxes) {
+            if (!hitbox.rect().contains(mouseX, mouseY)) {
+                continue;
+            }
+            closePopupMenu();
+            sendUiAction(UiActionType.SET_SORT_MODE, "", hitbox.sortMode().key());
             return true;
         }
         return false;
@@ -938,25 +946,6 @@ public class ResourceTerminalScreen extends Screen {
     }
 
     /** 构建排序模式弹出菜单选项 */
-    private List<PopupOption> buildSortOptions() {
-        if (viewModel == null) {
-            return List.of();
-        }
-        List<PopupOption> options = new ArrayList<>();
-        TableSortMode current = viewModel.uiState().sortMode();
-        boolean desc = viewModel.uiState().sortDesc();
-        for (TableSortMode mode : TableSortMode.values()) {
-            String suffix = mode == current ? (desc ? " v" : " ^") : "";
-            options.add(PopupOption.action(
-                    selectedMarker(mode == current, Component.translatable(mode.translationKey()).getString() + suffix),
-                    UiActionType.SET_SORT_MODE,
-                    "",
-                    mode.key()
-            ));
-        }
-        return options;
-    }
-
     /** 构建状态筛选弹出菜单选项 */
     private List<PopupOption> buildStatusOptions() {
         if (viewModel == null) {
@@ -1304,7 +1293,6 @@ public class ResourceTerminalScreen extends Screen {
         long until = Util.getMillis() + 120L;
         switch (menuType) {
             case GROUP -> groupButtonPressedUntilMs = until;
-            case SORT -> sortButtonPressedUntilMs = until;
             case STATUS -> statusButtonPressedUntilMs = until;
         }
     }

@@ -1,18 +1,26 @@
 package com.yuyinrl.resourceobserver.world.block.entity;
 
 import appeng.api.AECapabilities;
+import appeng.api.implementations.blockentities.IChestOrDrive;
 import appeng.api.networking.IGrid;
 import appeng.api.networking.IGridNode;
 import appeng.api.networking.IInWorldGridNodeHost;
 import appeng.api.networking.storage.IStorageService;
+import appeng.api.stacks.AEFluidKey;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
+import appeng.api.stacks.AEKeyType;
 import appeng.api.stacks.KeyCounter;
+import appeng.api.storage.IStorageProvider;
+import appeng.api.storage.cells.StorageCell;
+import appeng.api.storage.cells.IBasicCellItem;
+import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.HolderLookup;
+import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.ListTag;
 import net.minecraft.nbt.Tag;
@@ -23,16 +31,23 @@ import net.minecraft.server.level.ServerLevel;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.item.Item;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 import net.neoforged.neoforge.items.IItemHandler;
 import org.jetbrains.annotations.Nullable;
 
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 观察者方块实体 —— 模组数据采集的核心逻辑所在。
@@ -60,6 +75,8 @@ public class ObserverBlockEntity extends BlockEntity {
 
     /** 采样间隔（单位：游戏 tick），10 tick = 0.5 秒 */
     private static final int SAMPLE_INTERVAL = 10;
+    private static final String AE2_CAPACITY_SCOPE_CELLS_ONLY = "AE2_CELLS_ONLY";
+    private static final String FLUID_KEY_PREFIX = "fluid:";
 
     /** 当前所有网络绑定列表 */
     private final List<BoundEntry> bindings = new ArrayList<>();
@@ -69,8 +86,14 @@ public class ObserverBlockEntity extends BlockEntity {
     private final Map<String, Map<String, Long>> ae2ItemAmounts = new HashMap<>();
     /** AE2 网络中每种物品的数量变化量（networkId -> {itemId -> delta}） */
     private final Map<String, Map<String, Long>> ae2ItemDeltas = new HashMap<>();
+    /** AE2 网络容量指标（networkId -> metrics） */
+    private final Map<String, Ae2CellCapacityMetrics> ae2CellCapacityMetrics = new HashMap<>();
     /** 调试信息映射，记录每个网络的采样状态 */
     private final Map<String, String> debugInfoMap = new HashMap<>();
+    /** 容量告警签名（networkId -> last signature），避免重复刷日志 */
+    private final Map<String, String> capacityWarnSignatureMap = new HashMap<>();
+    private static final Map<Class<?>, CellMetricsAccessors> CELL_METRICS_ACCESSORS = new HashMap<>();
+    private static final Set<Class<?>> CELL_METRICS_UNSUPPORTED = new HashSet<>();
     /** 上次采样的游戏时间，用于控制采样间隔 */
     private long lastSampleTick = -1;
 
@@ -81,6 +104,101 @@ public class ObserverBlockEntity extends BlockEntity {
      * @param targetBlockId 目标方块的注册 ID（如 "ae2:controller"）
      */
     public record BoundEntry(String networkType, String networkId, String targetBlockId) {
+    }
+
+    public record Ae2CellCapacityMetrics(
+            long itemUsedBytes,
+            long itemTotalBytes,
+            long itemUsedTypes,
+            long itemTotalTypes,
+            long itemUsedUnits,
+            long itemMaxUnits,
+            long fluidUsedBytes,
+            long fluidTotalBytes,
+            long fluidUsedTypes,
+            long fluidTotalTypes,
+            long fluidUsedUnits,
+            long fluidMaxUnits,
+            String scope,
+            boolean reliable,
+            boolean available
+    ) {
+        public static Ae2CellCapacityMetrics unavailable() {
+            return new Ae2CellCapacityMetrics(
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    AE2_CAPACITY_SCOPE_CELLS_ONLY,
+                    false,
+                    false
+            );
+        }
+    }
+
+    private enum CellChannel {
+        ITEM(
+                "item",
+                "getTotalItemTypes",
+                "getStoredItemTypes",
+                "getStoredItemCount",
+                "getRemainingItemCount"
+        ),
+        FLUID(
+                "fluid",
+                "getTotalFluidTypes",
+                "getStoredFluidTypes",
+                "getStoredFluidCount",
+                "getRemainingFluidCount"
+        );
+
+        private final String key;
+        private final String totalTypesMethodName;
+        private final String usedTypesMethodName;
+        private final String storedUnitsMethodName;
+        private final String remainingUnitsMethodName;
+
+        CellChannel(
+                String key,
+                String totalTypesMethodName,
+                String usedTypesMethodName,
+                String storedUnitsMethodName,
+                String remainingUnitsMethodName
+        ) {
+            this.key = key;
+            this.totalTypesMethodName = totalTypesMethodName;
+            this.usedTypesMethodName = usedTypesMethodName;
+            this.storedUnitsMethodName = storedUnitsMethodName;
+            this.remainingUnitsMethodName = remainingUnitsMethodName;
+        }
+
+        public String key() {
+            return key;
+        }
+
+        public String totalTypesMethodName() {
+            return totalTypesMethodName;
+        }
+
+        public String usedTypesMethodName() {
+            return usedTypesMethodName;
+        }
+
+        public String storedUnitsMethodName() {
+            return storedUnitsMethodName;
+        }
+
+        public String remainingUnitsMethodName() {
+            return remainingUnitsMethodName;
+        }
     }
 
     /**
@@ -153,6 +271,11 @@ public class ObserverBlockEntity extends BlockEntity {
             if (entry.networkId().equals(networkId)) {
                 return false;
             }
+            if ("AE2_ITEMS".equals(networkType)
+                    && "AE2_ITEMS".equals(entry.networkType())
+                    && isSameAe2Grid(networkId, entry.networkId())) {
+                return false;
+            }
         }
         bindings.add(new BoundEntry(networkType, networkId, targetBlockId.toString()));
         setChanged();
@@ -165,7 +288,9 @@ public class ObserverBlockEntity extends BlockEntity {
         statsMap.clear();
         ae2ItemAmounts.clear();
         ae2ItemDeltas.clear();
+        ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
+        capacityWarnSignatureMap.clear();
         setChanged();
     }
 
@@ -207,6 +332,21 @@ public class ObserverBlockEntity extends BlockEntity {
         return debugInfoMap.getOrDefault(networkId, "no debug data yet");
     }
 
+    public Ae2CellCapacityMetrics getAe2CellCapacityMetricsFor(String networkId) {
+        return ae2CellCapacityMetrics.getOrDefault(networkId, Ae2CellCapacityMetrics.unavailable());
+    }
+
+    public @Nullable IGrid resolveAe2GridForNetwork(String networkId) {
+        if (level == null) {
+            return null;
+        }
+        BlockPos targetPos = extractPos(networkId);
+        if (targetPos == null || !level.isLoaded(targetPos)) {
+            return null;
+        }
+        return resolveAe2GridAt(targetPos);
+    }
+
     /**
      * 服务端 tick 回调 —— 驱动周期性采样。
      * 仅在服务端执行，跳过客户端和无绑定的情况。
@@ -244,6 +384,8 @@ public class ObserverBlockEntity extends BlockEntity {
                 itemAmountSnapshot = getAe2ItemAmountsFor(binding.networkId());
             } else if ("FLUX_ENERGY".equals(binding.networkType())) {
                 newStats = sampleEnergy(targetPos, oldStats);
+                ae2CellCapacityMetrics.remove(binding.networkId());
+                capacityWarnSignatureMap.remove(binding.networkId());
                 debugInfoMap.put(binding.networkId(), "channel=neoforge.energy;target=" + targetPos.toShortString());
             } else {
                 continue; // 不支持的网络类型，跳过
@@ -272,6 +414,8 @@ public class ObserverBlockEntity extends BlockEntity {
     private BindingStats sampleAe2Network(String networkId, BlockPos targetPos, BindingStats oldStats) {
         Ae2ReadResult readResult = readAe2NetworkItems(targetPos);
         debugInfoMap.put(networkId, readResult.debugInfo());
+        ae2CellCapacityMetrics.put(networkId, readResult.cellCapacityMetrics());
+        reportAe2CapacityIssue(networkId, targetPos, readResult);
         Map<String, Long> snapshot = readResult.snapshot();
         if (snapshot == null) {
             ae2ItemDeltas.put(networkId, Map.of());
@@ -284,21 +428,48 @@ public class ObserverBlockEntity extends BlockEntity {
         ae2ItemDeltas.put(networkId, deltas);
 
         long totalAmount = 0;
-        for (long value : snapshot.values()) {
-            totalAmount += value;
+        long itemTypeCount = 0;
+        for (Map.Entry<String, Long> entry : snapshot.entrySet()) {
+            if (!isItemEntryId(entry.getKey())) {
+                continue;
+            }
+            totalAmount = saturatingAdd(totalAmount, Math.max(0L, entry.getValue()));
+            itemTypeCount++;
         }
 
         long produced = 0;
         long consumed = 0;
-        for (long delta : deltas.values()) {
+        for (Map.Entry<String, Long> entry : deltas.entrySet()) {
+            if (!isItemEntryId(entry.getKey())) {
+                continue;
+            }
+            long delta = entry.getValue();
             if (delta > 0) {
-                produced += delta;
+                produced = saturatingAdd(produced, delta);
             } else if (delta < 0) {
-                consumed += -delta;
+                consumed = saturatingAdd(consumed, -delta);
             }
         }
 
-        return oldStats.withDelta(totalAmount, snapshot.size(), produced, consumed);
+        return oldStats.withDelta(totalAmount, itemTypeCount, produced, consumed);
+    }
+
+    private void reportAe2CapacityIssue(String networkId, BlockPos targetPos, Ae2ReadResult readResult) {
+        Ae2CellCapacityMetrics metrics = readResult.cellCapacityMetrics();
+        if (!metrics.available() || !metrics.reliable()) {
+            String signature = readResult.debugInfo();
+            String previous = capacityWarnSignatureMap.put(networkId, signature);
+            if (!signature.equals(previous)) {
+                ResourceObserverMod.LOGGER.warn(
+                        "[ResourceObserver] AE2 capacity probe degraded at {} network={} info={}",
+                        targetPos.toShortString(),
+                        networkId,
+                        signature
+                );
+            }
+            return;
+        }
+        capacityWarnSignatureMap.remove(networkId);
     }
 
     /**
@@ -306,18 +477,32 @@ public class ObserverBlockEntity extends BlockEntity {
      * @param snapshot  物品快照（itemId -> amount），null 表示读取失败
      * @param debugInfo 调试信息字符串
      */
-    private record Ae2ReadResult(@Nullable Map<String, Long> snapshot, String debugInfo) {
+    private record Ae2ReadResult(
+            @Nullable Map<String, Long> snapshot,
+            String debugInfo,
+            Ae2CellCapacityMetrics cellCapacityMetrics
+    ) {
     }
 
-    /**
-     * 通过 AE2 API 读取目标方块所在网络的物品库存。
-     * 流程：获取 GridNodeHost → 遍历方向获取 GridNode → 获取 Grid → 读取 StorageService 缓存库存。
-     * 仅统计 AEItemKey 类型的存储（忽略流体等）。
-     */
-    private Ae2ReadResult readAe2NetworkItems(BlockPos targetPos) {
+    private record Ae2CapacityReadResult(
+            Ae2CellCapacityMetrics metrics,
+            String debugSuffix
+    ) {
+    }
+
+    private boolean isSameAe2Grid(String leftNetworkId, String rightNetworkId) {
+        IGrid leftGrid = resolveAe2GridForNetwork(leftNetworkId);
+        if (leftGrid == null) {
+            return false;
+        }
+        IGrid rightGrid = resolveAe2GridForNetwork(rightNetworkId);
+        return rightGrid != null && leftGrid == rightGrid;
+    }
+
+    private @Nullable IGrid resolveAe2GridAt(BlockPos targetPos) {
         IInWorldGridNodeHost host = level.getCapability(AECapabilities.IN_WORLD_GRID_NODE_HOST, targetPos, null);
         if (host == null) {
-            return new Ae2ReadResult(null, "channel=ae2.in_world_grid_node_host;status=missing_host;target=" + targetPos.toShortString());
+            return null;
         }
 
         IGridNode node = null;
@@ -328,32 +513,722 @@ public class ObserverBlockEntity extends BlockEntity {
             }
         }
         if (node == null) {
-            return new Ae2ReadResult(null, "channel=ae2.grid_node;status=missing_node;target=" + targetPos.toShortString());
+            return null;
         }
 
-        final IGrid grid;
         try {
-            grid = node.getGrid();
+            return node.getGrid();
         } catch (IllegalStateException ex) {
-            return new Ae2ReadResult(null, "channel=ae2.grid;status=offline;error=" + ex.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 通过 AE2 API 读取目标方块所在网络的物品库存。
+     * 流程：获取 GridNodeHost → 遍历方向获取 GridNode → 获取 Grid → 读取 StorageService 缓存库存。
+     * 仅统计 AEItemKey 类型的存储（忽略流体等）。
+     */
+    private Ae2ReadResult readAe2NetworkItems(BlockPos targetPos) {
+        IGrid grid = resolveAe2GridAt(targetPos);
+        if (grid == null) {
+            return new Ae2ReadResult(
+                    null,
+                    "channel=ae2.grid;status=unavailable;target=" + targetPos.toShortString(),
+                    Ae2CellCapacityMetrics.unavailable()
+            );
         }
 
         IStorageService storageService = grid.getStorageService();
         KeyCounter cachedInventory = storageService.getCachedInventory();
         Map<String, Long> snapshot = new HashMap<>();
+        int itemTypeCount = 0;
+        int fluidTypeCount = 0;
         for (AEKey key : cachedInventory.keySet()) {
-            if (!(key instanceof AEItemKey itemKey)) {
+            String entryId = toEntryId(key);
+            if (entryId == null) {
                 continue;
             }
             long amount = cachedInventory.get(key);
             if (amount <= 0) {
                 continue;
             }
-            String itemId = itemKey.getId().toString();
-            snapshot.merge(itemId, amount, Long::sum);
+            if (isFluidEntryId(entryId)) {
+                fluidTypeCount++;
+            } else {
+                itemTypeCount++;
+            }
+            snapshot.merge(entryId, amount, Long::sum);
         }
-        String debug = "channel=ae2.cached_inventory;status=ok;types=" + snapshot.size();
-        return new Ae2ReadResult(snapshot, debug);
+        Ae2CapacityReadResult capacityReadResult = readAe2CellCapacityMetrics(grid);
+        Ae2CellCapacityMetrics capacityMetrics = capacityReadResult.metrics();
+        String debug = "channel=ae2.cached_inventory;status=ok;types="
+                + snapshot.size()
+                + ";item_types="
+                + itemTypeCount
+                + ";fluid_types="
+                + fluidTypeCount
+                + ";cells="
+                + (capacityMetrics.available() ? "present" : "none")
+                + ";capacity_reliable="
+                + capacityMetrics.reliable()
+                + capacityReadResult.debugSuffix();
+        return new Ae2ReadResult(snapshot, debug, capacityMetrics);
+    }
+
+    private static @Nullable String toEntryId(AEKey key) {
+        if (key instanceof AEItemKey itemKey) {
+            return itemKey.getId().toString();
+        }
+        if (key instanceof AEFluidKey fluidKey) {
+            return FLUID_KEY_PREFIX + fluidKey.getId();
+        }
+        return null;
+    }
+
+    private static boolean isFluidEntryId(String entryId) {
+        return entryId != null && entryId.startsWith(FLUID_KEY_PREFIX);
+    }
+
+    private static boolean isItemEntryId(String entryId) {
+        return !isFluidEntryId(entryId);
+    }
+
+    private Ae2CapacityReadResult readAe2CellCapacityMetrics(IGrid grid) {
+        long itemUsedBytes = 0L;
+        long itemTotalBytes = 0L;
+        long itemUsedTypes = 0L;
+        long itemTotalTypes = 0L;
+        long itemUsedUnits = 0L;
+        long itemMaxUnits = 0L;
+        long fluidUsedBytes = 0L;
+        long fluidTotalBytes = 0L;
+        long fluidUsedTypes = 0L;
+        long fluidTotalTypes = 0L;
+        long fluidUsedUnits = 0L;
+        long fluidMaxUnits = 0L;
+        boolean reliable = true;
+        int cellCount = 0;
+        int readableCellCount = 0;
+        int itemCellCount = 0;
+        int itemReadableCellCount = 0;
+        int fluidCellCount = 0;
+        int fluidReadableCellCount = 0;
+        int deviceCount = 0;
+        int poweredDeviceCount = 0;
+        int nullCellCount = 0;
+        int nullCellOnUnpoweredCount = 0;
+        int statusProbeFailedCount = 0;
+        int fromChestOrDriveCount = 0;
+        int fromStorageProviderCount = 0;
+        int fromNodeOwnerCount = 0;
+        int fromNodeStorageServiceCount = 0;
+        int nodesScanned = 0;
+        Map<String, Integer> deviceClasses = new HashMap<>();
+        Map<String, Integer> readableCellClasses = new HashMap<>();
+        Map<String, Integer> readableItemCellClasses = new HashMap<>();
+        Map<String, Integer> readableFluidCellClasses = new HashMap<>();
+        Map<String, Integer> slotCellItemIds = new HashMap<>();
+        Map<String, Integer> slotCellKeyTypes = new HashMap<>();
+        Map<String, Integer> missingMethodCells = new HashMap<>();
+        Map<String, Integer> invocationFailedCells = new HashMap<>();
+        int slotCellChannelItem = 0;
+        int slotCellChannelFluid = 0;
+        int slotCellChannelUnknown = 0;
+
+        CapacityMachineCollection machineCollection = collectCapacityMachines(grid);
+        Set<IChestOrDrive> machines = machineCollection.machines();
+        fromChestOrDriveCount = machineCollection.fromChestOrDriveCount();
+        fromStorageProviderCount = machineCollection.fromStorageProviderCount();
+        fromNodeOwnerCount = machineCollection.fromNodeOwnerCount();
+        fromNodeStorageServiceCount = machineCollection.fromNodeStorageServiceCount();
+        nodesScanned = machineCollection.nodesScanned();
+
+        for (IChestOrDrive machine : machines) {
+            deviceCount++;
+            incrementCount(deviceClasses, machine.getClass().getName());
+            boolean powered = safeIsPowered(machine);
+            if (powered) {
+                poweredDeviceCount++;
+            }
+            for (int slot = 0; slot < machine.getCellCount(); slot++) {
+                if (!probeCellStatus(machine, slot)) {
+                    statusProbeFailedCount++;
+                }
+                StorageCell cell = machine.getOriginalCellInventory(slot);
+                if (cell == null) {
+                    if (powered) {
+                        nullCellCount++;
+                    } else {
+                        nullCellOnUnpoweredCount++;
+                    }
+                    continue;
+                }
+                cellCount++;
+                Class<?> cellClass = cell.getClass();
+                CellMetricsAccessors accessors = resolveCellMetricsAccessors(cellClass);
+                if (accessors == null) {
+                    reliable = false;
+                    incrementCount(missingMethodCells, cellClass.getName());
+                    continue;
+                }
+                SlotCellProbe slotProbe = detectChannelFromCellItem(machine, slot);
+                if (slotProbe.itemId() != null) {
+                    incrementCount(slotCellItemIds, slotProbe.itemId());
+                }
+                if (slotProbe.keyTypeId() != null) {
+                    incrementCount(slotCellKeyTypes, slotProbe.keyTypeId());
+                }
+                CellChannel channel = slotProbe.channel();
+                if (channel == null) {
+                    slotCellChannelUnknown++;
+                    channel = accessors.detectChannel(cell);
+                } else if (channel == CellChannel.ITEM) {
+                    slotCellChannelItem++;
+                } else {
+                    slotCellChannelFluid++;
+                }
+                if (channel == CellChannel.ITEM) {
+                    itemCellCount++;
+                } else {
+                    fluidCellCount++;
+                }
+                ReflectedCellMetrics cellMetrics;
+                try {
+                    cellMetrics = accessors.read(cell, channel);
+                } catch (ReflectiveOperationException ex) {
+                    reliable = false;
+                    incrementCount(invocationFailedCells, cellClass.getName());
+                    continue;
+                }
+                readableCellCount++;
+                incrementCount(readableCellClasses, cellClass.getName());
+                if (cellMetrics.channel() == CellChannel.ITEM) {
+                    itemReadableCellCount++;
+                    incrementCount(readableItemCellClasses, cellClass.getName());
+                    itemUsedBytes = saturatingAdd(itemUsedBytes, Math.max(0L, cellMetrics.usedBytes()));
+                    itemTotalBytes = saturatingAdd(itemTotalBytes, Math.max(0L, cellMetrics.totalBytes()));
+                    itemUsedTypes = saturatingAdd(itemUsedTypes, Math.max(0L, cellMetrics.usedTypes()));
+                    itemTotalTypes = saturatingAdd(itemTotalTypes, Math.max(0L, cellMetrics.totalTypes()));
+                    itemUsedUnits = saturatingAdd(itemUsedUnits, Math.max(0L, cellMetrics.usedUnits()));
+                    itemMaxUnits = saturatingAdd(itemMaxUnits, Math.max(0L, cellMetrics.maxUnits()));
+                } else {
+                    fluidReadableCellCount++;
+                    incrementCount(readableFluidCellClasses, cellClass.getName());
+                    fluidUsedBytes = saturatingAdd(fluidUsedBytes, Math.max(0L, cellMetrics.usedBytes()));
+                    fluidTotalBytes = saturatingAdd(fluidTotalBytes, Math.max(0L, cellMetrics.totalBytes()));
+                    fluidUsedTypes = saturatingAdd(fluidUsedTypes, Math.max(0L, cellMetrics.usedTypes()));
+                    fluidTotalTypes = saturatingAdd(fluidTotalTypes, Math.max(0L, cellMetrics.totalTypes()));
+                    fluidUsedUnits = saturatingAdd(fluidUsedUnits, Math.max(0L, cellMetrics.usedUnits()));
+                    fluidMaxUnits = saturatingAdd(fluidMaxUnits, Math.max(0L, cellMetrics.maxUnits()));
+                }
+            }
+        }
+
+        Ae2CellCapacityMetrics metrics = new Ae2CellCapacityMetrics(
+                itemUsedBytes,
+                itemTotalBytes,
+                itemUsedTypes,
+                itemTotalTypes,
+                itemUsedUnits,
+                itemMaxUnits,
+                fluidUsedBytes,
+                fluidTotalBytes,
+                fluidUsedTypes,
+                fluidTotalTypes,
+                fluidUsedUnits,
+                fluidMaxUnits,
+                AE2_CAPACITY_SCOPE_CELLS_ONLY,
+                reliable,
+                cellCount > 0
+        );
+        String debugSuffix = ";capacity_cells_total=" + cellCount
+                + ";capacity_cells_readable=" + readableCellCount
+                + ";capacity_devices_total=" + deviceCount
+                + ";capacity_devices_powered=" + poweredDeviceCount
+                + ";capacity_cells_null=" + nullCellCount
+                + ";capacity_cells_null_unpowered=" + nullCellOnUnpoweredCount
+                + ";capacity_cell_status_probe_failed=" + statusProbeFailedCount
+                + ";capacity_item_cells_total=" + itemCellCount
+                + ";capacity_item_cells_readable=" + itemReadableCellCount
+                + ";capacity_fluid_cells_total=" + fluidCellCount
+                + ";capacity_fluid_cells_readable=" + fluidReadableCellCount
+                + ";capacity_devices_from_iChestOrDrive=" + fromChestOrDriveCount
+                + ";capacity_devices_from_storage_provider=" + fromStorageProviderCount
+                + ";capacity_devices_from_node_owner=" + fromNodeOwnerCount
+                + ";capacity_devices_from_node_storage_service=" + fromNodeStorageServiceCount
+                + ";capacity_nodes_scanned=" + nodesScanned
+                + ";capacity_device_classes=" + summarizeFailureClasses(deviceClasses)
+                + ";capacity_cells_readable_classes=" + summarizeFailureClasses(readableCellClasses)
+                + ";capacity_item_cells_readable_classes=" + summarizeFailureClasses(readableItemCellClasses)
+                + ";capacity_fluid_cells_readable_classes=" + summarizeFailureClasses(readableFluidCellClasses)
+                + ";capacity_slot_cell_items=" + summarizeFailureClasses(slotCellItemIds)
+                + ";capacity_slot_cell_keytypes=" + summarizeFailureClasses(slotCellKeyTypes)
+                + ";capacity_slot_channel_item=" + slotCellChannelItem
+                + ";capacity_slot_channel_fluid=" + slotCellChannelFluid
+                + ";capacity_slot_channel_unknown=" + slotCellChannelUnknown
+                + ";capacity_cells_missing_methods=" + summarizeFailureClasses(missingMethodCells)
+                + ";capacity_cells_invocation_failed=" + summarizeFailureClasses(invocationFailedCells);
+        return new Ae2CapacityReadResult(metrics, debugSuffix);
+    }
+
+    private record CapacityMachineCollection(
+            Set<IChestOrDrive> machines,
+            int fromChestOrDriveCount,
+            int fromStorageProviderCount,
+            int fromNodeOwnerCount,
+            int fromNodeStorageServiceCount,
+            int nodesScanned
+    ) {
+    }
+
+    private static CapacityMachineCollection collectCapacityMachines(IGrid grid) {
+        Set<IChestOrDrive> result = Collections.newSetFromMap(new IdentityHashMap<>());
+        int fromChestOrDriveCount = 0;
+        int fromStorageProviderCount = 0;
+        int fromNodeOwnerCount = 0;
+        int fromNodeStorageServiceCount = 0;
+        int nodesScanned = 0;
+
+        for (IChestOrDrive machine : grid.getMachines(IChestOrDrive.class)) {
+            fromChestOrDriveCount++;
+            result.add(machine);
+        }
+        for (IStorageProvider provider : grid.getMachines(IStorageProvider.class)) {
+            if (provider instanceof IChestOrDrive chestOrDrive) {
+                fromStorageProviderCount++;
+                result.add(chestOrDrive);
+            }
+        }
+
+        for (IGridNode node : grid.getNodes()) {
+            nodesScanned++;
+            Object owner = node.getOwner();
+            if (owner instanceof IChestOrDrive chestOrDrive) {
+                fromNodeOwnerCount++;
+                result.add(chestOrDrive);
+            }
+            IStorageProvider service = node.getService(IStorageProvider.class);
+            if (service instanceof IChestOrDrive chestOrDrive) {
+                fromNodeStorageServiceCount++;
+                result.add(chestOrDrive);
+            }
+        }
+
+        return new CapacityMachineCollection(
+                result,
+                fromChestOrDriveCount,
+                fromStorageProviderCount,
+                fromNodeOwnerCount,
+                fromNodeStorageServiceCount,
+                nodesScanned
+        );
+    }
+
+    private record SlotCellProbe(
+            @Nullable CellChannel channel,
+            @Nullable String itemId,
+            @Nullable String keyTypeId
+    ) {
+    }
+
+    private static SlotCellProbe detectChannelFromCellItem(IChestOrDrive machine, int slot) {
+        try {
+            Item cellItem = machine.getCellItem(slot);
+            if (cellItem == null) {
+                return new SlotCellProbe(null, null, null);
+            }
+            String itemId = BuiltInRegistries.ITEM.getKey(cellItem).toString();
+            if (cellItem instanceof IBasicCellItem basicCellItem) {
+                AEKeyType keyType = basicCellItem.getKeyType();
+                String keyTypeId = keyType == null ? null : keyType.getId().toString();
+                CellChannel channel = parseChannelFromKeyType(keyType);
+                if (channel == null) {
+                    channel = parseChannelFromItemId(itemId);
+                }
+                return new SlotCellProbe(channel, itemId, keyTypeId);
+            }
+            return new SlotCellProbe(parseChannelFromItemId(itemId), itemId, null);
+        } catch (RuntimeException ex) {
+            return new SlotCellProbe(null, null, null);
+        }
+    }
+
+    private static boolean probeCellStatus(IChestOrDrive machine, int slot) {
+        try {
+            machine.getCellStatus(slot);
+            return true;
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private static boolean safeIsPowered(IChestOrDrive machine) {
+        try {
+            return machine.isPowered();
+        } catch (RuntimeException ex) {
+            return false;
+        }
+    }
+
+    private static void incrementCount(Map<String, Integer> counts, String key) {
+        counts.merge(key, 1, Integer::sum);
+    }
+
+    private static String summarizeFailureClasses(Map<String, Integer> counts) {
+        if (counts.isEmpty()) {
+            return "none";
+        }
+        List<Map.Entry<String, Integer>> entries = new ArrayList<>(counts.entrySet());
+        entries.sort((left, right) -> {
+            int compareCount = Integer.compare(right.getValue(), left.getValue());
+            if (compareCount != 0) {
+                return compareCount;
+            }
+            return left.getKey().compareTo(right.getKey());
+        });
+        StringBuilder builder = new StringBuilder();
+        int limit = Math.min(3, entries.size());
+        for (int i = 0; i < limit; i++) {
+            if (i > 0) {
+                builder.append(',');
+            }
+            Map.Entry<String, Integer> entry = entries.get(i);
+            builder.append(simpleClassName(entry.getKey())).append('(').append(entry.getValue()).append(')');
+        }
+        if (entries.size() > limit) {
+            builder.append(",+").append(entries.size() - limit).append(" more");
+        }
+        return builder.toString();
+    }
+
+    private static String simpleClassName(String className) {
+        int lastDot = className.lastIndexOf('.');
+        if (lastDot < 0 || lastDot >= className.length() - 1) {
+            return className;
+        }
+        return className.substring(lastDot + 1);
+    }
+
+    private static @Nullable CellMetricsAccessors resolveCellMetricsAccessors(Class<?> cellClass) {
+        CellMetricsAccessors cached = CELL_METRICS_ACCESSORS.get(cellClass);
+        if (cached != null) {
+            return cached;
+        }
+        if (CELL_METRICS_UNSUPPORTED.contains(cellClass)) {
+            return null;
+        }
+        try {
+            CellMetricsAccessors created = CellMetricsAccessors.create(cellClass);
+            CELL_METRICS_ACCESSORS.put(cellClass, created);
+            return created;
+        } catch (ReflectiveOperationException ex) {
+            CELL_METRICS_UNSUPPORTED.add(cellClass);
+            return null;
+        }
+    }
+
+    private static long invokeLong(Method method, Object target) throws ReflectiveOperationException {
+        Object value = method.invoke(target);
+        if (value instanceof Number number) {
+            return number.longValue();
+        }
+        throw new ReflectiveOperationException("Method did not return a numeric value: " + method.getName());
+    }
+
+    private static Method findCellMetricMethod(Class<?> cellClass, String name) throws ReflectiveOperationException {
+        try {
+            return cellClass.getMethod(name);
+        } catch (NoSuchMethodException ignored) {
+            Class<?> current = cellClass;
+            while (current != null) {
+                try {
+                    Method method = current.getDeclaredMethod(name);
+                    try {
+                        method.setAccessible(true);
+                    } catch (RuntimeException ignoredSetAccessibleFailure) {
+                        // Keep method as-is; invocation might still work if it is effectively accessible.
+                    }
+                    return method;
+                } catch (NoSuchMethodException innerIgnored) {
+                    current = current.getSuperclass();
+                }
+            }
+            throw new NoSuchMethodException(cellClass.getName() + "#" + name);
+        }
+    }
+
+    private static @Nullable Method findOptionalCellMetricMethod(Class<?> cellClass, String name) {
+        try {
+            return findCellMetricMethod(cellClass, name);
+        } catch (ReflectiveOperationException ignored) {
+            return null;
+        }
+    }
+
+    private static @Nullable CellChannel parseChannelFromObject(@Nullable Object channelObject) {
+        if (channelObject == null) {
+            return null;
+        }
+        String typeName = channelObject.getClass().getName().toLowerCase(Locale.ROOT);
+        String value = channelObject.toString().toLowerCase(Locale.ROOT);
+        if (typeName.contains("fluid") || value.contains("fluid")) {
+            return CellChannel.FLUID;
+        }
+        if (typeName.contains("item") || value.contains("item")) {
+            return CellChannel.ITEM;
+        }
+        return null;
+    }
+
+    private static @Nullable CellChannel parseChannelFromKeyType(@Nullable Object keyTypeObject) {
+        if (keyTypeObject == null) {
+            return null;
+        }
+        if (keyTypeObject instanceof AEKeyType keyType) {
+            if (keyType == AEKeyType.fluids()) {
+                return CellChannel.FLUID;
+            }
+            if (keyType == AEKeyType.items()) {
+                return CellChannel.ITEM;
+            }
+            String id = keyType.getId().toString().toLowerCase(Locale.ROOT);
+            if (id.contains("fluid")) {
+                return CellChannel.FLUID;
+            }
+            if (id.contains("item")) {
+                return CellChannel.ITEM;
+            }
+        }
+        String text = keyTypeObject.toString().toLowerCase(Locale.ROOT);
+        if (text.contains("fluid")) {
+            return CellChannel.FLUID;
+        }
+        if (text.contains("item")) {
+            return CellChannel.ITEM;
+        }
+        return null;
+    }
+
+    private static @Nullable CellChannel parseChannelFromItemId(@Nullable String itemId) {
+        if (itemId == null || itemId.isBlank()) {
+            return null;
+        }
+        String normalized = itemId.toLowerCase(Locale.ROOT);
+        if (normalized.contains("fluid")) {
+            return CellChannel.FLUID;
+        }
+        if (normalized.contains("item")) {
+            return CellChannel.ITEM;
+        }
+        return null;
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
+    private record ReflectedCellMetrics(
+            CellChannel channel,
+            long totalBytes,
+            long usedBytes,
+            long totalTypes,
+            long usedTypes,
+            long usedUnits,
+            long maxUnits
+    ) {
+    }
+
+    private record CellMetricsAccessors(
+            Method totalBytesMethod,
+            Method usedBytesMethod,
+            @Nullable Method channelMethod,
+            @Nullable Method keyTypeMethod,
+            @Nullable Field keyTypeField,
+            @Nullable ChannelMetricsAccessors itemMetricsAccessors,
+            @Nullable ChannelMetricsAccessors fluidMetricsAccessors
+    ) {
+        private static CellMetricsAccessors create(Class<?> cellClass) throws ReflectiveOperationException {
+            Method totalBytesMethod = findCellMetricMethod(cellClass, "getTotalBytes");
+            Method usedBytesMethod = findCellMetricMethod(cellClass, "getUsedBytes");
+            Method channelMethod = findOptionalCellMetricMethod(cellClass, "getChannel");
+            Method keyTypeMethod = findOptionalCellMetricMethod(cellClass, "getKeyType");
+            Field keyTypeField = findOptionalCellMetricField(cellClass, "keyType");
+            ChannelMetricsAccessors itemAccessors = ChannelMetricsAccessors.tryCreate(cellClass, CellChannel.ITEM);
+            ChannelMetricsAccessors fluidAccessors = ChannelMetricsAccessors.tryCreate(cellClass, CellChannel.FLUID);
+            if (itemAccessors == null && fluidAccessors == null) {
+                throw new ReflectiveOperationException(
+                        "Unable to resolve item/fluid metrics methods for " + cellClass.getName()
+                );
+            }
+            return new CellMetricsAccessors(
+                    totalBytesMethod,
+                    usedBytesMethod,
+                    channelMethod,
+                    keyTypeMethod,
+                    keyTypeField,
+                    itemAccessors,
+                    fluidAccessors
+            );
+        }
+
+        private CellChannel detectChannel(Object cell) {
+            CellChannel keyTypeChannel = parseChannelFromKeyType(readKeyType(cell));
+            if (keyTypeChannel != null) {
+                return keyTypeChannel;
+            }
+            if (channelMethod != null) {
+                try {
+                    CellChannel parsed = parseChannelFromObject(channelMethod.invoke(cell));
+                    if (parsed != null) {
+                        return parsed;
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                    // Fall through to method-availability based inference.
+                }
+            }
+            if (itemMetricsAccessors != null && fluidMetricsAccessors == null) {
+                return CellChannel.ITEM;
+            }
+            if (fluidMetricsAccessors != null && itemMetricsAccessors == null) {
+                return CellChannel.FLUID;
+            }
+            return CellChannel.ITEM;
+        }
+
+        private ReflectedCellMetrics read(Object cell, CellChannel preferredChannel) throws ReflectiveOperationException {
+            long totalBytes = Math.max(0L, invokeLong(totalBytesMethod, cell));
+            long usedBytes = Math.max(0L, invokeLong(usedBytesMethod, cell));
+
+            ChannelMetricsAccessors accessors = metricsFor(preferredChannel);
+            boolean usingPreferredAccessors = accessors != null;
+            if (accessors == null) {
+                accessors = metricsFor(preferredChannel == CellChannel.ITEM ? CellChannel.FLUID : CellChannel.ITEM);
+            }
+            if (accessors == null) {
+                throw new ReflectiveOperationException("No metrics accessors available");
+            }
+
+            ChannelRead selected = readChannel(cell, accessors);
+            CellChannel resolvedChannel = usingPreferredAccessors ? selected.channel() : preferredChannel;
+            ChannelMetricsAccessors alternateAccessors = metricsFor(
+                    accessors.channel() == CellChannel.ITEM ? CellChannel.FLUID : CellChannel.ITEM
+            );
+            if (alternateAccessors != null) {
+                try {
+                    ChannelRead alternate = readChannel(cell, alternateAccessors);
+                    if (selected.signal() == 0L && alternate.signal() > 0L) {
+                        selected = alternate;
+                        resolvedChannel = alternate.channel();
+                    }
+                } catch (ReflectiveOperationException ignored) {
+                    // Keep primary channel when alternate read path fails.
+                }
+            }
+            return new ReflectedCellMetrics(
+                    resolvedChannel,
+                    totalBytes,
+                    usedBytes,
+                    selected.totalTypes(),
+                    selected.usedTypes(),
+                    selected.storedUnits(),
+                    selected.maxUnits()
+            );
+        }
+
+        private @Nullable ChannelMetricsAccessors metricsFor(CellChannel channel) {
+            return channel == CellChannel.FLUID ? fluidMetricsAccessors : itemMetricsAccessors;
+        }
+
+        private @Nullable Object readKeyType(Object cell) {
+            if (keyTypeMethod != null) {
+                try {
+                    return keyTypeMethod.invoke(cell);
+                } catch (ReflectiveOperationException ignored) {
+                    // Try field fallback below.
+                }
+            }
+            if (keyTypeField != null) {
+                try {
+                    return keyTypeField.get(cell);
+                } catch (IllegalAccessException ignored) {
+                    return null;
+                }
+            }
+            return null;
+        }
+
+        private record ChannelMetricsAccessors(
+                CellChannel channel,
+                Method totalTypesMethod,
+                Method storedTypesMethod,
+                Method storedUnitsMethod,
+                Method remainingUnitsMethod
+        ) {
+            private static @Nullable ChannelMetricsAccessors tryCreate(Class<?> cellClass, CellChannel channel) {
+                Method totalTypesMethod = findOptionalCellMetricMethod(cellClass, channel.totalTypesMethodName());
+                Method storedTypesMethod = findOptionalCellMetricMethod(cellClass, channel.usedTypesMethodName());
+                Method storedUnitsMethod = findOptionalCellMetricMethod(cellClass, channel.storedUnitsMethodName());
+                Method remainingUnitsMethod = findOptionalCellMetricMethod(cellClass, channel.remainingUnitsMethodName());
+                if (totalTypesMethod == null
+                        || storedTypesMethod == null
+                        || storedUnitsMethod == null
+                        || remainingUnitsMethod == null) {
+                    return null;
+                }
+                return new ChannelMetricsAccessors(
+                        channel,
+                        totalTypesMethod,
+                        storedTypesMethod,
+                        storedUnitsMethod,
+                        remainingUnitsMethod
+                );
+            }
+        }
+
+        private static ChannelRead readChannel(Object cell, ChannelMetricsAccessors accessors) throws ReflectiveOperationException {
+            long totalTypes = Math.max(0L, invokeLong(accessors.totalTypesMethod(), cell));
+            long usedTypes = Math.max(0L, invokeLong(accessors.storedTypesMethod(), cell));
+            long storedUnits = Math.max(0L, invokeLong(accessors.storedUnitsMethod(), cell));
+            long remainingUnits = Math.max(0L, invokeLong(accessors.remainingUnitsMethod(), cell));
+            long maxUnits = saturatingAdd(storedUnits, remainingUnits);
+            return new ChannelRead(accessors.channel(), totalTypes, usedTypes, storedUnits, maxUnits);
+        }
+
+        private record ChannelRead(
+                CellChannel channel,
+                long totalTypes,
+                long usedTypes,
+                long storedUnits,
+                long maxUnits
+        ) {
+            private long signal() {
+                return saturatingAdd(totalTypes, maxUnits);
+            }
+        }
+    }
+
+    private static @Nullable Field findOptionalCellMetricField(Class<?> cellClass, String name) {
+        Class<?> current = cellClass;
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(name);
+                try {
+                    field.setAccessible(true);
+                } catch (RuntimeException ignoredSetAccessibleFailure) {
+                    // Keep field as-is; direct read might still be possible.
+                }
+                return field;
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            }
+        }
+        return null;
     }
 
     /**
@@ -455,6 +1330,193 @@ public class ObserverBlockEntity extends BlockEntity {
         return msg;
     }
 
+    public List<Component> createDebugStatusMessages() {
+        List<Component> lines = new ArrayList<>();
+        if (bindings.isEmpty()) {
+            lines.add(Component.translatable("message.resourceobserver.debug.none"));
+            return lines;
+        }
+
+        lines.add(Component.translatable("message.resourceobserver.debug.header", bindings.size()));
+        for (int i = 0; i < bindings.size(); i++) {
+            BoundEntry entry = bindings.get(i);
+            BindingStats stats = statsMap.getOrDefault(entry.networkId(), BindingStats.empty());
+            lines.add(Component.translatable(
+                    "message.resourceobserver.debug.binding",
+                    i + 1,
+                    entry.networkType(),
+                    entry.targetBlockId()
+            ));
+            lines.add(Component.translatable(
+                    "message.resourceobserver.debug.stats",
+                    stats.currentValue(),
+                    stats.capacity(),
+                    stats.totalProduced(),
+                    stats.totalConsumed()
+            ));
+            if ("AE2_ITEMS".equals(entry.networkType())) {
+                Ae2CellCapacityMetrics metrics = getAe2CellCapacityMetricsFor(entry.networkId());
+                lines.add(Component.translatable(
+                        "message.resourceobserver.debug.cells",
+                        metrics.itemUsedBytes(),
+                        metrics.itemTotalBytes(),
+                        metrics.itemUsedTypes(),
+                        metrics.itemTotalTypes(),
+                        metrics.itemUsedUnits(),
+                        metrics.itemMaxUnits(),
+                        metrics.fluidUsedBytes(),
+                        metrics.fluidTotalBytes(),
+                        metrics.fluidUsedTypes(),
+                        metrics.fluidTotalTypes(),
+                        metrics.fluidUsedUnits(),
+                        metrics.fluidMaxUnits(),
+                        boolComponent(metrics.reliable()),
+                        boolComponent(metrics.available())
+                ));
+            }
+            appendFormattedProbeLines(lines, getDebugInfoFor(entry.networkId()));
+        }
+        return lines;
+    }
+
+    private static void appendFormattedProbeLines(List<Component> lines, String debugInfo) {
+        Map<String, String> fields = parseProbeFields(debugInfo);
+        if (fields.isEmpty()) {
+            lines.add(Component.translatable("message.resourceobserver.debug.probe_none"));
+            return;
+        }
+
+        String channel = probeField(fields, "channel");
+        String status = probeField(fields, "status");
+        lines.add(Component.translatable("message.resourceobserver.debug.probe_header", channel, status));
+
+        if (!"ae2.cached_inventory".equals(channel)) {
+            addWrappedDebugLine(
+                    lines,
+                    "        ",
+                    Component.translatable("message.resourceobserver.debug.probe_raw", debugInfo)
+            );
+            return;
+        }
+
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_inventory",
+                        probeField(fields, "types"),
+                        probeField(fields, "item_types"),
+                        probeField(fields, "fluid_types"),
+                        probeField(fields, "cells"),
+                        probeField(fields, "capacity_reliable")
+                )
+        );
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_cells",
+                        probeField(fields, "capacity_cells_total"),
+                        probeField(fields, "capacity_cells_readable"),
+                        probeField(fields, "capacity_item_cells_total"),
+                        probeField(fields, "capacity_item_cells_readable"),
+                        probeField(fields, "capacity_fluid_cells_total"),
+                        probeField(fields, "capacity_fluid_cells_readable"),
+                        probeField(fields, "capacity_cells_null"),
+                        probeField(fields, "capacity_cells_null_unpowered"),
+                        probeField(fields, "capacity_cell_status_probe_failed")
+                )
+        );
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_devices",
+                        probeField(fields, "capacity_devices_total"),
+                        probeField(fields, "capacity_devices_powered"),
+                        probeField(fields, "capacity_devices_from_iChestOrDrive"),
+                        probeField(fields, "capacity_devices_from_storage_provider"),
+                        probeField(fields, "capacity_devices_from_node_owner"),
+                        probeField(fields, "capacity_devices_from_node_storage_service"),
+                        probeField(fields, "capacity_nodes_scanned")
+                )
+        );
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_classes",
+                        probeField(fields, "capacity_device_classes"),
+                        probeField(fields, "capacity_cells_readable_classes"),
+                        probeField(fields, "capacity_item_cells_readable_classes"),
+                        probeField(fields, "capacity_fluid_cells_readable_classes")
+                )
+        );
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_slot_channels",
+                        probeField(fields, "capacity_slot_cell_items"),
+                        probeField(fields, "capacity_slot_cell_keytypes"),
+                        probeField(fields, "capacity_slot_channel_item"),
+                        probeField(fields, "capacity_slot_channel_fluid"),
+                        probeField(fields, "capacity_slot_channel_unknown")
+                )
+        );
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_failures",
+                        probeField(fields, "capacity_cells_missing_methods"),
+                        probeField(fields, "capacity_cells_invocation_failed")
+                )
+        );
+    }
+
+    private static Component boolComponent(boolean value) {
+        return Component.translatable(
+                value ? "message.resourceobserver.debug.bool.true" : "message.resourceobserver.debug.bool.false"
+        );
+    }
+
+    private static Map<String, String> parseProbeFields(String debugInfo) {
+        Map<String, String> fields = new HashMap<>();
+        if (debugInfo == null || debugInfo.isBlank()) {
+            return fields;
+        }
+        String[] tokens = debugInfo.split(";");
+        for (String token : tokens) {
+            String trimmed = token == null ? "" : token.trim();
+            if (trimmed.isEmpty()) {
+                continue;
+            }
+            int equalsIndex = trimmed.indexOf('=');
+            if (equalsIndex <= 0) {
+                fields.put(trimmed, "");
+                continue;
+            }
+            fields.put(trimmed.substring(0, equalsIndex), trimmed.substring(equalsIndex + 1));
+        }
+        return fields;
+    }
+
+    private static String probeField(Map<String, String> fields, String key) {
+        String value = fields.get(key);
+        if (value == null || value.isBlank()) {
+            return "n/a";
+        }
+        return value;
+    }
+
+    private static void addWrappedDebugLine(List<Component> lines, String indent, Component content) {
+        if (content == null) {
+            return;
+        }
+        lines.add(Component.literal(indent).append(content));
+    }
+
     /**
      * NBT 保存 —— 将所有绑定和统计数据序列化到 CompoundTag。
      * 每个绑定条目包含网络类型、网络ID、目标方块ID 和对应的统计数据。
@@ -494,7 +1556,9 @@ public class ObserverBlockEntity extends BlockEntity {
         statsMap.clear();
         ae2ItemAmounts.clear();
         ae2ItemDeltas.clear();
+        ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
+        capacityWarnSignatureMap.clear();
         if (tag.contains(TAG_BINDINGS, Tag.TAG_LIST)) {
             ListTag listTag = tag.getList(TAG_BINDINGS, Tag.TAG_COMPOUND);
             for (int i = 0; i < listTag.size(); i++) {

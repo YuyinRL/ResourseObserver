@@ -4,6 +4,7 @@ import com.mojang.serialization.MapCodec;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.item.BindingToolItem;
 import com.yuyinrl.resourceobserver.world.item.ResourceTerminalItem;
+import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerPlayer;
@@ -69,7 +70,18 @@ public class ObserverBlock extends BaseEntityBlock {
         if (!level.isClientSide && player instanceof ServerPlayer serverPlayer) {
             BlockEntity blockEntity = level.getBlockEntity(pos);
             if (blockEntity instanceof ObserverBlockEntity observer) {
-                serverPlayer.sendSystemMessage(observer.createStatusMessage());
+                if (player.isShiftKeyDown()) {
+                    boolean debugEnabled = PlayerUiPrefsSavedData.get(serverPlayer.serverLevel())
+                            .isObserverDebugEnabled(serverPlayer.getUUID());
+                    if (!debugEnabled) {
+                        return InteractionResult.sidedSuccess(level.isClientSide);
+                    }
+                    for (var line : observer.createDebugStatusMessages()) {
+                        serverPlayer.sendSystemMessage(line);
+                    }
+                } else {
+                    serverPlayer.sendSystemMessage(observer.createStatusMessage());
+                }
             }
         }
         return InteractionResult.sidedSuccess(level.isClientSide);
