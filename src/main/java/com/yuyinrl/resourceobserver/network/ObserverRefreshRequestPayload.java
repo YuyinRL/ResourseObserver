@@ -8,7 +8,13 @@ import net.minecraft.network.protocol.common.custom.CustomPacketPayload;
 import net.minecraft.resources.ResourceLocation;
 
 /**
- * Client-to-server refresh request while terminal GUI is open.
+ * 客户端 → 服务端的定期刷新请求数据包。
+ * 当资源终端 GUI 打开时，客户端周期性发送此请求以获取最新数据。
+ *
+ * @param observerPos 绑定的观察者方块坐标
+ * @param chartWindow 当前选择的图表时间窗口
+ * @param chartScope  图表作用域（全局/单物品）
+ * @param scopeItemId 单物品作用域时的物品 ID
  */
 public record ObserverRefreshRequestPayload(
         BlockPos observerPos,

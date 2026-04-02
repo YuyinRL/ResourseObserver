@@ -11,15 +11,21 @@ import net.minecraft.world.item.Items;
 
 import java.util.List;
 
+/**
+ * 通用渲染工具类 —— 提供终端界面中常用的绘制方法。
+ * 包括面板填充、边框绘制、进度条、文本省略、折线、物品图标等。
+ */
 public final class RenderUtils {
     private RenderUtils() {
     }
 
+    /** 绘制带边框的填充面板 */
     public static void fillPanel(GuiGraphics gfx, UiRect rect, int fillColor, int borderColor) {
         gfx.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), fillColor);
         drawBorder(gfx, rect, borderColor);
     }
 
+    /** 绘制 1px 宽的矩形边框 */
     public static void drawBorder(GuiGraphics gfx, UiRect rect, int color) {
         gfx.fill(rect.x(), rect.y(), rect.right(), rect.y() + 1, color);
         gfx.fill(rect.x(), rect.bottom() - 1, rect.right(), rect.bottom(), color);
@@ -27,6 +33,10 @@ public final class RenderUtils {
         gfx.fill(rect.right() - 1, rect.y(), rect.right(), rect.bottom(), color);
     }
 
+    /**
+     * 绘制进度条。
+     * @param ratio 填充比例（0.0 ~ 1.0）
+     */
     public static void drawProgressBar(
             GuiGraphics gfx,
             int x,
@@ -42,6 +52,9 @@ public final class RenderUtils {
         gfx.fill(x, y, x + filled, y + height, fgColor);
     }
 
+    /**
+     * 文本省略处理 —— 当文本超出最大宽度时截断并添加 "..."。
+     */
     public static String ellipsis(Font font, String text, int maxWidth) {
         if (font.width(text) <= maxWidth) {
             return text;
@@ -58,6 +71,10 @@ public final class RenderUtils {
         return text;
     }
 
+    /**
+     * 绘制折线图（简易版）。
+     * 将数据点序列归一化后在指定区域内使用 Bresenham 算法绘制连线。
+     */
     public static void drawPolyline(
             GuiGraphics gfx,
             List<Double> values,
@@ -84,6 +101,10 @@ public final class RenderUtils {
         }
     }
 
+    /**
+     * Bresenham 直线算法 —— 在两点之间逐像素绘制线段。
+     * 使用整数运算实现高效的光栅化直线绘制。
+     */
     public static void drawLine(GuiGraphics gfx, int x0, int y0, int x1, int y1, int color) {
         int dx = Math.abs(x1 - x0);
         int sx = x0 < x1 ? 1 : -1;
@@ -110,6 +131,12 @@ public final class RenderUtils {
         }
     }
 
+    /**
+     * 绘制物品图标或回退精灵。
+     * 优先尝试从物品注册表获取真实物品图标；
+     * 失败时使用 fallbackSprite 精灵图作为替代。
+     * @return 是否成功绘制了真实物品图标
+     */
     public static boolean drawItemIconOrSprite(
             GuiGraphics gfx,
             String itemId,
@@ -132,6 +159,7 @@ public final class RenderUtils {
         return false;
     }
 
+    /** 从物品 ID 字符串获取 ItemStack，无效 ID 返回空栈 */
     private static ItemStack itemStackFromItemId(String itemId) {
         if (itemId == null || itemId.isBlank()) {
             return ItemStack.EMPTY;

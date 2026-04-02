@@ -2,11 +2,18 @@ package com.yuyinrl.resourceobserver.ui.state;
 
 import java.util.Locale;
 
+/**
+ * 表格状态筛选枚举 —— 根据物品的流通状态过滤显示。
+ * - ALL：显示所有物品
+ * - SURPLUS：仅显示盈余物品（净变化 > 0）
+ * - DEFICIT：仅显示亏损物品（净变化 < 0）
+ * - CRITICAL：仅显示严重亏损物品（净变化远低于 0 或库存极低）
+ */
 public enum TableStatusFilter {
-    ALL(0, "all", "screen.resourceobserver.overview.filter.status.all"),
-    SURPLUS(1, "surplus", "screen.resourceobserver.overview.filter.status.surplus"),
-    DEFICIT(2, "deficit", "screen.resourceobserver.overview.filter.status.deficit"),
-    CRITICAL(3, "critical", "screen.resourceobserver.overview.filter.status.critical");
+    ALL(0, "all", "screen.resourceobserver.overview.filter.status.all"),           // 全部
+    SURPLUS(1, "surplus", "screen.resourceobserver.overview.filter.status.surplus"),   // 盈余
+    DEFICIT(2, "deficit", "screen.resourceobserver.overview.filter.status.deficit"),   // 亏损
+    CRITICAL(3, "critical", "screen.resourceobserver.overview.filter.status.critical"); // 严重亏损
 
     private final int id;
     private final String key;
@@ -30,6 +37,7 @@ public enum TableStatusFilter {
         return translationKey;
     }
 
+    /** 根据 ID 查找状态筛选，未找到时默认返回 ALL */
     public static TableStatusFilter fromId(int id) {
         for (TableStatusFilter value : values()) {
             if (value.id == id) {
@@ -39,6 +47,7 @@ public enum TableStatusFilter {
         return ALL;
     }
 
+    /** 根据键名查找状态筛选（不区分大小写），未找到时默认返回 ALL */
     public static TableStatusFilter fromKey(String key) {
         if (key == null || key.isBlank()) {
             return ALL;

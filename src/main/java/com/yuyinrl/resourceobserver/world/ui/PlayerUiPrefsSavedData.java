@@ -19,11 +19,27 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 
+/**
+ * 玩家 UI 偏好持久化存储（SavedData）—— 保存每个玩家的终端界面设置。
+ * <p>
+ * 每个玩家独立存储以下偏好数据：
+ * - 关注列表（watchlist）：最多 WATCHLIST_LIMIT(12) 个物品，使用 LinkedHashSet 保持插入顺序
+ * - 自定义分组（groups）：玩家创建的物品分类，含一个系统"未分组"分组
+ * - 物品-分组映射（itemGroupMap）：记录每个物品所属的分组
+ * - 表格筛选/排序设置：分组筛选键、排序模式、排序方向、状态筛选
+ * <p>
+ * 数据存储于主世界的 DataStorage，跨维度共享。
+ * 所有操作通过 applyAction() 统一入口处理。
+ */
 public class PlayerUiPrefsSavedData extends SavedData {
+    /** 关注列表最大容量 */
     public static final int WATCHLIST_LIMIT = 12;
+    /** 分组筛选键 "all" 表示不筛选 */
     public static final String GROUP_FILTER_ALL = "all";
+    /** 系统默认"未分组"分组的键名 */
     public static final String GROUP_UNGROUPED = "ungrouped";
 
+    // ========== NBT 标签常量 ==========
     private static final String DATA_NAME = "resourceobserver_ui_prefs";
     private static final String TAG_PLAYERS = "players";
     private static final String TAG_PLAYER_ID = "player_id";
@@ -38,18 +54,22 @@ public class PlayerUiPrefsSavedData extends SavedData {
     private static final String TAG_GROUP_NAME = "group_name";
     private static final String TAG_GROUP_SYSTEM = "group_system";
     private static final String TAG_ITEM_GROUPS = "item_groups";
+    /** 分组名称最大长度 */
     private static final int GROUP_NAME_MAX_LEN = 24;
 
     private static final Factory<PlayerUiPrefsSavedData> FACTORY =
             new Factory<>(PlayerUiPrefsSavedData::new, PlayerUiPrefsSavedData::load);
 
+    /** 所有玩家的偏好数据映射（玩家 UUID → PlayerPrefs） */
     private final Map<UUID, PlayerPrefs> players = new HashMap<>();
 
+    /** 获取当前世界的玩家偏好实例（始终存储在主世界） */
     public static PlayerUiPrefsSavedData get(ServerLevel level) {
         ServerLevel storageLevel = level.getServer().overworld();
         return storageLevel.getDataStorage().computeIfAbsent(FACTORY, DATA_NAME);
     }
 
+    /** 获取指定玩家的偏好快照（不可变副本），玩家无数据时返回默认值 */
     public PlayerUiPrefsSnapshot getSnapshot(UUID playerId) {
         PlayerPrefs prefs = players.get(playerId);
         if (prefs == null) {
@@ -58,27 +78,34 @@ public class PlayerUiPrefsSavedData extends SavedData {
         return prefs.snapshot();
     }
 
+    /**
+     * 应用 UI 操作到指定玩家的偏好数据。
+     * 根据 actionType 分发到对应的处理方法，操作成功后标记数据已修改。
+     * @return 操作结果（是否修改、是否成功、失败消息键）
+     */
     public ActionResult applyAction(UUID playerId, UiActionType actionType, String itemId, List<String> itemIds, String actionValue) {
         PlayerPrefs prefs = players.computeIfAbsent(playerId, ignored -> PlayerPrefs.defaults());
         List<String> targets = PlayerPrefs.mergeTargetItems(itemId, itemIds);
+        // 根据操作类型分发处理
         ActionResult result = switch (actionType) {
-            case TOGGLE_WATCH -> prefs.toggleWatch(itemId);
-            case SET_GROUP_FILTER_KEY -> prefs.setGroupFilterKey(actionValue);
-            case SET_SORT_MODE -> prefs.setSortMode(TableSortMode.fromKey(actionValue));
-            case SET_STATUS_FILTER -> prefs.setStatusFilter(TableStatusFilter.fromKey(actionValue));
-            case RESET_FILTERS -> prefs.resetFilters();
-            case ASSIGN_ITEM_GROUP -> prefs.assignItemGroup(targets, actionValue);
-            case CREATE_GROUP -> prefs.createGroup(actionValue, targets);
-            case RENAME_GROUP -> prefs.renameGroup(itemId, actionValue);
-            case DELETE_GROUP -> prefs.deleteGroup(itemId);
-            case CLEAR_ITEM_GROUP -> prefs.clearItemGroup(targets);
+            case TOGGLE_WATCH -> prefs.toggleWatch(itemId);          // 切换关注
+            case SET_GROUP_FILTER_KEY -> prefs.setGroupFilterKey(actionValue); // 设置分组筛选
+            case SET_SORT_MODE -> prefs.setSortMode(TableSortMode.fromKey(actionValue)); // 设置排序模式
+            case SET_STATUS_FILTER -> prefs.setStatusFilter(TableStatusFilter.fromKey(actionValue)); // 设置状态筛选
+            case RESET_FILTERS -> prefs.resetFilters();              // 重置所有筛选
+            case ASSIGN_ITEM_GROUP -> prefs.assignItemGroup(targets, actionValue); // 分配分组
+            case CREATE_GROUP -> prefs.createGroup(actionValue, targets);     // 创建分组
+            case RENAME_GROUP -> prefs.renameGroup(itemId, actionValue);      // 重命名分组
+            case DELETE_GROUP -> prefs.deleteGroup(itemId);          // 删除分组
+            case CLEAR_ITEM_GROUP -> prefs.clearItemGroup(targets);  // 清除分组
         };
         if (result.changed()) {
-            setDirty();
+            setDirty(); // 标记数据已修改，触发自动保存
         }
         return result;
     }
 
+    /** NBT 保存 —— 序列化所有玩家的偏好数据 */
     @Override
     public CompoundTag save(CompoundTag tag, HolderLookup.Provider registries) {
         ListTag playersTag = new ListTag();
@@ -123,6 +150,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
         return tag;
     }
 
+    /** NBT 加载 —— 反序列化恢复所有玩家的偏好数据 */
     private static PlayerUiPrefsSavedData load(CompoundTag tag, HolderLookup.Provider registries) {
         PlayerUiPrefsSavedData data = new PlayerUiPrefsSavedData();
         if (!tag.contains(TAG_PLAYERS, Tag.TAG_LIST)) {
@@ -199,6 +227,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
         return data;
     }
 
+    /** 裁剪关注列表至最大容量 */
     private static void trimWatchlist(LinkedHashSet<String> watchlist) {
         if (watchlist.size() <= WATCHLIST_LIMIT) {
             return;
@@ -210,10 +239,12 @@ public class PlayerUiPrefsSavedData extends SavedData {
         }
     }
 
+    /** 返回"未分组"分组的默认显示名称 */
     private static String defaultUngroupedName() {
         return "Ungrouped";
     }
 
+    /** 验证分组筛选键有效性，无效键回退到 ALL */
     private static String sanitizeGroupFilterKey(String key, Map<String, GroupDefinition> groups) {
         String normalized = normalizeGroupKey(key);
         if (normalized.isBlank() || GROUP_FILTER_ALL.equals(normalized)) {
@@ -222,6 +253,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
         return groups.containsKey(normalized) ? normalized : GROUP_FILTER_ALL;
     }
 
+    /** 规范化分组显示名称（trim + 长度截断） */
     private static String normalizeGroupName(String raw) {
         if (raw == null) {
             return "";
@@ -233,6 +265,10 @@ public class PlayerUiPrefsSavedData extends SavedData {
         return trimmed;
     }
 
+    /**
+     * 规范化分组键名 —— 将任意字符串转为小写字母+数字+下划线格式。
+     * 移除特殊字符，合并连续下划线，去除首尾下划线。
+     */
     private static String normalizeGroupKey(String raw) {
         if (raw == null || raw.isBlank()) {
             return "";
@@ -260,27 +296,41 @@ public class PlayerUiPrefsSavedData extends SavedData {
         return key;
     }
 
+    /**
+     * 单个玩家的偏好数据（可变内部状态）。
+     * 所有修改操作返回 ActionResult 以支持统一的成功/失败处理。
+     */
     private static final class PlayerPrefs {
+        /** 关注列表物品 ID（有序去重集合） */
         private final LinkedHashSet<String> watchlistItemIds = new LinkedHashSet<>();
+        /** 自定义分组定义（保持插入顺序） */
         private final LinkedHashMap<String, GroupDefinition> groups = new LinkedHashMap<>();
+        /** 物品到分组的映射（itemId → groupKey） */
         private final Map<String, String> itemGroupMap = new HashMap<>();
+        /** 当前分组筛选键 */
         private String groupFilterKey = GROUP_FILTER_ALL;
+        /** 当前排序模式 */
         private TableSortMode sortMode = TableSortMode.NET_ABS;
+        /** 是否降序排列 */
         private boolean sortDesc = true;
+        /** 当前状态筛选 */
         private TableStatusFilter statusFilter = TableStatusFilter.ALL;
 
+        /** 创建默认偏好（包含系统分组） */
         private static PlayerPrefs defaults() {
             PlayerPrefs prefs = new PlayerPrefs();
             prefs.ensureSystemGroups();
             return prefs;
         }
 
+        /** 确保系统分组（"未分组"）始终存在 */
         private void ensureSystemGroups() {
             if (!groups.containsKey(GROUP_UNGROUPED)) {
                 groups.put(GROUP_UNGROUPED, new GroupDefinition(GROUP_UNGROUPED, defaultUngroupedName(), true));
             }
         }
 
+        /** 创建不可变的偏好快照 */
         private PlayerUiPrefsSnapshot snapshot() {
             List<GroupDefinition> orderedGroups = new ArrayList<>(groups.values());
             return new PlayerUiPrefsSnapshot(
@@ -294,6 +344,10 @@ public class PlayerUiPrefsSavedData extends SavedData {
             );
         }
 
+        /**
+         * 切换物品关注状态。
+         * 已关注则移除，未关注则添加（超出限制时返回失败）。
+         */
         private ActionResult toggleWatch(String itemId) {
             if (itemId == null || itemId.isBlank()) {
                 return ActionResult.NO_CHANGE;
@@ -309,6 +363,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /** 设置分组筛选键 */
         private ActionResult setGroupFilterKey(String key) {
             String normalized = sanitizeGroupFilterKey(key, groups);
             if (normalized.equals(groupFilterKey)) {
@@ -318,6 +373,11 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /**
+         * 设置排序模式。
+         * 如果模式相同，切换排序方向（升序/降序）；
+         * 如果模式不同，设为新模式并默认降序。
+         */
         private ActionResult setSortMode(TableSortMode mode) {
             if (sortMode == mode) {
                 sortDesc = !sortDesc;
@@ -328,6 +388,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /** 设置状态筛选 */
         private ActionResult setStatusFilter(TableStatusFilter filter) {
             if (statusFilter == filter) {
                 return ActionResult.NO_CHANGE;
@@ -336,6 +397,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /** 重置所有筛选条件为默认值 */
         private ActionResult resetFilters() {
             boolean changed = !GROUP_FILTER_ALL.equals(groupFilterKey)
                     || sortMode != TableSortMode.NET_ABS
@@ -348,6 +410,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return changed ? ActionResult.changedSuccess() : ActionResult.NO_CHANGE;
         }
 
+        /** 合并单个 itemId 和 itemIds 列表为去重列表 */
         private static List<String> mergeTargetItems(String itemId, List<String> itemIds) {
             LinkedHashSet<String> result = new LinkedHashSet<>();
             if (itemId != null && !itemId.isBlank()) {
@@ -363,6 +426,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return List.copyOf(result);
         }
 
+        /** 将物品分配到指定分组（分配到"未分组"等同于清除分组） */
         private ActionResult assignItemGroup(List<String> itemIds, String groupKey) {
             if (itemIds == null || itemIds.isEmpty()) {
                 return ActionResult.NO_CHANGE;
@@ -384,6 +448,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return changed ? ActionResult.changedSuccess() : ActionResult.NO_CHANGE;
         }
 
+        /** 清除物品的分组分配（物品回到"未分组"状态） */
         private ActionResult clearItemGroup(List<String> itemIds) {
             if (itemIds == null || itemIds.isEmpty()) {
                 return ActionResult.NO_CHANGE;
@@ -397,6 +462,10 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return changed ? ActionResult.changedSuccess() : ActionResult.NO_CHANGE;
         }
 
+        /**
+         * 创建新的自定义分组。
+         * 验证名称非空和唯一性，自动生成键名，可选地将物品分配到新分组。
+         */
         private ActionResult createGroup(String rawName, List<String> itemIdsToAssign) {
             String name = normalizeGroupName(rawName);
             if (name.isBlank()) {
@@ -423,6 +492,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /** 重命名已有分组（系统分组不可重命名） */
         private ActionResult renameGroup(String groupKey, String newNameRaw) {
             String key = normalizeGroupKey(groupKey);
             GroupDefinition existing = groups.get(key);
@@ -448,6 +518,11 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /**
+         * 删除自定义分组。
+         * 系统分组不可删除。删除后清除该分组的所有物品映射。
+         * 如果当前筛选键为该分组，重置为 ALL。
+         */
         private ActionResult deleteGroup(String groupKey) {
             String key = normalizeGroupKey(groupKey);
             GroupDefinition existing = groups.get(key);
@@ -466,6 +541,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return ActionResult.changedSuccess();
         }
 
+        /** 检查分组名称是否已存在（忽略大小写），可排除指定键名 */
         private boolean groupNameExists(String name, String exceptKey) {
             String normalized = name.toLowerCase(Locale.ROOT);
             for (GroupDefinition group : groups.values()) {
@@ -479,6 +555,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             return false;
         }
 
+        /** 生成唯一的分组键名（冲突时追加递增后缀） */
         private String uniqueGroupKey(String baseKey) {
             String key = baseKey;
             int n = 2;
@@ -489,9 +566,18 @@ public class PlayerUiPrefsSavedData extends SavedData {
         }
     }
 
+    /**
+     * 分组定义记录 —— 描述一个物品分组。
+     * @param key         分组唯一键（小写字母+数字+下划线）
+     * @param displayName 分组显示名称
+     * @param systemGroup 是否为系统内置分组（不可删除/重命名）
+     */
     public record GroupDefinition(String key, String displayName, boolean systemGroup) {
     }
 
+    /**
+     * 玩家 UI 偏好快照（不可变）—— 用于跨线程安全传递数据。
+     */
     public record PlayerUiPrefsSnapshot(
             List<String> watchlistItemIds,
             String groupFilterKey,
@@ -501,6 +587,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             boolean sortDesc,
             TableStatusFilter statusFilter
     ) {
+        /** 返回默认偏好快照 */
         public static PlayerUiPrefsSnapshot defaults() {
             return new PlayerUiPrefsSnapshot(
                     List.of(),
@@ -513,6 +600,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             );
         }
 
+        /** 查询物品所属的分组键，未分配则返回 "ungrouped" */
         public String groupKeyForItem(String itemId) {
             if (itemId == null || itemId.isBlank()) {
                 return GROUP_UNGROUPED;
@@ -522,13 +610,22 @@ public class PlayerUiPrefsSavedData extends SavedData {
         }
     }
 
+    /**
+     * UI 操作结果记录。
+     * @param changed        数据是否被修改
+     * @param success        操作是否成功
+     * @param failMessageKey 失败时的本地化消息键（空字符串表示无消息）
+     */
     public record ActionResult(boolean changed, boolean success, String failMessageKey) {
+        /** 未修改的成功结果 */
         private static final ActionResult NO_CHANGE = new ActionResult(false, true, "");
 
+        /** 已修改的成功结果 */
         public static ActionResult changedSuccess() {
             return new ActionResult(true, true, "");
         }
 
+        /** 失败结果，附带错误消息键 */
         public static ActionResult failed(String messageKey) {
             return new ActionResult(false, false, messageKey == null ? "" : messageKey);
         }

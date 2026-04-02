@@ -11,10 +11,19 @@ import net.minecraft.resources.ResourceLocation;
 
 import java.util.List;
 
+/**
+ * KPI 指标卡渲染器 —— 绘制四个关键性能指标卡片。
+ * 每张卡片显示：指标标签、数值、趋势文本和小图标。
+ * 卡片等宽排列，根据状态枚举决定趋势文本颜色。
+ */
 public final class KpiRenderer {
     private KpiRenderer() {
     }
 
+    /**
+     * 渲染 KPI 区域。
+     * 将区域等分为 N 张卡片（N = kpis.size()），间距 8px。
+     */
     public static void render(
             GuiGraphics gfx,
             Font font,
@@ -34,6 +43,10 @@ public final class KpiRenderer {
         }
     }
 
+    /**
+     * 绘制单张 KPI 卡片。
+     * 布局：左侧文本（标签/数值/趋势），右上角图标。
+     */
     private static void drawCard(
             GuiGraphics gfx,
             Font font,
@@ -59,6 +72,7 @@ public final class KpiRenderer {
         gfx.blitSprite(sprite, bx + 2, by + 2, 10, 10);
     }
 
+    /** 根据状态枚举返回对应的颜色值 */
     private static int statusColor(OverviewViewModel.Status status) {
         return switch (status) {
             case POSITIVE -> UiThemeTokens.EMERALD;

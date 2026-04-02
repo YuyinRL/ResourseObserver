@@ -13,7 +13,34 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Server-to-client payload that carries observer data for the Resource Terminal GUI.
+ * 服务端 → 客户端的观察者数据负载 —— 资源终端 GUI 的完整数据包。
+ * <p>
+ * 该数据包包含终端界面所需的所有数据：
+ * - 观察者绑定状态和坐标
+ * - 图表时间窗口和作用域设置
+ * - 图表数据点序列
+ * - 表格筛选/排序/分组状态
+ * - 关注列表物品 ID
+ * - 分组定义列表
+ * - 所有绑定网络的详细数据（含每种物品的增量）
+ * <p>
+ * 使用自定义 StreamCodec 进行二进制序列化/反序列化，通过 NeoForge 网络通道传输。
+ *
+ * @param observerPos        观察者方块坐标
+ * @param isBound            观察者是否已绑定网络
+ * @param debugPreferred     是否优先显示调试视图
+ * @param chartWindow        当前图表时间窗口
+ * @param chartScope         图表作用域（全局/单物品）
+ * @param chartScopeItemId   单物品作用域时的物品 ID
+ * @param chartSeries        图表数据点列表
+ * @param tableGroupFilterKey 表格分组筛选键
+ * @param tableSortMode      表格排序模式
+ * @param tableSortDesc      是否降序排列
+ * @param tableStatusFilter  表格状态筛选
+ * @param watchlistLimit     关注列表最大容量
+ * @param watchlistItemIds   关注列表中的物品 ID 列表
+ * @param groups             分组定义列表
+ * @param bindings           所有绑定网络的数据条目
  */
 public record ObserverDataPayload(
         BlockPos observerPos,
@@ -33,6 +60,12 @@ public record ObserverDataPayload(
         List<BindingEntry> bindings
 ) implements CustomPacketPayload {
 
+    /**
+     * 分组条目 —— 物品分组的定义信息。
+     * @param key         分组唯一键
+     * @param displayName 分组显示名称
+     * @param systemGroup 是否为系统内置分组（不可删除）
+     */
     public record GroupEntry(
             String key,
             String displayName,
@@ -41,7 +74,18 @@ public record ObserverDataPayload(
     }
 
     /**
-     * A single binding entry to display in the terminal.
+     * 绑定条目 —— 单个网络绑定的完整数据。
+     * @param networkType   网络类型（AE2_ITEMS / FLUX_ENERGY）
+     * @param networkId     网络唯一标识
+     * @param targetBlockId 目标方块注册 ID
+     * @param displayName   显示名称
+     * @param iconSprite    图标精灵路径
+     * @param currentValue  当前值（物品总量/能量存储量）
+     * @param capacity      容量/种类数
+     * @param totalProduced 累计生产量
+     * @param totalConsumed 累计消耗量
+     * @param itemDeltas    每种物品的当前数量和增量
+     * @param debugInfo     调试信息字符串
      */
     public record BindingEntry(
             String networkType,
@@ -59,7 +103,13 @@ public record ObserverDataPayload(
     }
 
     /**
-     * Per-item current amount and delta since last sample tick window.
+     * 物品增量条目 —— 单种物品的当前数量和采样增量。
+     * @param itemId      物品注册 ID（如 "minecraft:iron_ingot"）
+     * @param displayName 可读显示名称
+     * @param groupKey    所属分组键
+     * @param iconSprite  图标精灵路径
+     * @param amount      当前库存数量
+     * @param delta       与上次采样的变化量（正=生产，负=消耗）
      */
     public record ItemDeltaEntry(
             String itemId,
@@ -71,6 +121,16 @@ public record ObserverDataPayload(
     ) {
     }
 
+    /**
+     * 图表数据点 —— 一个时间桶的聚合数据。
+     * @param slotIndex   桶索引（X 轴位置）
+     * @param production  该桶内的生产总量
+     * @param consumption 该桶内的消耗总量
+     * @param net         净变化量（production - consumption）
+     * @param stock       该桶的库存快照
+     * @param hasFlow     是否有流量数据（用于区分"无数据"和"数据为0"）
+     * @param hasStock    是否有库存数据
+     */
     public record ChartPoint(
             int slotIndex,
             double production,
@@ -82,11 +142,18 @@ public record ObserverDataPayload(
     ) {
     }
 
+    /** 数据包类型标识 */
     public static final Type<ObserverDataPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(ResourceObserverMod.MODID, "observer_data"));
 
+    /**
+     * 二进制流编解码器 —— 负责数据包的序列化（encode）和反序列化（decode）。
+     * 编码顺序严格对应解码顺序，包含：
+     * 基础信息 → 图表参数 → 图表数据 → 表格设置 → 关注列表 → 分组 → 绑定条目
+     */
     public static final StreamCodec<FriendlyByteBuf, ObserverDataPayload> STREAM_CODEC =
             new StreamCodec<>() {
+                /** 从字节缓冲区解码（反序列化）数据包 */
                 @Override
                 public ObserverDataPayload decode(FriendlyByteBuf buf) {
                     BlockPos pos = buf.readBlockPos();
@@ -139,6 +206,7 @@ public record ObserverDataPayload(
                     );
                 }
 
+                /** 将数据包编码（序列化）到字节缓冲区 */
                 @Override
                 public void encode(FriendlyByteBuf buf, ObserverDataPayload payload) {
                     buf.writeBlockPos(payload.observerPos);
@@ -175,6 +243,7 @@ public record ObserverDataPayload(
                     }
                 }
 
+                /** 反序列化物品增量列表 */
                 private static List<ItemDeltaEntry> readItemDeltas(FriendlyByteBuf buf) {
                     int count = buf.readVarInt();
                     List<ItemDeltaEntry> result = new ArrayList<>(count);
@@ -191,6 +260,7 @@ public record ObserverDataPayload(
                     return result;
                 }
 
+                /** 序列化物品增量列表 */
                 private static void writeItemDeltas(FriendlyByteBuf buf, List<ItemDeltaEntry> itemDeltas) {
                     buf.writeVarInt(itemDeltas.size());
                     for (ItemDeltaEntry itemDelta : itemDeltas) {
@@ -203,6 +273,7 @@ public record ObserverDataPayload(
                     }
                 }
 
+                /** 反序列化图表数据点列表 */
                 private static List<ChartPoint> readChartSeries(FriendlyByteBuf buf) {
                     int count = buf.readVarInt();
                     List<ChartPoint> points = new ArrayList<>(count);
@@ -220,6 +291,7 @@ public record ObserverDataPayload(
                     return points;
                 }
 
+                /** 序列化图表数据点列表 */
                 private static void writeChartSeries(FriendlyByteBuf buf, List<ChartPoint> chartSeries) {
                     buf.writeVarInt(chartSeries.size());
                     for (ChartPoint point : chartSeries) {
@@ -233,6 +305,7 @@ public record ObserverDataPayload(
                     }
                 }
 
+                /** 反序列化关注列表 */
                 private static List<String> readWatchlist(FriendlyByteBuf buf) {
                     int count = buf.readVarInt();
                     List<String> result = new ArrayList<>(count);
@@ -242,6 +315,7 @@ public record ObserverDataPayload(
                     return result;
                 }
 
+                /** 序列化关注列表 */
                 private static void writeWatchlist(FriendlyByteBuf buf, List<String> watchlistItemIds) {
                     buf.writeVarInt(watchlistItemIds.size());
                     for (String itemId : watchlistItemIds) {
@@ -249,6 +323,7 @@ public record ObserverDataPayload(
                     }
                 }
 
+                /** 反序列化分组列表 */
                 private static List<GroupEntry> readGroups(FriendlyByteBuf buf) {
                     int count = buf.readVarInt();
                     List<GroupEntry> groups = new ArrayList<>(count);
@@ -262,6 +337,7 @@ public record ObserverDataPayload(
                     return groups;
                 }
 
+                /** 序列化分组列表 */
                 private static void writeGroups(FriendlyByteBuf buf, List<GroupEntry> groups) {
                     buf.writeVarInt(groups.size());
                     for (GroupEntry group : groups) {

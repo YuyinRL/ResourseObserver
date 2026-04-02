@@ -9,10 +9,20 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.registries.DeferredHolder;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
+/**
+ * 模组创造模式标签页注册表。
+ * 将模组的所有物品注册到一个自定义的创造模式物品栏标签页中，方便玩家在创造模式中查找。
+ */
 public final class ModCreativeTabs {
+    /** 创造标签页延迟注册器 */
     public static final DeferredRegister<CreativeModeTab> TABS =
             DeferredRegister.create(Registries.CREATIVE_MODE_TAB, ResourceObserverMod.MODID);
 
+    /**
+     * 主标签页 —— 包含模组所有物品。
+     * 位于红石方块标签页之后，使用观察者方块物品作为标签图标。
+     * 展示项目：观察者方块、绑定工具、资源终端、调试终端。
+     */
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MAIN = TABS.register("main", () ->
             CreativeModeTab.builder()
                     .title(Component.translatable("itemGroup.resourceobserver.main"))
@@ -30,6 +40,7 @@ public final class ModCreativeTabs {
     private ModCreativeTabs() {
     }
 
+    /** 将创造标签页注册器挂载到模组事件总线 */
     public static void register(IEventBus bus) {
         TABS.register(bus);
     }

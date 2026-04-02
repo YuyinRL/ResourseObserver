@@ -1,5 +1,20 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+/**
+ * UI 布局规格定义 —— 定义终端界面的响应式布局参数。
+ * <p>
+ * 包含三套尺寸配置（S/M/L），根据视口宽度自动选择。
+ *
+ * @param basePanelWidth  基准面板宽度
+ * @param basePanelHeight 基准面板高度
+ * @param minPanelWidth   最小面板宽度
+ * @param minPanelHeight  最小面板高度
+ * @param smallMaxWidth   小尺寸模式的最大宽度阈值
+ * @param mediumMaxWidth  中尺寸模式的最大宽度阈值
+ * @param smallProfile    小尺寸布局参数
+ * @param mediumProfile   中尺寸布局参数
+ * @param largeProfile    大尺寸布局参数
+ */
 public record UiLayoutSpec(
         int basePanelWidth,
         int basePanelHeight,
@@ -11,6 +26,7 @@ public record UiLayoutSpec(
         Profile mediumProfile,
         Profile largeProfile
 ) {
+    /** 根据视口宽度选择适合的布局配置文件 */
     public Profile resolveProfile(int viewportWidth) {
         if (viewportWidth <= smallMaxWidth) {
             return smallProfile;
@@ -21,6 +37,7 @@ public record UiLayoutSpec(
         return largeProfile;
     }
 
+    /** 返回总览界面的默认布局规格 */
     public static UiLayoutSpec defaultOverview() {
         return new UiLayoutSpec(
                 980,
@@ -35,6 +52,17 @@ public record UiLayoutSpec(
         );
     }
 
+    /**
+     * 布局配置文件 —— 单种尺寸模式下的具体尺寸参数。
+     * @param margin         面板内边距
+     * @param chromeHeight   顶部标题栏高度
+     * @param sectionGap     各区段之间的间距
+     * @param headerHeight   页眉区域高度
+     * @param kpiHeight      KPI 卡片区域高度
+     * @param chartHeight    图表区域高度
+     * @param watchlistHeight 关注列表区域高度
+     * @param scrollbarWidth  滚动条宽度
+     */
     public record Profile(
             int margin,
             int chromeHeight,

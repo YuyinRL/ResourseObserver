@@ -11,10 +11,25 @@ import net.minecraft.network.chat.Component;
 import java.util.ArrayList;
 import java.util.List;
 
+/**
+ * 关注列表渲染器 —— 绘制用户关注的物品卡片列表。
+ * <p>
+ * 布局逻辑：
+ * - 根据可用宽度自动选择 1~3 列（640px 以上 3 列，420px 以上 2 列，否则 1 列）
+ * - 每张卡片显示：物品图标、名称、净流量、库存/容量、进度条
+ * - 选中的物品卡片使用高亮边框和背景
+ * - 每张卡片右上角有移除按钮
+ */
 public final class WatchlistRenderer {
     private WatchlistRenderer() {
     }
 
+    /**
+     * 渲染关注列表区域，返回可交互热区信息。
+     *
+     * @param selectedItemId 当前选中的物品 ID（图表联动高亮）
+     * @return 渲染结果，包含物品卡片热区和移除按钮热区
+     */
     public static RenderResult render(
             GuiGraphics gfx,
             Font font,
@@ -46,6 +61,12 @@ public final class WatchlistRenderer {
         return new RenderResult(hitboxes, removeHitboxes);
     }
 
+    /**
+     * 绘制单张关注列表卡片。
+     *
+     * @param selected 是否为当前选中状态（影响背景/边框颜色）
+     * @return 移除按钮的矩形区域（供点击检测使用）
+     */
     private static UiRect drawCard(
             GuiGraphics gfx,
             Font font,
@@ -86,12 +107,15 @@ public final class WatchlistRenderer {
         return removeRect;
     }
 
+    /** 物品卡片热区（用于点击选中物品） */
     public record Hitbox(UiRect rect, String itemId) {
     }
 
+    /** 移除按钮热区（用于点击移除关注物品） */
     public record RemoveHitbox(UiRect rect, String itemId) {
     }
 
+    /** 渲染结果 —— 包含所有可交互热区 */
     public record RenderResult(List<Hitbox> itemHitboxes, List<RemoveHitbox> removeHitboxes) {
     }
 }

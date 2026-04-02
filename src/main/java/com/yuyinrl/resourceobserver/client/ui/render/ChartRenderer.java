@@ -36,27 +36,52 @@ import java.util.Set;
 import java.util.WeakHashMap;
 import java.util.function.Supplier;
 
+/**
+ * 图表渲染器 —— 绘制资源流量/库存趋势图。
+ * <p>
+ * 渲染管线说明：
+ * <ol>
+ *   <li>数据序列经可选平滑处理后计算数值范围</li>
+ *   <li>使用 Monotone Hermite 插值生成平滑折线</li>
+ *   <li>通过自定义着色器绘制抗锯齿线段（支持核心线 + 辉光效果）</li>
+ *   <li>结果缓存在 PreparedChart 中避免重复计算</li>
+ * </ol>
+ * <p>
+ * 支持两种页面模式：
+ * - THROUGHPUT（吞吐量）：同时显示生产/消耗/净流量曲线
+ * - STOCK（库存）：显示库存量变化曲线
+ * <p>
+ * 支持四种线条模式：ALL / PRODUCTION / CONSUMPTION / NET
+ * 支持两种平滑模式：SMOOTH（EMA 平滑）/ RAW（原始数据）
+ */
 public final class ChartRenderer {
-    private static final int BUTTON_GAP = 4;
-    private static final int WINDOW_W = 68;
-    private static final int PAGE_W = 76;
-    private static final int MODE_W = 56;
-    private static final int SMOOTH_W = 62;
+    // ========== 布局常量 ==========
+    private static final int BUTTON_GAP = 4;     // 按钮间距
+    private static final int WINDOW_W = 68;      // 时间窗口按钮宽度
+    private static final int PAGE_W = 76;        // 页面切换按钮宽度
+    private static final int MODE_W = 56;        // 线条模式按钮宽度
+    private static final int SMOOTH_W = 62;      // 平滑模式按钮宽度
 
-    private static final int DEFAULT_SUPERSAMPLE = 4;
-    private static final double PLOT_PAD_X_SCALE = 1.0;
-    private static final double PLOT_PAD_TOP_SCALE = 2.5;
-    private static final double PLOT_PAD_END_SCALE = 2.0;
+    // ========== 渲染管线参数 ==========
+    private static final int DEFAULT_SUPERSAMPLE = 4;       // 默认超采样倍率
+    private static final double PLOT_PAD_X_SCALE = 1.0;     // 绘图区水平边距倍率
+    private static final double PLOT_PAD_TOP_SCALE = 2.5;   // 绘图区顶部边距倍率
+    private static final double PLOT_PAD_END_SCALE = 2.0;   // 绘图区末端边距倍率
 
+    // ========== 线条样式预设 ==========
+    /** 默认线条样式（超采样抗锯齿） */
     private static final LineStyle DEFAULT_LINE_STYLE = new LineStyle(DEFAULT_SUPERSAMPLE, 1.0f, 0.82f, 1.26f, 0.50f, 0.75f, 0.92f, 0.20f, 0.34f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
+    /** 调试模式直接渲染线条样式 */
     private static final LineStyle DEBUG_DIRECT_LINE_STYLE = new LineStyle(1, 16.0f, 0.80f, 0.96f, 0.40f, 0.72f, 1.00f, 0.00f, 0.28f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
     private static final boolean ENABLE_AREA_FILL = false; // TODO restore after replacing the current fill path with a seam-free shader fill.
 
+    /** 弱引用缓存集合，用于统一失效所有缓存 */
     private static final Set<ChartRenderCache> LIVE_CACHES = Collections.newSetFromMap(new WeakHashMap<>());
 
     private ChartRenderer() {
     }
 
+    /** 使所有图表渲染缓存失效（数据更新时调用） */
     public static void invalidateAllCaches() {
         synchronized (LIVE_CACHES) {
             for (ChartRenderCache cache : new ArrayList<>(LIVE_CACHES)) {
@@ -67,6 +92,17 @@ public final class ChartRenderer {
         }
     }
 
+    /**
+     * 渲染图表区域。
+     * @param series           图表数据点序列
+     * @param selectedItemLabel 当前选中物品名称（显示在副标题中）
+     * @param chartWindow      时间窗口（1m/5m/30m/1h/6h）
+     * @param lineMode         线条显示模式（全部/生产/消耗/净流量）
+     * @param chartPage        页面类型（吞吐量/库存）
+     * @param smoothingMode    数据平滑模式
+     * @param cache            渲染缓存（避免逐帧重新计算）
+     * @return 渲染结果，包含各按钮热区
+     */
     public static RenderResult render(
             GuiGraphics gfx,
             Font font,
@@ -295,6 +331,10 @@ public final class ChartRenderer {
         texture.setHasVisibleContent(lowResVisible);
     }
 
+    /**
+     * 预计算图表数据（纯 CPU 端），生成 PreparedChart。
+     * 包括：数据平滑、范围计算、折线插值、零轴位置。
+     */
     private static PreparedChart prepareChart(
             int plotWidth,
             int plotHeight,
@@ -374,6 +414,7 @@ public final class ChartRenderer {
         return new PreparedChart(bounds, zeroAxisY, preparedSeries, zeroAxisY != null || !preparedSeries.isEmpty());
     }
 
+    /** 使用预计算数据在屏幕空间直接绘制向量图表 */
     private static void drawPreparedChartVector(GuiGraphics gfx, UiRect plot, PreparedChart prepared, LineStyle lineStyle) {
         if (prepared == null || prepared == PreparedChart.EMPTY || !prepared.hasVisibleContent()) {
             return;
@@ -425,7 +466,6 @@ public final class ChartRenderer {
             gfx.disableScissor();
         }
     }
-
     private static List<List<Point>> buildPolylines(
             int hw,
             int hh,
@@ -582,6 +622,10 @@ public final class ChartRenderer {
         BufferUploader.drawWithShader(mesh);
     }
 
+    /**
+     * 绘制折线系列。
+     * 对每段线段使用自定义着色器绘制抗锯齿线（核心线 + 辉光）。
+     */
     private static void drawSeries(List<List<Point>> segments, RectBounds bounds, int color, LineStyle lineStyle, int sampleScale) {
         int rgb = color & 0x00FFFFFF;
         for (List<Point> segment : segments) {
@@ -606,6 +650,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 在指定偏移位置绘制折线系列 */
     private static void drawSeriesAtOffset(
             List<List<Point>> segments,
             RectBounds bounds,
@@ -640,6 +685,11 @@ public final class ChartRenderer {
         }
     }
 
+    /**
+     * 使用自定义着色器绘制单条抗锯齿线段。
+     * 线段被扩展为四边形，通过 shader 实现距离场抗锯齿。
+     * 无着色器可用时回退到简易矩形绘制。
+     */
     private static void drawAaLine(
             Point a,
             Point b,
@@ -693,6 +743,10 @@ public final class ChartRenderer {
         BufferUploader.drawWithShader(mesh);
     }
 
+    /**
+     * 超采样降采样。
+     * 使用自定义 downsample shader 将高分辨率纹理缩放到显示分辨率。
+     */
     private static void downsample(RenderTarget source, RenderTarget target, int sourceW, int sourceH, int targetW, int targetH, LineStyle lineStyle) {
         ShaderInstance shader = ChartRenderShaders.chartDownsampleShader();
         if (shader == null) {
@@ -737,6 +791,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 回退直线绘制（无自定义着色器时使用） */
     private static void drawFallbackLine(Point a, Point b, int rgb, float width, float alpha) {
         if (alpha <= 0.0f || width <= 0.0f) {
             return;
@@ -769,6 +824,7 @@ public final class ChartRenderer {
         BufferUploader.drawWithShader(mesh);
     }
 
+    /** 回退降采样（使用 GL_LINEAR 直接缩放） */
     private static void downsampleFallback(RenderTarget source, RenderTarget target, int targetW, int targetH) {
         source.setFilterMode(GL11C.GL_LINEAR);
 
@@ -808,6 +864,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 将缓存的纹理图层绘制到屏幕 */
     private static void drawLayer(GuiGraphics gfx, UiRect plot, CachedChartTexture layer) {
         if (layer == null || layer == CachedChartTexture.EMPTY || layer.lowRes == null) {
             return;
@@ -831,6 +888,7 @@ public final class ChartRenderer {
         BufferUploader.drawWithShader(mesh);
     }
 
+    /** 调试模式：直接向量绘制（不使用纹理缓存） */
     private static void drawDirectVectorDebug(
             GuiGraphics gfx,
             Font font,
@@ -922,6 +980,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 调试模式/回退模式：覆盖渲染 */
     private static void drawOverlayFallback(
             GuiGraphics gfx,
             Font font,
@@ -1036,6 +1095,7 @@ public final class ChartRenderer {
         gfx.drawString(font, text, badge.x() + 4, badge.y() + 2, 0xFF9FFFC7);
     }
 
+    /** 获取最后一个有效数据值（调试显示用） */
     private static double lastValidValue(LineMode lineMode, double[] p, double[] c, double[] n, boolean[] mask) {
         double last = 0.0;
         for (int i = 0; i < mask.length; i++) {
@@ -1053,6 +1113,7 @@ public final class ChartRenderer {
         return last;
     }
 
+    /** 获取最后一个有效数据值（调试显示用） */
     private static double lastValidValue(double[] values, boolean[] mask) {
         double last = 0.0;
         for (int i = 0; i < mask.length; i++) {
@@ -1063,6 +1124,7 @@ public final class ChartRenderer {
         return last;
     }
 
+    /** 对线段列表整体施加偏移（纹理坐标 → 屏幕坐标） */
     private static List<List<Point>> offsetSegments(List<List<Point>> segments, double dx, double dy) {
         List<List<Point>> shifted = new ArrayList<>(segments.size());
         for (List<Point> segment : segments) {
@@ -1075,6 +1137,7 @@ public final class ChartRenderer {
         return shifted;
     }
 
+    /** 格式化数值为紧凑表示（用于调试标签） */
     private static String formatMetric(double value) {
         double abs = Math.abs(value);
         if (abs >= 1_000_000_000.0) {
@@ -1089,6 +1152,7 @@ public final class ChartRenderer {
         return String.format(java.util.Locale.ROOT, "%.2f", value);
     }
 
+    /** 计算吞吐量模式下所有可见系列的数值范围 */
     private static Range rangeThroughput(LineMode mode, double[] p, double[] c, double[] n, boolean[] mask) {
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
@@ -1112,6 +1176,7 @@ public final class ChartRenderer {
         return new Range(min, max);
     }
 
+    /** 计算单序列的数值范围 */
     private static Range rangeSingle(double[] values, boolean[] mask) {
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
@@ -1125,6 +1190,10 @@ public final class ChartRenderer {
         return new Range(min, max);
     }
 
+    /**
+     * EMA 指数移动平均平滑。
+     * 在每个连续有效段内独立应用，平滑因子 α=0.45。
+     */
     private static double[] smoothSeries(double[] values, boolean[] validMask) {
         double[] out = Arrays.copyOf(values, values.length);
         int i = 0;
@@ -1144,6 +1213,7 @@ public final class ChartRenderer {
         return out;
     }
 
+    /** FNV-1a 风格的数据指纹计算（用于缓存键） */
     private static long seriesFingerprint(List<OverviewViewModel.FlowPoint> series) {
         long hash = 0xCBF29CE484222325L;
         for (OverviewViewModel.FlowPoint p : series) {
@@ -1198,6 +1268,7 @@ public final class ChartRenderer {
         return Math.max(plotMinY(sampleScale), extent - sampleScale * PLOT_PAD_END_SCALE);
     }
 
+    /** 绘制图表区域顶部的控制按钮 */
     private static void drawHeaderButton(GuiGraphics gfx, Font font, UiRect rect, String text, boolean active, boolean enabled) {
         int bg = active ? 0xAA23456A : UiThemeTokens.TAB_INACTIVE;
         int border = active ? UiThemeTokens.CYAN : UiThemeTokens.SECTION_BORDER;
@@ -1212,6 +1283,7 @@ public final class ChartRenderer {
         gfx.drawString(font, RenderUtils.ellipsis(font, text, rect.width() - 8), rect.x() + 4, rect.y() + 3, textColor);
     }
 
+    /** 在指定渲染目标上执行绘制操作（临时切换绑定） */
     private static void withTarget(RenderTarget target, int width, int height, RectBounds bounds, Runnable runnable) {
         RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
         ScissorState scissorState = captureScissorState();
@@ -1240,6 +1312,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 捕获当前裁剪测试状态 */
     private static ScissorState captureScissorState() {
         boolean enabled = GL11C.glIsEnabled(GL11C.GL_SCISSOR_TEST);
         int[] box = new int[4];
@@ -1247,6 +1320,7 @@ public final class ChartRenderer {
         return new ScissorState(enabled, box[0], box[1], box[2], box[3]);
     }
 
+    /** 恢复裁剪测试状态 */
     private static void restoreScissorState(ScissorState state) {
         if (state == null || !state.enabled) {
             RenderSystem.disableScissor();
@@ -1255,6 +1329,7 @@ public final class ChartRenderer {
         RenderSystem.enableScissor(state.x, state.y, state.width, state.height);
     }
 
+    /** 检测渲染目标是否包含可见内容（alpha > 阈值的像素） */
     private static boolean detectVisibleContent(RenderTarget target, int width, int height, boolean exhaustive) {
         if (target == null || width <= 0 || height <= 0) {
             return false;
@@ -1310,6 +1385,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 推入正交投影矩阵 */
     private static ProjectionState pushProjection(int width, int height) {
         RenderSystem.backupProjectionMatrix();
         RenderSystem.setProjectionMatrix(new Matrix4f().setOrtho(0.0f, width, height, 0.0f, -1000.0f, 1000.0f), VertexSorting.ORTHOGRAPHIC_Z);
@@ -1320,12 +1396,14 @@ public final class ChartRenderer {
         return new ProjectionState(modelView);
     }
 
+    /** 弹出并恢复投影矩阵 */
     private static void popProjection(ProjectionState state) {
         state.modelView.popMatrix();
         RenderSystem.applyModelViewMatrix();
         RenderSystem.restoreProjectionMatrix();
     }
 
+    /** 清除渲染目标为全透明 */
     private static void clearTarget(RenderTarget target) {
         if (target == null) {
             return;
@@ -1413,6 +1491,7 @@ public final class ChartRenderer {
         );
     }
 
+    /** Liang-Barsky 线段裁剪算法 */
     private static ClippedSegment clipSegment(Point a, Point b, RectBounds bounds) {
         double dx = b.x - a.x;
         double dy = b.y - a.y;
@@ -1448,6 +1527,7 @@ public final class ChartRenderer {
         );
     }
 
+    /** 颜色预乘 alpha（用于面积填充） */
     private static int premultiply(int color) {
         int a = (color >>> 24) & 0xFF;
         int r = (int) Math.round(((color >>> 16) & 0xFF) * (a / 255.0));
@@ -1476,6 +1556,7 @@ public final class ChartRenderer {
         return Math.max(min, Math.min(max, v));
     }
 
+    /** 获取线条模式的本地化标签 */
     private static String lineModeLabel(LineMode mode) {
         return switch (mode) {
             case ALL -> Component.translatable("screen.resourceobserver.overview.chart.mode.all").getString();
@@ -1485,10 +1566,15 @@ public final class ChartRenderer {
         };
     }
 
+    /** 根据时间窗口选择线条样式 */
     private static LineStyle lineStyleFor(ChartWindow chartWindow) {
         return DEBUG_DIRECT_LINE_STYLE;
     }
 
+    /**
+     * 图表渲染缓存 —— 缓存 PreparedChart 避免逐帧重新计算。
+     * 使用 CacheKey 判断缓存是否有效。
+     */
     public static final class ChartRenderCache {
         private CacheKey key;
         private PreparedChart layer;
@@ -1513,6 +1599,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 缓存键 —— 包含影响渲染结果的所有参数 */
     private record CacheKey(
             int width,
             int height,
@@ -1525,6 +1612,10 @@ public final class ChartRenderer {
     ) {
     }
 
+    /**
+     * 缓存图表纹理 —— 包含高分辨率和低分辨率两层渲染目标。
+     * 高分辨率用于超采样绘制，低分辨率用于最终显示。
+     */
     private static final class CachedChartTexture implements AutoCloseable {
         private static final CachedChartTexture EMPTY = new CachedChartTexture(null, null, 0, 0, 0, 0, 0);
 
@@ -1600,6 +1691,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 预计算图表数据 —— 包含边界、零轴位置和所有系列的折线段 */
     private record PreparedChart(
             RectBounds bounds,
             Double zeroAxisY,
@@ -1609,15 +1701,34 @@ public final class ChartRenderer {
         private static final PreparedChart EMPTY = new PreparedChart(new RectBounds(0.0, 0.0, 0.0, 0.0), null, List.of(), false);
     }
 
+    /** 预计算单系列 —— 折线段列表和颜色 */
     private record PreparedSeries(List<List<Point>> segments, int color) {
     }
 
+    /** 二维点 */
     private record Point(double x, double y) {
     }
 
+    /** 裁剪测试状态快照 */
     private record ScissorState(boolean enabled, int x, int y, int width, int height) {
     }
 
+    /**
+     * 线条渲染样式参数。
+     * @param supersample       超采样倍率
+     * @param curveSubdivision  曲线细分密度
+     * @param coreWidth         核心线宽
+     * @param glowWidth         辉光线宽
+     * @param feather           边缘羽化距离
+     * @param zeroWidth         零轴线宽
+     * @param coreAlpha         核心线透明度
+     * @param glowAlpha         辉光透明度
+     * @param zeroAlpha         零轴线透明度
+     * @param lowResFilter      低分辨率纹理过滤模式
+     * @param resolveEdgeWeight  降采样边缘权重
+     * @param resolveInnerWeight 降采样内部权重
+     * @param resolveAlphaBoost  降采样 alpha 增强
+     */
     private record LineStyle(
             int supersample,
             float curveSubdivision,
@@ -1635,18 +1746,27 @@ public final class ChartRenderer {
     ) {
     }
 
+    /** 裁剪后的线段 */
     private record ClippedSegment(Point a, Point b) {
     }
 
+    /** 矩形边界（用于绘图区范围限定） */
     private record RectBounds(double minX, double minY, double maxX, double maxY) {
     }
 
+    /** 数据范围（最小值/最大值） */
     private record Range(double min, double max) {
     }
 
+    /** 投影矩阵栈状态快照 */
     private record ProjectionState(Matrix4fStack modelView) {
     }
 
+    /**
+     * 图表页面类型枚举。
+     * - THROUGHPUT：吞吐量视图（生产/消耗/净流量）
+     * - STOCK：库存视图（库存量变化）
+     */
     public enum ChartPage {
         THROUGHPUT,
         STOCK;
@@ -1656,6 +1776,11 @@ public final class ChartRenderer {
         }
     }
 
+    /**
+     * 平滑模式枚举。
+     * - SMOOTH：EMA 指数移动平均平滑
+     * - RAW：原始数据直接绘制
+     */
     public enum SmoothingMode {
         SMOOTH,
         RAW;
@@ -1665,6 +1790,13 @@ public final class ChartRenderer {
         }
     }
 
+    /**
+     * 线条显示模式枚举。
+     * - ALL：显示全部曲线
+     * - PRODUCTION：仅显示生产曲线
+     * - CONSUMPTION：仅显示消耗曲线
+     * - NET：仅显示净流量曲线
+     */
     public enum LineMode {
         ALL,
         PRODUCTION,
@@ -1693,6 +1825,7 @@ public final class ChartRenderer {
         }
     }
 
+    /** 图表渲染结果 —— 包含各控制按钮的热区 */
     public record RenderResult(
             UiRect windowToggle,
             UiRect pageToggle,

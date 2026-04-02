@@ -38,13 +38,31 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * 资源终端主屏幕 —— 终端界面的核心控制器。
+ * <p>
+ * 职责：
+ * - 管理界面布局（响应式自适应、尺寸切换 S/M/L）
+ * - 管理滚动状态（主页滚动 + 弹出菜单滚动）
+ * - 处理所有用户交互（鼠标点击、拖拽、滚轮、键盘）
+ * - 协调各子渲染器（Header/KPI/Chart/Watchlist/Table）
+ * - 与服务端通信（定时刷新数据、发送 UI 操作指令）
+ * - 管理弹出菜单（分组筛选/排序/状态筛选/右键菜单）
+ * - 管理分组输入面板（创建/重命名分组）
+ * <p>
+ * 数据流：
+ * 1. 服务端 → ObserverDataPayload → OverviewViewModelMapper → OverviewViewModel
+ * 2. OverviewViewModel → 各渲染器绘制 → 收集热区
+ * 3. 用户交互 → ObserverUiActionPayload → 服务端处理 → 返回新 Payload
+ */
 public class ResourceTerminalScreen extends Screen {
-    private static final int REFRESH_INTERVAL_TICKS = 10;
-    private static final int PAGE_SCROLL_STEP = 24;
-    private static final int POPUP_ROW_HEIGHT = 14;
-    private static final int POPUP_MAX_HEIGHT = 172;
-    private static final int POPUP_SCROLL_STEP = 20;
+    private static final int REFRESH_INTERVAL_TICKS = 10;  // 数据自动刷新间隔（tick）
+    private static final int PAGE_SCROLL_STEP = 24;        // 页面滚动步进（像素）
+    private static final int POPUP_ROW_HEIGHT = 14;        // 弹出菜单行高
+    private static final int POPUP_MAX_HEIGHT = 172;       // 弹出菜单最大高度
+    private static final int POPUP_SCROLL_STEP = 20;       // 弹出菜单滚动步进
 
+    /** 面板尺寸模式枚举（S/M/L 三档） */
     private enum SizeMode {
         SMALL("S", 0.96f),
         MEDIUM("M", 1.00f),
@@ -67,47 +85,54 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
+    /** 弹出菜单类型 */
     private enum PopupMenuType {
-        NONE,
-        GROUP_FILTER,
-        SORT,
-        STATUS,
-        ROW_GROUP
+        NONE,            // 无菜单
+        GROUP_FILTER,    // 分组筛选菜单
+        SORT,            // 排序模式菜单
+        STATUS,          // 状态筛选菜单
+        ROW_GROUP        // 行右键分组菜单
     }
 
+    /** 弹出菜单特殊操作类型 */
     private enum PopupSpecial {
-        NONE,
-        OPEN_CREATE_GROUP,
-        OPEN_RENAME_GROUP
+        NONE,                // 普通选项
+        OPEN_CREATE_GROUP,   // 打开创建分组面板
+        OPEN_RENAME_GROUP    // 打开重命名分组面板
     }
 
+    /** 分组输入面板模式 */
     private enum GroupInputMode {
-        NONE,
-        CREATE,
-        RENAME
+        NONE,    // 不显示
+        CREATE,  // 创建新分组
+        RENAME   // 重命名分组
     }
 
-    private ObserverDataPayload payload;
-    private OverviewViewModel viewModel;
+    // ========== 数据与视图模型 ==========
+    private ObserverDataPayload payload;           // 当前服务端数据
+    private OverviewViewModel viewModel;           // 当前视图模型
     private final UiLayoutSpec layoutSpec = UiLayoutSpec.defaultOverview();
-    private UiLayoutState layoutState;
-    private SizeMode sizeMode = SizeMode.MEDIUM;
+    private UiLayoutState layoutState;             // 当前布局状态
+    private SizeMode sizeMode = SizeMode.MEDIUM;   // 当前尺寸模式
     private final ChartRenderer.ChartRenderCache chartRenderCache = new ChartRenderer.ChartRenderCache();
 
+    // ========== 图表状态 ==========
     private ChartWindow chartWindow = ChartWindow.DAY_24H_5M;
     private ChartRenderer.LineMode chartLineMode = ChartRenderer.LineMode.ALL;
     private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
     private ChartRenderer.SmoothingMode smoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
 
-    private int refreshCounter;
-    private boolean refreshInFlight;
-    private int pageScrollPx;
-    private int maxPageScrollPx;
-    private String selectedItemId;
-    private final LinkedHashSet<String> selectedItemIds = new LinkedHashSet<>();
+    // ========== 交互状态 ==========
+    private int refreshCounter;                          // 刷新计数器
+    private boolean refreshInFlight;                     // 是否有刷新请求在途
+    private int pageScrollPx;                            // 当前页面滚动位置
+    private int maxPageScrollPx;                         // 最大页面滚动量
+    private String selectedItemId;                       // 图表选中物品 ID
+    private final LinkedHashSet<String> selectedItemIds = new LinkedHashSet<>();  // 多选物品 ID 集合
 
-    private final Map<String, Boolean> groupExpandedState = new HashMap<>();
+    private final Map<String, Boolean> groupExpandedState = new HashMap<>();  // 分组折叠状态
 
+    // ========== 热区引用（每帧渲染后更新） ==========
     private UiRect resetButtonHitbox;
     private UiRect chartPageToggleHitbox;
     private UiRect chartSmoothingButtonHitbox;
@@ -127,6 +152,7 @@ public class ResourceTerminalScreen extends Screen {
     private TableRenderer.FilterButtonHitbox statusButtonHitbox;
     private TableRenderer.ResetHitbox resetFiltersHitbox;
 
+    // ========== 弹出菜单状态 ==========
     private PopupMenuType popupMenuType = PopupMenuType.NONE;
     private int popupAnchorX;
     private int popupAnchorContentTopY;
@@ -145,6 +171,7 @@ public class ResourceTerminalScreen extends Screen {
     private boolean popupScrollDragging;
     private int popupScrollDragOffset;
 
+    // ========== 分组输入面板状态 ==========
     private GroupInputMode groupInputMode = GroupInputMode.NONE;
     private String groupInputItemId = "";
     private List<String> groupInputItemIds = List.of();
@@ -154,6 +181,7 @@ public class ResourceTerminalScreen extends Screen {
     private Button groupInputConfirmButton;
     private Button groupInputCancelButton;
 
+    // ========== Widget 引用 ==========
     private Button closeButton;
     private Button sizeModeButton;
     private long groupButtonPressedUntilMs;
@@ -161,6 +189,10 @@ public class ResourceTerminalScreen extends Screen {
     private long statusButtonPressedUntilMs;
     private long resetButtonPressedUntilMs;
 
+    /**
+     * 构造资源终端屏幕。
+     * @param payload 初始数据载荷（从服务端接收）
+     */
     public ResourceTerminalScreen(ObserverDataPayload payload) {
         super(Component.translatable("screen.resourceobserver.terminal_title"));
         this.payload = payload;
@@ -169,10 +201,12 @@ public class ResourceTerminalScreen extends Screen {
         rebuildViewModel();
     }
 
+    /** 判断此屏幕是否关联指定的观察者方块 */
     public boolean matchesObserver(net.minecraft.core.BlockPos observerPos) {
         return payload.observerPos().equals(observerPos);
     }
 
+    /** 应用从服务端接收的新数据载荷 */
     public void applyPayload(ObserverDataPayload payload) {
         refreshInFlight = false;
         if (payload.equals(this.payload)) {
@@ -229,6 +263,11 @@ public class ResourceTerminalScreen extends Screen {
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
 
+    /**
+     * 鼠标点击处理 —— 按优先级检测交互目标。
+     * 优先级：分组输入面板 → 弹出菜单 → 滚动条 → 图表按钮 →
+     *         关注列表移除 → 表格星标 → 关注列表选中 → 分组标题 → 表格行
+     */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
         if (groupInputMode != GroupInputMode.NONE) {
@@ -410,6 +449,11 @@ public class ResourceTerminalScreen extends Screen {
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
     }
 
+    /**
+     * 主渲染方法 —— 按层次绘制终端界面。
+     * 绘制顺序：面板背景 → 标题栏 → 可滚动内容（Header/KPI/Chart/Watchlist/Table）
+     *           → 页面滚动条 → 尺寸/关闭按钮 → 弹出菜单或分组输入面板
+     */
     @Override
     public void render(GuiGraphics gfx, int mouseX, int mouseY, float partialTick) {
         renderBackground(gfx, mouseX, mouseY, partialTick);
@@ -516,6 +560,7 @@ public class ResourceTerminalScreen extends Screen {
         chartRenderCache.clear();
     }
 
+    /** 重建布局并重新初始化所有 Widget */
     private void rebuildLayoutAndWidgets() {
         clearWidgets();
         layoutState = UiLayoutState.compute(width, height, layoutSpec, sizeMode.factor);
@@ -586,6 +631,7 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
+    /** 从 Payload 重建 OverviewViewModel */
     private void rebuildViewModel() {
         viewModel = OverviewViewModelMapper.fromPayload(payload);
         for (OverviewViewModel.TableGroup group : viewModel.tableGroups()) {
@@ -594,6 +640,7 @@ public class ResourceTerminalScreen extends Screen {
         clampSelectedRowsToCurrentData();
     }
 
+    /** 清理无效的选中状态（数据更新后可能有物品消失） */
     private void clampSelectedRowsToCurrentData() {
         if (viewModel == null) {
             selectedItemIds.clear();
@@ -615,6 +662,7 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
+    /** 计算各区段在可滚动内容中的布局位置 */
     private ContentLayout computeContentLayout(int scrollPx) {
         UiRect viewport = layoutState.scrollViewport();
         int contentX = viewport.x();
@@ -642,6 +690,7 @@ public class ResourceTerminalScreen extends Screen {
         return new ContentLayout(headerArea, kpiArea, chartArea, watchlistArea, tableArea, totalHeight, watchlistVisible);
     }
 
+    /** 渲染页面垂直滚动条 */
     private void renderPageScrollbar(GuiGraphics gfx) {
         UiRect viewport = layoutState.scrollViewport();
         int trackW = Math.max(4, layoutState.scrollbarWidth() - 2);
@@ -662,6 +711,7 @@ public class ResourceTerminalScreen extends Screen {
         gfx.fill(pageScrollThumbHitbox.x(), pageScrollThumbHitbox.y(), pageScrollThumbHitbox.right(), pageScrollThumbHitbox.bottom(), UiThemeTokens.CYAN);
     }
 
+    /** 向服务端发送数据刷新请求 */
     private void requestRefreshNow() {
         if (payload == null) {
             return;
@@ -676,6 +726,7 @@ public class ResourceTerminalScreen extends Screen {
         ));
     }
 
+    /** 向服务端发送 UI 操作指令 */
     private void sendUiAction(UiActionType actionType, String itemId, String actionValue) {
         sendUiAction(actionType, itemId, List.of(), actionValue);
     }
@@ -725,6 +776,7 @@ public class ResourceTerminalScreen extends Screen {
         return selectedItemId;
     }
 
+    /** 处理筛选按钮点击（打开对应弹出菜单） */
     private boolean handleFilterButtonClick(double mouseX, double mouseY) {
         if (groupFilterButtonHitbox != null && groupFilterButtonHitbox.rect().contains(mouseX, mouseY)) {
             markFilterPressed(TableRenderer.MenuType.GROUP);
@@ -744,6 +796,7 @@ public class ResourceTerminalScreen extends Screen {
         return false;
     }
 
+    /** 打开行右键分组菜单（支持多选） */
     private void openRowGroupPopup(List<String> itemIds, String groupKey, int x, int y) {
         if (viewModel == null || itemIds == null || itemIds.isEmpty()) {
             return;
@@ -858,6 +911,7 @@ public class ResourceTerminalScreen extends Screen {
         closePopupMenu();
     }
 
+    /** 构建分组筛选弹出菜单选项 */
     private List<PopupOption> buildGroupFilterOptions() {
         if (viewModel == null) {
             return List.of();
@@ -883,6 +937,7 @@ public class ResourceTerminalScreen extends Screen {
         return options;
     }
 
+    /** 构建排序模式弹出菜单选项 */
     private List<PopupOption> buildSortOptions() {
         if (viewModel == null) {
             return List.of();
@@ -902,6 +957,7 @@ public class ResourceTerminalScreen extends Screen {
         return options;
     }
 
+    /** 构建状态筛选弹出菜单选项 */
     private List<PopupOption> buildStatusOptions() {
         if (viewModel == null) {
             return List.of();
@@ -919,6 +975,7 @@ public class ResourceTerminalScreen extends Screen {
         return options;
     }
 
+    /** 构建行右键分组菜单选项（包含分组分配、创建、重命名、删除） */
     private List<PopupOption> buildRowGroupOptions(List<String> itemIds, String groupKey) {
         if (viewModel == null || itemIds == null || itemIds.isEmpty()) {
             return List.of();
@@ -999,6 +1056,7 @@ public class ResourceTerminalScreen extends Screen {
         return group == null ? "" : group.displayName();
     }
 
+    /** 渲染弹出菜单（带滚动支持） */
     private void renderPopupMenu(GuiGraphics gfx, int mouseX, int mouseY) {
         popupOptionHitboxes = List.of();
         popupMenuRect = null;
@@ -1113,6 +1171,7 @@ public class ResourceTerminalScreen extends Screen {
         gfx.pose().popPose();
     }
 
+    /** 打开分组输入面板 */
     private void openGroupInput(GroupInputMode mode, List<String> itemIds, String targetGroupKey, String initialName) {
         groupInputMode = mode;
         groupInputItemIds = itemIds == null ? List.of() : List.copyOf(itemIds);
@@ -1264,17 +1323,24 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
+    /**
+     * 可滚动内容布局 —— 各区段的矩形位置。
+     */
     private record ContentLayout(
-            UiRect headerArea,
-            UiRect kpiArea,
-            UiRect chartArea,
-            UiRect watchlistArea,
-            UiRect tableArea,
-            int totalHeight,
-            boolean watchlistVisible
+            UiRect headerArea,      // 页眉区域
+            UiRect kpiArea,         // KPI 区域
+            UiRect chartArea,       // 图表区域
+            UiRect watchlistArea,   // 关注列表区域
+            UiRect tableArea,       // 表格区域
+            int totalHeight,        // 总内容高度
+            boolean watchlistVisible // 关注列表是否显示
     ) {
     }
 
+    /**
+     * 弹出菜单选项。
+     * 可以是普通动作选项（发送 UI 操作到服务端）或特殊选项（打开输入面板）。
+     */
     private record PopupOption(
             String label,
             UiActionType actionType,
@@ -1305,6 +1371,7 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
+    /** 弹出菜单选项热区 */
     private record PopupOptionHitbox(UiRect rect, int optionIndex) {
     }
 }
