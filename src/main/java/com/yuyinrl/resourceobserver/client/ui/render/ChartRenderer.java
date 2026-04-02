@@ -1,16 +1,39 @@
 package com.yuyinrl.resourceobserver.client.ui.render;
 
+import com.mojang.blaze3d.pipeline.RenderTarget;
+import com.mojang.blaze3d.pipeline.TextureTarget;
+import com.mojang.blaze3d.platform.GlStateManager;
+import com.mojang.blaze3d.systems.RenderSystem;
+import com.mojang.blaze3d.vertex.BufferBuilder;
+import com.mojang.blaze3d.vertex.BufferUploader;
+import com.mojang.blaze3d.vertex.DefaultVertexFormat;
+import com.mojang.blaze3d.vertex.MeshData;
+import com.mojang.blaze3d.vertex.Tesselator;
+import com.mojang.blaze3d.vertex.VertexFormat;
+import com.mojang.blaze3d.vertex.VertexSorting;
+import com.yuyinrl.resourceobserver.client.ChartRenderShaders;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.GameRenderer;
+import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.network.chat.Component;
+import org.joml.Matrix4f;
+import org.joml.Matrix4fStack;
+import org.lwjgl.BufferUtils;
+import org.lwjgl.opengl.GL11C;
 
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
+import java.util.WeakHashMap;
 import java.util.function.Supplier;
 
 public final class ChartRenderer {
@@ -20,7 +43,28 @@ public final class ChartRenderer {
     private static final int MODE_W = 56;
     private static final int SMOOTH_W = 62;
 
+    private static final int DEFAULT_SUPERSAMPLE = 4;
+    private static final double PLOT_PAD_X_SCALE = 1.0;
+    private static final double PLOT_PAD_TOP_SCALE = 2.5;
+    private static final double PLOT_PAD_END_SCALE = 2.0;
+
+    private static final LineStyle DEFAULT_LINE_STYLE = new LineStyle(DEFAULT_SUPERSAMPLE, 1.0f, 0.82f, 1.26f, 0.50f, 0.75f, 0.92f, 0.20f, 0.34f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
+    private static final LineStyle DEBUG_DIRECT_LINE_STYLE = new LineStyle(1, 16.0f, 0.80f, 0.96f, 0.40f, 0.72f, 1.00f, 0.00f, 0.28f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
+    private static final boolean ENABLE_AREA_FILL = false; // TODO restore after replacing the current fill path with a seam-free shader fill.
+
+    private static final Set<ChartRenderCache> LIVE_CACHES = Collections.newSetFromMap(new WeakHashMap<>());
+
     private ChartRenderer() {
+    }
+
+    public static void invalidateAllCaches() {
+        synchronized (LIVE_CACHES) {
+            for (ChartRenderCache cache : new ArrayList<>(LIVE_CACHES)) {
+                if (cache != null) {
+                    cache.clear();
+                }
+            }
+        }
     }
 
     public static RenderResult render(
@@ -48,85 +92,60 @@ public final class ChartRenderer {
                 scopeLabel,
                 chartWindow.shortLabel()
         ).getString();
-
         gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.section.chart"), content.x(), content.y(), UiThemeTokens.TEXT);
         gfx.drawString(font, subtitle, content.x(), content.y() + 11, UiThemeTokens.TEXT_MUTED);
 
-        int controlsRight = content.right();
-        int totalW = WINDOW_W + BUTTON_GAP + PAGE_W + BUTTON_GAP + MODE_W + BUTTON_GAP + SMOOTH_W;
-        int controlsStartX = controlsRight - totalW;
-        int btnY = content.y();
+        int right = content.right();
+        int rowW = WINDOW_W + BUTTON_GAP + PAGE_W + BUTTON_GAP + MODE_W + BUTTON_GAP + SMOOTH_W;
+        int x0 = right - rowW;
+        int by = content.y();
+        UiRect windowToggle = new UiRect(x0, by, WINDOW_W, 14);
+        UiRect pageToggle = new UiRect(windowToggle.right() + BUTTON_GAP, by, PAGE_W, 14);
+        UiRect modeButton = new UiRect(pageToggle.right() + BUTTON_GAP, by, MODE_W, 14);
+        UiRect smoothButton = new UiRect(modeButton.right() + BUTTON_GAP, by, SMOOTH_W, 14);
 
-        UiRect windowToggle = new UiRect(controlsStartX, btnY, WINDOW_W, 14);
-        UiRect pageToggle = new UiRect(windowToggle.right() + BUTTON_GAP, btnY, PAGE_W, 14);
-        UiRect lineModeButton = new UiRect(pageToggle.right() + BUTTON_GAP, btnY, MODE_W, 14);
-        UiRect smoothingButton = new UiRect(lineModeButton.right() + BUTTON_GAP, btnY, SMOOTH_W, 14);
-
+        drawHeaderButton(gfx, font, windowToggle, Component.translatable(chartWindow.translationKey()).getString(), true, true);
         drawHeaderButton(
-                gfx,
-                font,
-                windowToggle,
-                Component.translatable(chartWindow.translationKey()).getString(),
-                true,
-                true
-        );
-        drawHeaderButton(
-                gfx,
-                font,
-                pageToggle,
+                gfx, font, pageToggle,
                 chartPage == ChartPage.THROUGHPUT
                         ? Component.translatable("screen.resourceobserver.overview.chart.tab.throughput").getString()
                         : Component.translatable("screen.resourceobserver.overview.chart.tab.stock").getString(),
-                true,
-                true
+                true, true
         );
-        boolean modeEnabled = chartPage == ChartPage.THROUGHPUT;
+        boolean lineModeEnabled = chartPage == ChartPage.THROUGHPUT;
+        drawHeaderButton(gfx, font, modeButton, lineModeLabel(lineMode), lineModeEnabled, lineModeEnabled);
         drawHeaderButton(
-                gfx,
-                font,
-                lineModeButton,
-                lineModeLabel(lineMode),
-                modeEnabled,
-                modeEnabled
-        );
-        drawHeaderButton(
-                gfx,
-                font,
-                smoothingButton,
+                gfx, font, smoothButton,
                 Component.translatable(
                         smoothingMode == SmoothingMode.SMOOTH
                                 ? "screen.resourceobserver.overview.chart.smoothing.smooth"
                                 : "screen.resourceobserver.overview.chart.smoothing.raw"
                 ).getString(),
-                true,
-                true
+                true, true
         );
 
         UiRect resetButton = null;
         if (selectedItemLabel != null && !selectedItemLabel.isBlank()) {
-            int resetW = 88;
-            int resetX = controlsStartX - BUTTON_GAP - resetW;
-            if (resetX >= content.x()) {
-                resetButton = new UiRect(resetX, btnY, resetW, 14);
+            int rw = 88;
+            int rx = x0 - BUTTON_GAP - rw;
+            if (rx >= content.x()) {
+                resetButton = new UiRect(rx, by, rw, 14);
                 drawHeaderButton(
-                        gfx,
-                        font,
-                        resetButton,
+                        gfx, font, resetButton,
                         Component.translatable("screen.resourceobserver.overview.chart.reset").getString(),
-                        false,
-                        true
+                        false, true
                 );
             }
         }
 
         UiRect plot = new UiRect(content.x(), content.y() + 24, content.width(), Math.max(42, content.height() - 28));
         drawPlotFrame(gfx, plot);
+        LineStyle lineStyle = lineStyleFor(chartWindow);
 
         CacheKey key = new CacheKey(
-                plot.x(),
-                plot.y(),
                 plot.width(),
                 plot.height(),
+                lineStyle.supersample(),
                 chartWindow,
                 chartPage,
                 lineMode,
@@ -134,343 +153,975 @@ public final class ChartRenderer {
                 seriesFingerprint(series)
         );
 
-        PreparedPlot prepared = cache.getOrBuild(
+        gfx.flush();
+        PreparedChart prepared = cache.getOrBuild(
                 key,
-                () -> buildPreparedPlot(plot, series, lineMode, chartPage, smoothingMode)
+                () -> prepareChart(plot.width(), plot.height(), series, chartPage, lineMode, smoothingMode, lineStyle)
         );
-        drawPreparedPlot(gfx, plot, prepared);
+        if (prepared != null && prepared != PreparedChart.EMPTY && prepared.hasVisibleContent()) {
+            drawPreparedChartVector(gfx, plot, prepared, lineStyle);
+        }
+        drawLegend(gfx, font, plot, chartPage, lineMode);
 
-        return new RenderResult(
-                windowToggle,
-                pageToggle,
-                lineModeButton,
-                smoothingButton,
-                resetButton,
-                modeEnabled
-        );
+        return new RenderResult(windowToggle, pageToggle, modeButton, smoothButton, resetButton, lineModeEnabled);
+    }
+
+    private static void drawLegend(GuiGraphics gfx, Font font, UiRect plot, ChartPage page, LineMode mode) {
+        int x = plot.x() + 6;
+        int y = plot.y() + 4;
+        if (page == ChartPage.STOCK) {
+            gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.chart.legend.stock"), x, y, UiThemeTokens.BLUE);
+            return;
+        }
+        if (mode.showProduction()) {
+            gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.chart.legend.production"), x, y, UiThemeTokens.CYAN);
+            x += 74;
+        }
+        if (mode.showConsumption()) {
+            gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.chart.legend.consumption"), x, y, UiThemeTokens.AMBER);
+            x += 84;
+        }
+        if (mode.showNet()) {
+            gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.chart.legend.net"), x, y, UiThemeTokens.EMERALD);
+        }
     }
 
     private static void drawPlotFrame(GuiGraphics gfx, UiRect plot) {
         gfx.fill(plot.x(), plot.y(), plot.right(), plot.bottom(), 0x5A0D1628);
         RenderUtils.drawBorder(gfx, plot, 0x773A5478);
-        int innerLeft = plot.x() + 1;
-        int innerRight = plot.right() - 1;
-        int hStep = Math.max(8, plot.height() / 5);
-        int vStep = Math.max(12, plot.width() / 10);
-        for (int y = plot.y() + hStep; y < plot.bottom() - 1; y += hStep) {
-            gfx.fill(innerLeft, y, innerRight, y + 1, 0x223E5C84);
+        int left = plot.x() + 1;
+        int right = plot.right() - 1;
+        int hs = Math.max(8, plot.height() / 5);
+        int vs = Math.max(12, plot.width() / 10);
+        for (int y = plot.y() + hs; y < plot.bottom() - 1; y += hs) {
+            gfx.fill(left, y, right, y + 1, 0x223E5C84);
         }
-        for (int x = plot.x() + vStep; x < plot.right() - 1; x += vStep) {
+        for (int x = plot.x() + vs; x < plot.right() - 1; x += vs) {
             gfx.fill(x, plot.y() + 1, x + 1, plot.bottom() - 1, 0x152F4668);
         }
     }
 
-    private static PreparedPlot buildPreparedPlot(
-            UiRect plot,
+    private static void renderToTexture(
+            CachedChartTexture texture,
             List<OverviewViewModel.FlowPoint> series,
+            ChartWindow chartWindow,
+            ChartPage page,
             LineMode lineMode,
-            ChartPage chartPage,
-            SmoothingMode smoothingMode
+            SmoothingMode smoothingMode,
+            LineStyle lineStyle
     ) {
-        double[] productionValues = new double[series.size()];
-        double[] consumptionValues = new double[series.size()];
-        double[] netValues = new double[series.size()];
-        double[] stockValues = new double[series.size()];
-        boolean[] flowMask = new boolean[series.size()];
-        boolean[] stockMask = new boolean[series.size()];
-        for (int i = 0; i < series.size(); i++) {
+        clearTarget(texture.highRes);
+        clearTarget(texture.lowRes);
+        texture.lowRes.setFilterMode(lineStyle.lowResFilter());
+
+        int n = series.size();
+        double[] p = new double[n];
+        double[] c = new double[n];
+        double[] net = new double[n];
+        double[] stock = new double[n];
+        boolean[] fm = new boolean[n];
+        boolean[] sm = new boolean[n];
+        for (int i = 0; i < n; i++) {
             OverviewViewModel.FlowPoint point = series.get(i);
-            productionValues[i] = point.production();
-            consumptionValues[i] = point.consumption();
-            netValues[i] = point.net();
-            stockValues[i] = point.stock();
-            flowMask[i] = point.hasFlow();
-            stockMask[i] = point.hasStock();
+            p[i] = point.production();
+            c[i] = point.consumption();
+            net[i] = point.net();
+            stock[i] = point.stock();
+            fm[i] = point.hasFlow();
+            sm[i] = point.hasStock();
         }
 
-        boolean smoothGeometry = smoothingMode == SmoothingMode.SMOOTH;
-        if (chartPage == ChartPage.THROUGHPUT) {
-            double[] prod = smoothGeometry ? smoothSeries(productionValues, flowMask) : Arrays.copyOf(productionValues, productionValues.length);
-            double[] cons = smoothGeometry ? smoothSeries(consumptionValues, flowMask) : Arrays.copyOf(consumptionValues, consumptionValues.length);
-            double[] net = smoothGeometry ? smoothSeries(netValues, flowMask) : Arrays.copyOf(netValues, netValues.length);
-            Range range = rangeForThroughput(lineMode, prod, cons, net, flowMask);
-
-            PreparedSeries production = lineMode.showProduction()
-                    ? buildSeries(plot, prod, flowMask, range, smoothGeometry, true)
-                    : PreparedSeries.empty();
-            PreparedSeries consumption = lineMode.showConsumption()
-                    ? buildSeries(plot, cons, flowMask, range, smoothGeometry, true)
-                    : PreparedSeries.empty();
-            PreparedSeries netSeries = lineMode.showNet()
-                    ? buildSeries(plot, net, flowMask, range, smoothGeometry, false)
-                    : PreparedSeries.empty();
-
-            int zeroY = Integer.MIN_VALUE;
-            if (range.min < 0.0 && range.max > 0.0) {
-                zeroY = clamp((int) Math.round(valueToY(0.0, range.min, range.max, plot)), plot.y() + 1, plot.bottom() - 2);
-            }
-            return new PreparedPlot(
-                    ChartPage.THROUGHPUT,
-                    lineMode,
-                    production,
-                    consumption,
-                    netSeries,
-                    PreparedSeries.empty(),
-                    zeroY
-            );
-        }
-
-        double[] stock = smoothGeometry ? smoothSeries(stockValues, stockMask) : Arrays.copyOf(stockValues, stockValues.length);
-        Range range = rangeForSingle(stock, stockMask);
-        PreparedSeries stockSeries = buildSeries(plot, stock, stockMask, range, smoothGeometry, true);
-        return new PreparedPlot(
-                ChartPage.STOCK,
-                lineMode,
-                PreparedSeries.empty(),
-                PreparedSeries.empty(),
-                PreparedSeries.empty(),
-                stockSeries,
-                Integer.MIN_VALUE
+        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
+        RectBounds bounds = new RectBounds(
+                plotMinX(texture.sampleScale),
+                plotMinY(texture.sampleScale),
+                maxCoordX(texture.highResWidth, texture.sampleScale),
+                maxCoordY(texture.highResHeight, texture.sampleScale)
         );
+
+        withTarget(texture.highRes, texture.highResWidth, texture.highResHeight, bounds, () -> {
+            if (page == ChartPage.THROUGHPUT) {
+                double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
+                double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
+                double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
+                Range r = rangeThroughput(lineMode, ps, cs, ns, fm);
+
+                if (r.min < 0.0 && r.max > 0.0) {
+                    double zy = clampD(valueY4(0.0, r.min, r.max, texture.highResHeight, texture.sampleScale), bounds.minY, bounds.maxY);
+                    drawAaLine(new Point(bounds.minX, zy), new Point(bounds.maxX, zy), 0xBBD5F3, lineStyle.zeroWidth(), lineStyle.zeroWidth(), lineStyle.feather(), lineStyle.zeroAlpha(), 0.0f, bounds, texture.sampleScale);
+                }
+                if (lineMode.showProduction()) {
+                    List<List<Point>> seg = buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), ps, fm, r.min, r.max, smooth);
+                    if (ENABLE_AREA_FILL) {
+                        fillArea(seg, bounds, 0x1A22D3EE);
+                    }
+                    drawSeries(seg, bounds, UiThemeTokens.CYAN, lineStyle, texture.sampleScale);
+                }
+                if (lineMode.showConsumption()) {
+                    List<List<Point>> seg = buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), cs, fm, r.min, r.max, smooth);
+                    if (ENABLE_AREA_FILL) {
+                        fillArea(seg, bounds, 0x1CF59E0B);
+                    }
+                    drawSeries(seg, bounds, UiThemeTokens.AMBER, lineStyle, texture.sampleScale);
+                }
+                if (lineMode.showNet()) {
+                    drawSeries(buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), ns, fm, r.min, r.max, smooth), bounds, UiThemeTokens.EMERALD, lineStyle, texture.sampleScale);
+                }
+            } else {
+                double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
+                Range r = rangeSingle(ss, sm);
+                List<List<Point>> seg = buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), ss, sm, r.min, r.max, smooth);
+                if (ENABLE_AREA_FILL) {
+                    fillArea(seg, bounds, 0x1A60A5FA);
+                }
+                drawSeries(seg, bounds, UiThemeTokens.BLUE, lineStyle, texture.sampleScale);
+            }
+        });
+
+        boolean highResVisible = detectVisibleContent(texture.highRes, texture.highResWidth, texture.highResHeight, false);
+        texture.setHighResVisible(highResVisible);
+
+        downsample(texture.highRes, texture.lowRes, texture.highResWidth, texture.highResHeight, texture.width, texture.height, lineStyle);
+        boolean lowResVisible = detectVisibleContent(texture.lowRes, texture.width, texture.height, true);
+        if (!lowResVisible && highResVisible) {
+            downsampleFallback(texture.highRes, texture.lowRes, texture.width, texture.height);
+            lowResVisible = detectVisibleContent(texture.lowRes, texture.width, texture.height, true);
+        }
+        if (lowResVisible && !highResVisible) {
+            highResVisible = true;
+            texture.setHighResVisible(true);
+        }
+        texture.setLowResVisible(lowResVisible);
+        texture.setHasVisibleContent(lowResVisible);
     }
 
-    private static PreparedSeries buildSeries(
-            UiRect plot,
-            double[] values,
-            boolean[] validMask,
-            Range range,
-            boolean smoothGeometry,
-            boolean withArea
+    private static PreparedChart prepareChart(
+            int plotWidth,
+            int plotHeight,
+            List<OverviewViewModel.FlowPoint> series,
+            ChartPage page,
+            LineMode lineMode,
+            SmoothingMode smoothingMode,
+            LineStyle lineStyle
     ) {
-        List<List<Point>> segments = buildCurveSegments(plot, values, validMask, range.min, range.max, smoothGeometry);
-        int[] areaTop = withArea ? buildAreaTop(plot, segments) : null;
-        return new PreparedSeries(segments, areaTop);
-    }
+        if (plotWidth <= 0 || plotHeight <= 0 || series.isEmpty()) {
+            return PreparedChart.EMPTY;
+        }
 
-    private static int[] buildAreaTop(UiRect plot, List<List<Point>> segments) {
-        int[] topByX = new int[plot.width()];
-        Arrays.fill(topByX, Integer.MAX_VALUE);
-        int minX = plot.x() + 1;
-        int maxX = plot.right() - 2;
-        for (List<Point> segment : segments) {
-            if (segment.size() < 2) {
-                continue;
+        int n = series.size();
+        double[] p = new double[n];
+        double[] c = new double[n];
+        double[] net = new double[n];
+        double[] stock = new double[n];
+        boolean[] fm = new boolean[n];
+        boolean[] sm = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            OverviewViewModel.FlowPoint point = series.get(i);
+            p[i] = point.production();
+            c[i] = point.consumption();
+            net[i] = point.net();
+            stock[i] = point.stock();
+            fm[i] = point.hasFlow();
+            sm[i] = point.hasStock();
+        }
+
+        int sampleScale = lineStyle.supersample();
+        RectBounds bounds = new RectBounds(
+                plotMinX(sampleScale),
+                plotMinY(sampleScale),
+                maxCoordX(plotWidth, sampleScale),
+                maxCoordY(plotHeight, sampleScale)
+        );
+        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
+        List<PreparedSeries> preparedSeries = new ArrayList<>();
+        Double zeroAxisY = null;
+
+        if (page == ChartPage.THROUGHPUT) {
+            double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
+            double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
+            double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
+            Range range = rangeThroughput(lineMode, ps, cs, ns, fm);
+            if (range.min < 0.0 && range.max > 0.0) {
+                zeroAxisY = clampD(valueY4(0.0, range.min, range.max, plotHeight, sampleScale), bounds.minY, bounds.maxY);
             }
-            for (int i = 0; i < segment.size() - 1; i++) {
-                Point a = segment.get(i);
-                Point b = segment.get(i + 1);
-                if (Math.abs(b.x - a.x) < 1.0E-6) {
-                    int x = clamp((int) Math.round(a.x), minX, maxX);
-                    int y = clamp((int) Math.round(Math.min(a.y, b.y)), plot.y() + 1, plot.bottom() - 2);
-                    int idx = x - plot.x();
-                    if (idx >= 0 && idx < topByX.length) {
-                        topByX[idx] = Math.min(topByX[idx], y);
-                    }
-                    continue;
+            if (lineMode.showProduction()) {
+                List<List<Point>> segments = buildPolylines(plotWidth, plotHeight, sampleScale, lineStyle.curveSubdivision(), ps, fm, range.min, range.max, smooth);
+                if (!segments.isEmpty()) {
+                    preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.CYAN));
                 }
-                int x0 = clamp((int) Math.ceil(Math.min(a.x, b.x)), minX, maxX);
-                int x1 = clamp((int) Math.floor(Math.max(a.x, b.x)), minX, maxX);
-                for (int x = x0; x <= x1; x++) {
-                    double t = (x - a.x) / (b.x - a.x);
-                    if (t < 0.0 || t > 1.0) {
-                        continue;
-                    }
-                    int y = clamp((int) Math.round(lerp(a.y, b.y, t)), plot.y() + 1, plot.bottom() - 2);
-                    int idx = x - plot.x();
-                    if (idx >= 0 && idx < topByX.length) {
-                        topByX[idx] = Math.min(topByX[idx], y);
-                    }
+            }
+            if (lineMode.showConsumption()) {
+                List<List<Point>> segments = buildPolylines(plotWidth, plotHeight, sampleScale, lineStyle.curveSubdivision(), cs, fm, range.min, range.max, smooth);
+                if (!segments.isEmpty()) {
+                    preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.AMBER));
                 }
+            }
+            if (lineMode.showNet()) {
+                List<List<Point>> segments = buildPolylines(plotWidth, plotHeight, sampleScale, lineStyle.curveSubdivision(), ns, fm, range.min, range.max, smooth);
+                if (!segments.isEmpty()) {
+                    preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.EMERALD));
+                }
+            }
+        } else {
+            double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
+            Range range = rangeSingle(ss, sm);
+            List<List<Point>> segments = buildPolylines(plotWidth, plotHeight, sampleScale, lineStyle.curveSubdivision(), ss, sm, range.min, range.max, smooth);
+            if (!segments.isEmpty()) {
+                preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.BLUE));
             }
         }
 
-        for (int i = 0; i < topByX.length; i++) {
-            if (topByX[i] == Integer.MAX_VALUE) {
-                topByX[i] = -1;
-            }
-        }
-        return topByX;
+        return new PreparedChart(bounds, zeroAxisY, preparedSeries, zeroAxisY != null || !preparedSeries.isEmpty());
     }
 
-    private static void drawPreparedPlot(GuiGraphics gfx, UiRect plot, PreparedPlot prepared) {
-        if (prepared.page == ChartPage.THROUGHPUT) {
-            if (prepared.zeroY != Integer.MIN_VALUE) {
-                gfx.fill(plot.x() + 1, prepared.zeroY, plot.right() - 1, prepared.zeroY + 1, 0x40BBD5F3);
-            }
-            if (prepared.lineMode.showProduction()) {
-                drawSeriesArea(gfx, plot, prepared.production, 0x1A22D3EE);
-                drawSeriesLines(gfx, prepared.production, UiThemeTokens.CYAN);
-            }
-            if (prepared.lineMode.showConsumption()) {
-                drawSeriesArea(gfx, plot, prepared.consumption, 0x1CF59E0B);
-                drawSeriesLines(gfx, prepared.consumption, UiThemeTokens.AMBER);
-            }
-            if (prepared.lineMode.showNet()) {
-                drawSeriesLines(gfx, prepared.net, UiThemeTokens.EMERALD);
-            }
+    private static void drawPreparedChartVector(GuiGraphics gfx, UiRect plot, PreparedChart prepared, LineStyle lineStyle) {
+        if (prepared == null || prepared == PreparedChart.EMPTY || !prepared.hasVisibleContent()) {
             return;
         }
 
-        drawSeriesArea(gfx, plot, prepared.stock, 0x1A60A5FA);
-        drawSeriesLines(gfx, prepared.stock, UiThemeTokens.BLUE);
+        RectBounds bounds = new RectBounds(
+                plot.x() + prepared.bounds().minX,
+                plot.y() + prepared.bounds().minY,
+                plot.x() + prepared.bounds().maxX,
+                plot.y() + prepared.bounds().maxY
+        );
+
+        gfx.enableScissor(plot.x() + 1, plot.y() + 1, plot.right() - 1, plot.bottom() - 1);
+        ProjectionState projectionState = pushProjection(gfx.guiWidth(), gfx.guiHeight());
+        try {
+            RenderSystem.enableBlend();
+            RenderSystem.disableDepthTest();
+            RenderSystem.disableCull();
+            RenderSystem.blendFuncSeparate(
+                    GlStateManager.SourceFactor.ONE,
+                    GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
+                    GlStateManager.SourceFactor.ONE,
+                    GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA
+            );
+
+            if (prepared.zeroAxisY() != null) {
+                double zeroY = plot.y() + prepared.zeroAxisY();
+                drawAaLine(
+                        new Point(bounds.minX, zeroY),
+                        new Point(bounds.maxX, zeroY),
+                        0xBBD5F3,
+                        lineStyle.zeroWidth(),
+                        lineStyle.zeroWidth(),
+                        lineStyle.feather(),
+                        lineStyle.zeroAlpha(),
+                        0.0f,
+                        bounds,
+                        lineStyle.supersample()
+                );
+            }
+
+            for (PreparedSeries series : prepared.series()) {
+                drawSeriesAtOffset(series.segments(), bounds, series.color(), lineStyle, lineStyle.supersample(), plot.x(), plot.y());
+            }
+        } finally {
+            popProjection(projectionState);
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            gfx.disableScissor();
+        }
     }
 
-    private static void drawSeriesArea(GuiGraphics gfx, UiRect plot, PreparedSeries series, int color) {
-        if (series.areaTopByX == null) {
-            return;
-        }
-        int bottom = plot.bottom() - 1;
-        for (int i = 0; i < series.areaTopByX.length; i++) {
-            int top = series.areaTopByX[i];
-            if (top < 0 || top >= bottom) {
-                continue;
-            }
-            int x = plot.x() + i;
-            gfx.fill(x, top, x + 1, bottom, color);
-        }
-    }
-
-    private static void drawSeriesLines(GuiGraphics gfx, PreparedSeries series, int color) {
-        int shadowDown = withAlpha(color, 36);
-        int shadowUp = withAlpha(color, 28);
-        int core = withAlpha(color, 235);
-        for (List<Point> segment : series.segments) {
-            if (segment.size() < 2) {
-                continue;
-            }
-            for (int i = 0; i < segment.size() - 1; i++) {
-                Point a = segment.get(i);
-                Point b = segment.get(i + 1);
-                int x0 = (int) Math.round(a.x);
-                int y0 = (int) Math.round(a.y);
-                int x1 = (int) Math.round(b.x);
-                int y1 = (int) Math.round(b.y);
-                RenderUtils.drawLine(gfx, x0, y0 + 1, x1, y1 + 1, shadowDown);
-                RenderUtils.drawLine(gfx, x0, y0 - 1, x1, y1 - 1, shadowUp);
-                RenderUtils.drawLine(gfx, x0, y0, x1, y1, core);
-            }
-        }
-    }
-
-    private static List<List<Point>> buildCurveSegments(
-            UiRect plot,
+    private static List<List<Point>> buildPolylines(
+            int hw,
+            int hh,
+            int sampleScale,
+            float curveSubdivision,
             double[] values,
-            boolean[] validMask,
+            boolean[] valid,
             double min,
             double max,
-            boolean smoothGeometry
+            boolean smooth
     ) {
-        List<List<Point>> segments = new ArrayList<>();
-        int idx = 0;
-        while (idx < values.length) {
-            while (idx < values.length && !validMask[idx]) {
-                idx++;
+        List<List<Point>> out = new ArrayList<>();
+        int i = 0;
+        while (i < values.length) {
+            while (i < values.length && !valid[i]) i++;
+            if (i >= values.length) break;
+            int s = i;
+            while (i < values.length && valid[i]) i++;
+            int e = i - 1;
+
+            List<Point> base = new ArrayList<>(e - s + 1);
+            for (int k = s; k <= e; k++) {
+                base.add(new Point(x4(k, values.length, hw, sampleScale), valueY4(values[k], min, max, hh, sampleScale)));
             }
-            if (idx >= values.length) {
-                break;
-            }
-            int start = idx;
-            while (idx < values.length && validMask[idx]) {
-                idx++;
-            }
-            int end = idx - 1;
-            List<Point> base = new ArrayList<>(end - start + 1);
-            for (int i = start; i <= end; i++) {
-                base.add(new Point(
-                        toX(i, values.length, plot),
-                        valueToY(values[i], min, max, plot)
-                ));
-            }
-            if (smoothGeometry && base.size() >= 3) {
-                segments.add(interpolateCurve(base));
-            } else {
-                segments.add(base);
-            }
+            out.add(smooth && base.size() >= 3 ? monotone(base, hw, hh, sampleScale, curveSubdivision) : clampPoints(base, hw, hh, sampleScale));
         }
-        return segments;
+        return out;
     }
 
-    private static List<Point> interpolateCurve(List<Point> base) {
+    private static List<Point> clampPoints(List<Point> in, int hw, int hh, int sampleScale) {
+        List<Point> out = new ArrayList<>(in.size());
+        double minX = plotMinX(sampleScale);
+        double maxX = maxCoordX(hw, sampleScale);
+        double minY = plotMinY(sampleScale);
+        double maxY = maxCoordY(hh, sampleScale);
+        for (Point p : in) {
+            out.add(new Point(clampD(p.x, minX, maxX), clampD(p.y, minY, maxY)));
+        }
+        return out;
+    }
+
+    private static List<Point> monotone(List<Point> base, int hw, int hh, int sampleScale, float curveSubdivision) {
+        int n = base.size();
+        double[] x = new double[n];
+        double[] y = new double[n];
+        for (int i = 0; i < n; i++) {
+            x[i] = base.get(i).x;
+            y[i] = base.get(i).y;
+        }
+        double[] d = new double[n - 1];
+        for (int i = 0; i < n - 1; i++) {
+            double h = Math.max(1.0E-6, x[i + 1] - x[i]);
+            d[i] = (y[i + 1] - y[i]) / h;
+        }
+        double[] m = new double[n];
+        m[0] = d[0];
+        m[n - 1] = d[n - 2];
+        for (int i = 1; i < n - 1; i++) m[i] = 0.5 * (d[i - 1] + d[i]);
+        for (int i = 0; i < n - 1; i++) {
+            if (Math.abs(d[i]) < 1.0E-9) {
+                m[i] = 0.0;
+                m[i + 1] = 0.0;
+            } else {
+                double a = m[i] / d[i];
+                double b = m[i + 1] / d[i];
+                double s = a * a + b * b;
+                if (s > 9.0) {
+                    double t = 3.0 / Math.sqrt(s);
+                    m[i] = t * a * d[i];
+                    m[i + 1] = t * b * d[i];
+                }
+            }
+        }
+        double minX = plotMinX(sampleScale);
+        double maxX = maxCoordX(hw, sampleScale);
+        double minY = plotMinY(sampleScale);
+        double maxY = maxCoordY(hh, sampleScale);
         List<Point> out = new ArrayList<>();
-        int last = base.size() - 1;
-        for (int i = 0; i < last; i++) {
-            Point p0 = base.get(Math.max(0, i - 1));
-            Point p1 = base.get(i);
-            Point p2 = base.get(i + 1);
-            Point p3 = base.get(Math.min(last, i + 2));
-            double span = Math.max(1.0, p2.x - p1.x);
-            int steps = Math.max(2, (int) Math.ceil(span * 1.8));
-            int startStep = i == 0 ? 0 : 1;
-            for (int s = startStep; s <= steps; s++) {
-                double t = s / (double) steps;
-                double x = lerp(p1.x, p2.x, t);
-                double y = catmullRom(p0.y, p1.y, p2.y, p3.y, t);
-                out.add(new Point(x, y));
+        for (int i = 0; i < n - 1; i++) {
+            double x0 = x[i];
+            double x1 = x[i + 1];
+            double y0 = y[i];
+            double y1 = y[i + 1];
+            double h = Math.max(1.0E-6, x1 - x0);
+            int steps = Math.max(1, (int) Math.ceil(h * Math.max(1.0f, curveSubdivision)));
+            int from = i == 0 ? 0 : 1;
+            for (int step = from; step <= steps; step++) {
+                double t = step / (double) steps;
+                double t2 = t * t;
+                double t3 = t2 * t;
+                double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
+                double h10 = t3 - 2.0 * t2 + t;
+                double h01 = -2.0 * t3 + 3.0 * t2;
+                double h11 = t3 - t2;
+                double xx = x0 + h * t;
+                double yy = h00 * y0 + h10 * h * m[i] + h01 * y1 + h11 * h * m[i + 1];
+                out.add(new Point(clampD(xx, minX, maxX), clampD(yy, minY, maxY)));
             }
         }
         return out;
     }
 
-    private static double catmullRom(double p0, double p1, double p2, double p3, double t) {
-        double t2 = t * t;
-        double t3 = t2 * t;
-        return 0.5 * ((2.0 * p1)
-                + (-p0 + p2) * t
-                + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2
-                + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3);
-    }
-
-    private static Range rangeForThroughput(
-            LineMode mode,
-            double[] production,
-            double[] consumption,
-            double[] net,
-            boolean[] validMask
-    ) {
-        double min = Double.POSITIVE_INFINITY;
-        double max = Double.NEGATIVE_INFINITY;
-        for (int i = 0; i < production.length; i++) {
-            if (!validMask[i]) {
+    private static void fillArea(List<List<Point>> segments, RectBounds bounds, int color) {
+        int premult = premultiply(color);
+        int r = (premult >>> 16) & 0xFF;
+        int g = (premult >>> 8) & 0xFF;
+        int b = premult & 0xFF;
+        int a = (premult >>> 24) & 0xFF;
+        double bottom = bounds.maxY;
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        boolean hasGeometry = false;
+        for (List<Point> segment : segments) {
+            if (segment.size() < 2) {
                 continue;
             }
+            int startColumn = clamp((int) Math.floor(segment.getFirst().x), (int) Math.floor(bounds.minX), (int) Math.ceil(bounds.maxX));
+            int endColumn = clamp((int) Math.ceil(segment.getLast().x), (int) Math.floor(bounds.minX), (int) Math.ceil(bounds.maxX));
+            if (endColumn <= startColumn) {
+                continue;
+            }
+
+            double[] top = new double[endColumn - startColumn];
+            Arrays.fill(top, Double.NaN);
+
+            for (int i = 0; i + 1 < segment.size(); i++) {
+                Point p0 = clampPoint(segment.get(i), bounds);
+                Point p1 = clampPoint(segment.get(i + 1), bounds);
+                if (Math.abs(p1.x - p0.x) < 1.0E-6 && Math.abs(p1.y - p0.y) < 1.0E-6) {
+                    continue;
+                }
+                rasterizeAreaColumns(top, startColumn, endColumn, p0, p1, bounds);
+            }
+
+            for (int column = startColumn; column < endColumn; column++) {
+                double yTop = top[column - startColumn];
+                if (!Double.isFinite(yTop)) {
+                    continue;
+                }
+                double xl = clampD(column, bounds.minX, bounds.maxX);
+                double xr = clampD(column + 1.0, bounds.minX, bounds.maxX);
+                if (xr - xl < 1.0E-6) {
+                    continue;
+                }
+                addFillQuad(buffer, xl, xr, yTop, yTop, bottom, r, g, b, a);
+                hasGeometry = true;
+            }
+        }
+        if (!hasGeometry) {
+            return;
+        }
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        MeshData mesh = buffer.buildOrThrow();
+        BufferUploader.drawWithShader(mesh);
+    }
+
+    private static void drawSeries(List<List<Point>> segments, RectBounds bounds, int color, LineStyle lineStyle, int sampleScale) {
+        int rgb = color & 0x00FFFFFF;
+        for (List<Point> segment : segments) {
+            for (int i = 0; i + 1 < segment.size(); i++) {
+                ClippedSegment clipped = clipSegment(segment.get(i), segment.get(i + 1), bounds);
+                if (clipped == null) {
+                    continue;
+                }
+                drawAaLine(
+                        clipped.a,
+                        clipped.b,
+                        rgb,
+                        lineStyle.coreWidth(),
+                        lineStyle.glowWidth(),
+                        lineStyle.feather(),
+                        lineStyle.coreAlpha(),
+                        lineStyle.glowAlpha(),
+                        bounds,
+                        sampleScale
+                );
+            }
+        }
+    }
+
+    private static void drawSeriesAtOffset(
+            List<List<Point>> segments,
+            RectBounds bounds,
+            int color,
+            LineStyle lineStyle,
+            int sampleScale,
+            double offsetX,
+            double offsetY
+    ) {
+        int rgb = color & 0x00FFFFFF;
+        for (List<Point> segment : segments) {
+            for (int i = 0; i + 1 < segment.size(); i++) {
+                Point a = new Point(segment.get(i).x + offsetX, segment.get(i).y + offsetY);
+                Point b = new Point(segment.get(i + 1).x + offsetX, segment.get(i + 1).y + offsetY);
+                ClippedSegment clipped = clipSegment(a, b, bounds);
+                if (clipped == null) {
+                    continue;
+                }
+                drawAaLine(
+                        clipped.a,
+                        clipped.b,
+                        rgb,
+                        lineStyle.coreWidth(),
+                        lineStyle.glowWidth(),
+                        lineStyle.feather(),
+                        lineStyle.coreAlpha(),
+                        lineStyle.glowAlpha(),
+                        bounds,
+                        sampleScale
+                );
+            }
+        }
+    }
+
+    private static void drawAaLine(
+            Point a,
+            Point b,
+            int rgb,
+            float coreWidth,
+            float glowWidth,
+            float feather,
+            float coreAlpha,
+            float glowAlpha,
+            RectBounds bounds,
+            int sampleScale
+    ) {
+        ShaderInstance shader = ChartRenderShaders.chartLineShader();
+        float scaledCoreWidth = coreWidth * sampleScale;
+        float scaledGlowWidth = glowWidth * sampleScale;
+        float scaledFeather = feather * sampleScale;
+        if (shader == null) {
+            drawFallbackLine(a, b, rgb, scaledGlowWidth, glowAlpha);
+            drawFallbackLine(a, b, rgb, scaledCoreWidth, coreAlpha);
+            return;
+        }
+
+        float outerHalf = Math.max(scaledCoreWidth, scaledGlowWidth) * 0.5f + scaledFeather;
+        double dx = b.x - a.x;
+        double dy = b.y - a.y;
+        double len = Math.hypot(dx, dy);
+        double tx = len > 1.0E-6 ? dx / len : 1.0;
+        double ty = len > 1.0E-6 ? dy / len : 0.0;
+        double nx = -ty;
+        double ny = tx;
+
+        Point s = new Point(a.x - tx * outerHalf, a.y - ty * outerHalf);
+        Point e = new Point(b.x + tx * outerHalf, b.y + ty * outerHalf);
+        Point v0 = new Point(s.x - nx * outerHalf, s.y - ny * outerHalf);
+        Point v1 = new Point(e.x - nx * outerHalf, e.y - ny * outerHalf);
+        Point v2 = new Point(e.x + nx * outerHalf, e.y + ny * outerHalf);
+        Point v3 = new Point(s.x + nx * outerHalf, s.y + ny * outerHalf);
+
+        RenderSystem.setShader(() -> shader);
+        setUniform(shader, "LineStartEnd", (float) a.x, (float) a.y, (float) b.x, (float) b.y);
+        setUniform(shader, "LineMetrics", scaledCoreWidth * 0.5f, scaledGlowWidth * 0.5f, scaledFeather, glowAlpha);
+        setUniform(shader, "LineColor", red01(rgb), green01(rgb), blue01(rgb), coreAlpha);
+
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION);
+        addPositionVertex(buffer, v0);
+        addPositionVertex(buffer, v1);
+        addPositionVertex(buffer, v2);
+        addPositionVertex(buffer, v3);
+        MeshData mesh = buffer.buildOrThrow();
+        BufferUploader.drawWithShader(mesh);
+    }
+
+    private static void downsample(RenderTarget source, RenderTarget target, int sourceW, int sourceH, int targetW, int targetH, LineStyle lineStyle) {
+        ShaderInstance shader = ChartRenderShaders.chartDownsampleShader();
+        if (shader == null) {
+            downsampleFallback(source, target, targetW, targetH);
+            return;
+        }
+
+        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
+        ScissorState scissorState = captureScissorState();
+        target.bindWrite(true);
+        RenderSystem.viewport(0, 0, targetW, targetH);
+        RenderSystem.disableDepthTest();
+        RenderSystem.disableCull();
+        RenderSystem.disableBlend();
+        RenderSystem.disableScissor();
+
+        ProjectionState projectionState = pushProjection(targetW, targetH);
+        try {
+            clearTarget(target);
+            target.bindWrite(true);
+            RenderSystem.viewport(0, 0, targetW, targetH);
+            RenderSystem.setShader(() -> shader);
+            RenderSystem.setShaderTexture(0, source.getColorTextureId());
+            setUniform(shader, "InvSourceSize", 1.0f / sourceW, 1.0f / sourceH);
+            setUniform(shader, "SampleScale", (float) lineStyle.supersample());
+            setUniform(shader, "ResolveParams", lineStyle.resolveEdgeWeight(), lineStyle.resolveInnerWeight(), lineStyle.resolveAlphaBoost(), 0.0f);
+
+            Tesselator tesselator = Tesselator.getInstance();
+            BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION);
+            buffer.addVertex(0.0f, 0.0f, 0.0f);
+            buffer.addVertex(0.0f, targetH, 0.0f);
+            buffer.addVertex(targetW, targetH, 0.0f);
+            buffer.addVertex(targetW, 0.0f, 0.0f);
+            MeshData mesh = buffer.buildOrThrow();
+            BufferUploader.drawWithShader(mesh);
+        } finally {
+            popProjection(projectionState);
+            main.bindWrite(true);
+            restoreScissorState(scissorState);
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+        }
+    }
+
+    private static void drawFallbackLine(Point a, Point b, int rgb, float width, float alpha) {
+        if (alpha <= 0.0f || width <= 0.0f) {
+            return;
+        }
+
+        double dx = b.x - a.x;
+        double dy = b.y - a.y;
+        double len = Math.hypot(dx, dy);
+        if (len <= 1.0E-6) {
+            return;
+        }
+
+        double half = width * 0.5;
+        double nx = -dy / len * half;
+        double ny = dx / len * half;
+        int argb = ((clamp(Math.round(alpha * 255.0f), 0, 255) & 0xFF) << 24) | (rgb & 0x00FFFFFF);
+
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
+        int r = (argb >>> 16) & 0xFF;
+        int g = (argb >>> 8) & 0xFF;
+        int bColor = argb & 0xFF;
+        int aColor = (argb >>> 24) & 0xFF;
+        addColorVertex(buffer, (float) (a.x - nx), (float) (a.y - ny), r, g, bColor, aColor);
+        addColorVertex(buffer, (float) (b.x - nx), (float) (b.y - ny), r, g, bColor, aColor);
+        addColorVertex(buffer, (float) (b.x + nx), (float) (b.y + ny), r, g, bColor, aColor);
+        addColorVertex(buffer, (float) (a.x + nx), (float) (a.y + ny), r, g, bColor, aColor);
+        RenderSystem.setShader(GameRenderer::getPositionColorShader);
+        MeshData mesh = buffer.buildOrThrow();
+        BufferUploader.drawWithShader(mesh);
+    }
+
+    private static void downsampleFallback(RenderTarget source, RenderTarget target, int targetW, int targetH) {
+        source.setFilterMode(GL11C.GL_LINEAR);
+
+        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
+        ScissorState scissorState = captureScissorState();
+        target.bindWrite(true);
+        RenderSystem.viewport(0, 0, targetW, targetH);
+        RenderSystem.disableDepthTest();
+        RenderSystem.disableCull();
+        RenderSystem.disableBlend();
+        RenderSystem.disableScissor();
+
+        ProjectionState projectionState = pushProjection(targetW, targetH);
+        try {
+            clearTarget(target);
+            target.bindWrite(true);
+            RenderSystem.viewport(0, 0, targetW, targetH);
+            RenderSystem.setShader(GameRenderer::getPositionTexShader);
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+            RenderSystem.setShaderTexture(0, source.getColorTextureId());
+
+            Tesselator tesselator = Tesselator.getInstance();
+            BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+            buffer.addVertex(0.0f, 0.0f, 0.0f).setUv(0.0f, 1.0f);
+            buffer.addVertex(0.0f, targetH, 0.0f).setUv(0.0f, 0.0f);
+            buffer.addVertex(targetW, targetH, 0.0f).setUv(1.0f, 0.0f);
+            buffer.addVertex(targetW, 0.0f, 0.0f).setUv(1.0f, 1.0f);
+            MeshData mesh = buffer.buildOrThrow();
+            BufferUploader.drawWithShader(mesh);
+        } finally {
+            popProjection(projectionState);
+            main.bindWrite(true);
+            restoreScissorState(scissorState);
+            source.setFilterMode(GL11C.GL_NEAREST);
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+        }
+    }
+
+    private static void drawLayer(GuiGraphics gfx, UiRect plot, CachedChartTexture layer) {
+        if (layer == null || layer == CachedChartTexture.EMPTY || layer.lowRes == null) {
+            return;
+        }
+
+        RenderSystem.enableBlend();
+        RenderSystem.defaultBlendFunc();
+        RenderSystem.disableDepthTest();
+        RenderSystem.setShader(GameRenderer::getPositionTexShader);
+        RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
+        RenderSystem.setShaderTexture(0, layer.lowRes.getColorTextureId());
+
+        Matrix4f pose = gfx.pose().last().pose();
+        Tesselator tesselator = Tesselator.getInstance();
+        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
+        buffer.addVertex(pose, plot.x(), plot.y(), 0.0f).setUv(0.0f, 1.0f);
+        buffer.addVertex(pose, plot.x(), plot.bottom(), 0.0f).setUv(0.0f, 0.0f);
+        buffer.addVertex(pose, plot.right(), plot.bottom(), 0.0f).setUv(1.0f, 0.0f);
+        buffer.addVertex(pose, plot.right(), plot.y(), 0.0f).setUv(1.0f, 1.0f);
+        MeshData mesh = buffer.buildOrThrow();
+        BufferUploader.drawWithShader(mesh);
+    }
+
+    private static void drawDirectVectorDebug(
+            GuiGraphics gfx,
+            Font font,
+            UiRect plot,
+            List<OverviewViewModel.FlowPoint> series,
+            ChartPage page,
+            LineMode lineMode,
+            SmoothingMode smoothingMode,
+            LineStyle lineStyle
+    ) {
+        int n = series.size();
+        double[] p = new double[n];
+        double[] c = new double[n];
+        double[] net = new double[n];
+        double[] stock = new double[n];
+        boolean[] fm = new boolean[n];
+        boolean[] sm = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            OverviewViewModel.FlowPoint point = series.get(i);
+            p[i] = point.production();
+            c[i] = point.consumption();
+            net[i] = point.net();
+            stock[i] = point.stock();
+            fm[i] = point.hasFlow();
+            sm[i] = point.hasStock();
+        }
+
+        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
+        RectBounds bounds = new RectBounds(
+                plot.x() + plotMinX(1),
+                plot.y() + plotMinY(1),
+                plot.x() + maxCoordX(plot.width(), 1),
+                plot.y() + maxCoordY(plot.height(), 1)
+        );
+
+        gfx.enableScissor(plot.x() + 1, plot.y() + 1, plot.right() - 1, plot.bottom() - 1);
+        ProjectionState projectionState = pushProjection(gfx.guiWidth(), gfx.guiHeight());
+        try {
+            RenderSystem.enableBlend();
+            RenderSystem.disableDepthTest();
+            RenderSystem.disableCull();
+            RenderSystem.blendFuncSeparate(
+                    GlStateManager.SourceFactor.ONE,
+                    GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
+                    GlStateManager.SourceFactor.ONE,
+                    GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA
+            );
+
+            if (page == ChartPage.THROUGHPUT) {
+                double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
+                double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
+                double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
+                Range range = rangeThroughput(lineMode, ps, cs, ns, fm);
+                if (range.min < 0.0 && range.max > 0.0) {
+                    double zy = plot.y() + valueY4(0.0, range.min, range.max, plot.height(), 1);
+                    drawAaLine(
+                            new Point(bounds.minX, zy),
+                            new Point(bounds.maxX, zy),
+                            0xBBD5F3,
+                            lineStyle.zeroWidth(),
+                            lineStyle.zeroWidth(),
+                            lineStyle.feather(),
+                            lineStyle.zeroAlpha(),
+                            0.0f,
+                            bounds,
+                            1
+                    );
+                }
+                if (lineMode.showProduction()) {
+                    drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), ps, fm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.CYAN, lineStyle, 1);
+                }
+                if (lineMode.showConsumption()) {
+                    drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), cs, fm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.AMBER, lineStyle, 1);
+                }
+                if (lineMode.showNet()) {
+                    drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), ns, fm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.EMERALD, lineStyle, 1);
+                }
+                return;
+            }
+
+            double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
+            Range range = rangeSingle(ss, sm);
+            drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), ss, sm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.BLUE, lineStyle, 1);
+        } finally {
+            popProjection(projectionState);
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+            gfx.disableScissor();
+        }
+    }
+
+    private static void drawOverlayFallback(
+            GuiGraphics gfx,
+            Font font,
+            UiRect plot,
+            List<OverviewViewModel.FlowPoint> series,
+            ChartPage page,
+            LineMode lineMode,
+            SmoothingMode smoothingMode,
+            LineStyle lineStyle,
+            boolean debugMode,
+            boolean drawSeriesFallback
+    ) {
+        int n = series.size();
+        double[] p = new double[n];
+        double[] c = new double[n];
+        double[] net = new double[n];
+        double[] stock = new double[n];
+        boolean[] fm = new boolean[n];
+        boolean[] sm = new boolean[n];
+        for (int i = 0; i < n; i++) {
+            OverviewViewModel.FlowPoint point = series.get(i);
+            p[i] = point.production();
+            c[i] = point.consumption();
+            net[i] = point.net();
+            stock[i] = point.stock();
+            fm[i] = point.hasFlow();
+            sm[i] = point.hasStock();
+        }
+
+        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
+        if (debugMode) {
+            gfx.fill(plot.right() - 4, plot.y() + 2, plot.right() - 2, plot.y() + 4, 0xFFFF4DFF);
+        }
+
+        if (page == ChartPage.THROUGHPUT) {
+            double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
+            double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
+            double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
+            Range range = rangeThroughput(lineMode, ps, cs, ns, fm);
+            if (drawSeriesFallback && lineMode.showProduction()) {
+                drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), ps, fm, range.min, range.max, smooth), UiThemeTokens.CYAN, debugMode, lineStyle.supersample());
+            }
+            if (drawSeriesFallback && lineMode.showConsumption()) {
+                drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), cs, fm, range.min, range.max, smooth), UiThemeTokens.AMBER, debugMode, lineStyle.supersample());
+            }
+            if (drawSeriesFallback && lineMode.showNet()) {
+                drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), ns, fm, range.min, range.max, smooth), UiThemeTokens.EMERALD, debugMode, lineStyle.supersample());
+            }
+            if (debugMode) {
+                drawDebugScale(gfx, font, plot, range, lastValidValue(lineMode, ps, cs, ns, fm));
+            }
+            return;
+        }
+
+        double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
+        Range range = rangeSingle(ss, sm);
+        if (drawSeriesFallback) {
+            drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), ss, sm, range.min, range.max, smooth), UiThemeTokens.BLUE, debugMode, lineStyle.supersample());
+        }
+        if (debugMode) {
+            drawDebugScale(gfx, font, plot, range, lastValidValue(ss, sm));
+        }
+    }
+
+    private static void drawDebugSeries(GuiGraphics gfx, UiRect plot, List<List<Point>> segments, int color, boolean debugMode, int sampleScale) {
+        int core = 0xFF000000 | (color & 0x00FFFFFF);
+        for (List<Point> segment : segments) {
+            for (int i = 0; i + 1 < segment.size(); i++) {
+                Point a = segment.get(i);
+                Point b = segment.get(i + 1);
+                int x0 = plot.x() + clamp((int) Math.round(a.x / sampleScale), 1, Math.max(1, plot.width() - 2));
+                int y0 = plot.y() + clamp((int) Math.round(a.y / sampleScale), 1, Math.max(1, plot.height() - 2));
+                int x1 = plot.x() + clamp((int) Math.round(b.x / sampleScale), 1, Math.max(1, plot.width() - 2));
+                int y1 = plot.y() + clamp((int) Math.round(b.y / sampleScale), 1, Math.max(1, plot.height() - 2));
+                RenderUtils.drawLine(gfx, x0, y0, x1, y1, core);
+                if (debugMode) {
+                    gfx.fill(x1 - 1, y1 - 1, x1 + 1, y1 + 1, 0xAAFFFFFF);
+                }
+            }
+        }
+    }
+
+    private static void drawDebugScale(GuiGraphics gfx, Font font, UiRect plot, Range range, double last) {
+        String maxText = "max " + formatMetric(range.max);
+        String minText = "min " + formatMetric(range.min);
+        String lastText = "last " + formatMetric(last);
+        gfx.drawString(font, maxText, plot.x() + 6, plot.y() + 14, 0xFFD7E7FF);
+        gfx.drawString(font, minText, plot.x() + 6, plot.bottom() - 10, 0xFFB8C4D4);
+        gfx.drawString(font, lastText, plot.right() - font.width(lastText) - 6, plot.y() + 14, 0xFFFFE083);
+    }
+
+    private static void drawPipelineBadge(GuiGraphics gfx, Font font, UiRect plot, CachedChartTexture layer, boolean useDirectFallback) {
+        String suffix = layer == null || layer == CachedChartTexture.EMPTY
+                ? "H0 L0"
+                : "H" + (layer.highResVisible() ? "1" : "0") + " L" + (layer.lowResVisible() ? "1" : "0");
+        String text = (useDirectFallback ? "PIPELINE: FALLBACK " : "PIPELINE: GPU ") + suffix;
+        int textColor = useDirectFallback ? 0xFFFFA6A6 : 0xFF9FFFC7;
+        int bgColor = useDirectFallback ? 0xCC4A1620 : 0xCC143524;
+        int borderColor = useDirectFallback ? 0xFFE45A7A : 0xFF38D980;
+        int width = font.width(text) + 8;
+        UiRect badge = new UiRect(plot.right() - width - 6, plot.bottom() - 16, width, 12);
+        gfx.fill(badge.x(), badge.y(), badge.right(), badge.bottom(), bgColor);
+        RenderUtils.drawBorder(gfx, badge, borderColor);
+        gfx.drawString(font, text, badge.x() + 4, badge.y() + 2, textColor);
+    }
+
+    private static void drawPipelineBadge(GuiGraphics gfx, Font font, UiRect plot, String text) {
+        int width = font.width(text) + 8;
+        UiRect badge = new UiRect(plot.right() - width - 6, plot.bottom() - 16, width, 12);
+        gfx.fill(badge.x(), badge.y(), badge.right(), badge.bottom(), 0xCC143524);
+        RenderUtils.drawBorder(gfx, badge, 0xFF38D980);
+        gfx.drawString(font, text, badge.x() + 4, badge.y() + 2, 0xFF9FFFC7);
+    }
+
+    private static double lastValidValue(LineMode lineMode, double[] p, double[] c, double[] n, boolean[] mask) {
+        double last = 0.0;
+        for (int i = 0; i < mask.length; i++) {
+            if (!mask[i]) {
+                continue;
+            }
+            if (lineMode.showNet()) {
+                last = n[i];
+            } else if (lineMode.showConsumption()) {
+                last = c[i];
+            } else {
+                last = p[i];
+            }
+        }
+        return last;
+    }
+
+    private static double lastValidValue(double[] values, boolean[] mask) {
+        double last = 0.0;
+        for (int i = 0; i < mask.length; i++) {
+            if (mask[i]) {
+                last = values[i];
+            }
+        }
+        return last;
+    }
+
+    private static List<List<Point>> offsetSegments(List<List<Point>> segments, double dx, double dy) {
+        List<List<Point>> shifted = new ArrayList<>(segments.size());
+        for (List<Point> segment : segments) {
+            List<Point> shiftedSegment = new ArrayList<>(segment.size());
+            for (Point point : segment) {
+                shiftedSegment.add(new Point(point.x + dx, point.y + dy));
+            }
+            shifted.add(shiftedSegment);
+        }
+        return shifted;
+    }
+
+    private static String formatMetric(double value) {
+        double abs = Math.abs(value);
+        if (abs >= 1_000_000_000.0) {
+            return String.format(java.util.Locale.ROOT, "%.2fB", value / 1_000_000_000.0);
+        }
+        if (abs >= 1_000_000.0) {
+            return String.format(java.util.Locale.ROOT, "%.2fM", value / 1_000_000.0);
+        }
+        if (abs >= 1_000.0) {
+            return String.format(java.util.Locale.ROOT, "%.2fK", value / 1_000.0);
+        }
+        return String.format(java.util.Locale.ROOT, "%.2f", value);
+    }
+
+    private static Range rangeThroughput(LineMode mode, double[] p, double[] c, double[] n, boolean[] mask) {
+        double min = Double.POSITIVE_INFINITY;
+        double max = Double.NEGATIVE_INFINITY;
+        for (int i = 0; i < p.length; i++) {
+            if (!mask[i]) continue;
             if (mode.showProduction()) {
-                min = Math.min(min, production[i]);
-                max = Math.max(max, production[i]);
+                min = Math.min(min, p[i]);
+                max = Math.max(max, p[i]);
             }
             if (mode.showConsumption()) {
-                min = Math.min(min, consumption[i]);
-                max = Math.max(max, consumption[i]);
+                min = Math.min(min, c[i]);
+                max = Math.max(max, c[i]);
             }
             if (mode.showNet()) {
-                min = Math.min(min, net[i]);
-                max = Math.max(max, net[i]);
+                min = Math.min(min, n[i]);
+                max = Math.max(max, n[i]);
             }
         }
-        if (!Double.isFinite(min) || !Double.isFinite(max)) {
-            return new Range(0.0, 1.0);
-        }
-        if (Math.abs(max - min) < 1.0E-6) {
-            return new Range(min, min + 1.0);
-        }
+        if (!Double.isFinite(min) || !Double.isFinite(max)) return new Range(0.0, 1.0);
+        if (Math.abs(max - min) < 1.0E-6) return new Range(min, min + 1.0);
         return new Range(min, max);
     }
 
-    private static Range rangeForSingle(double[] values, boolean[] validMask) {
+    private static Range rangeSingle(double[] values, boolean[] mask) {
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
         for (int i = 0; i < values.length; i++) {
-            if (!validMask[i]) {
-                continue;
-            }
+            if (!mask[i]) continue;
             min = Math.min(min, values[i]);
             max = Math.max(max, values[i]);
         }
-        if (!Double.isFinite(min) || !Double.isFinite(max)) {
-            return new Range(0.0, 1.0);
-        }
-        if (Math.abs(max - min) < 1.0E-6) {
-            return new Range(min, min + 1.0);
-        }
+        if (!Double.isFinite(min) || !Double.isFinite(max)) return new Range(0.0, 1.0);
+        if (Math.abs(max - min) < 1.0E-6) return new Range(min, min + 1.0);
         return new Range(min, max);
     }
 
@@ -478,20 +1129,14 @@ public final class ChartRenderer {
         double[] out = Arrays.copyOf(values, values.length);
         int i = 0;
         while (i < values.length) {
-            while (i < values.length && !validMask[i]) {
-                i++;
-            }
-            if (i >= values.length) {
-                break;
-            }
-            int start = i;
-            while (i < values.length && validMask[i]) {
-                i++;
-            }
-            int end = i - 1;
-            double ema = values[start];
-            out[start] = ema;
-            for (int j = start + 1; j <= end; j++) {
+            while (i < values.length && !validMask[i]) i++;
+            if (i >= values.length) break;
+            int s = i;
+            while (i < values.length && validMask[i]) i++;
+            int e = i - 1;
+            double ema = values[s];
+            out[s] = ema;
+            for (int j = s + 1; j <= e; j++) {
                 ema = ema * 0.55 + values[j] * 0.45;
                 out[j] = ema;
             }
@@ -501,16 +1146,16 @@ public final class ChartRenderer {
 
     private static long seriesFingerprint(List<OverviewViewModel.FlowPoint> series) {
         long hash = 0xCBF29CE484222325L;
-        for (OverviewViewModel.FlowPoint point : series) {
-            hash ^= point.slotIndex();
+        for (OverviewViewModel.FlowPoint p : series) {
+            hash ^= p.slotIndex();
             hash *= 0x100000001B3L;
-            hash = mix(hash, point.production());
-            hash = mix(hash, point.consumption());
-            hash = mix(hash, point.net());
-            hash = mix(hash, point.stock());
-            hash ^= point.hasFlow() ? 0x9E3779B97F4A7C15L : 0xC2B2AE3D27D4EB4FL;
+            hash = mix(hash, p.production());
+            hash = mix(hash, p.consumption());
+            hash = mix(hash, p.net());
+            hash = mix(hash, p.stock());
+            hash ^= p.hasFlow() ? 0x9E3779B97F4A7C15L : 0xC2B2AE3D27D4EB4FL;
             hash *= 0x100000001B3L;
-            hash ^= point.hasStock() ? 0x165667B19E3779F9L : 0x85EBCA77C2B2AE63L;
+            hash ^= p.hasStock() ? 0x165667B19E3779F9L : 0x85EBCA77C2B2AE63L;
             hash *= 0x100000001B3L;
         }
         return hash;
@@ -522,29 +1167,313 @@ public final class ChartRenderer {
         return seed;
     }
 
-    private static double toX(int index, int size, UiRect plot) {
-        if (size <= 1) {
-            return plot.x() + 1.0;
-        }
-        return plot.x() + 1.0 + (index / (double) (size - 1)) * (plot.width() - 3.0);
+    private static double x4(int index, int size, int hw, int sampleScale) {
+        double min = plotMinX(sampleScale);
+        double max = maxCoordX(hw, sampleScale);
+        if (size <= 1) return min;
+        return min + (index / (double) (size - 1)) * (max - min);
     }
 
-    private static double valueToY(double value, double min, double max, UiRect plot) {
+    private static double valueY4(double value, double min, double max, int hh, int sampleScale) {
+        double low = plotMinY(sampleScale);
+        double high = maxCoordY(hh, sampleScale);
         double range = Math.max(1.0E-6, max - min);
         double ratio = (value - min) / range;
-        return plot.bottom() - 2.0 - ratio * (plot.height() - 3.0);
+        return high - ratio * (high - low);
     }
 
-    private static int withAlpha(int color, int alpha) {
-        return (clamp(alpha, 0, 255) << 24) | (color & 0x00FFFFFF);
+    private static double plotMinX(int sampleScale) {
+        return sampleScale * PLOT_PAD_X_SCALE;
     }
 
-    private static double lerp(double a, double b, double t) {
-        return a + (b - a) * t;
+    private static double plotMinY(int sampleScale) {
+        return sampleScale * PLOT_PAD_TOP_SCALE;
     }
 
-    private static int clamp(int value, int min, int max) {
-        return Math.max(min, Math.min(max, value));
+    private static double maxCoordX(int extent, int sampleScale) {
+        return Math.max(plotMinX(sampleScale), extent - sampleScale * PLOT_PAD_END_SCALE);
+    }
+
+    private static double maxCoordY(int extent, int sampleScale) {
+        return Math.max(plotMinY(sampleScale), extent - sampleScale * PLOT_PAD_END_SCALE);
+    }
+
+    private static void drawHeaderButton(GuiGraphics gfx, Font font, UiRect rect, String text, boolean active, boolean enabled) {
+        int bg = active ? 0xAA23456A : UiThemeTokens.TAB_INACTIVE;
+        int border = active ? UiThemeTokens.CYAN : UiThemeTokens.SECTION_BORDER;
+        int textColor = active ? UiThemeTokens.TEXT : UiThemeTokens.TEXT_MUTED;
+        if (!enabled) {
+            bg = 0x66192334;
+            border = 0x664A5B72;
+            textColor = 0xFF8A97AA;
+        }
+        gfx.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), bg);
+        RenderUtils.drawBorder(gfx, rect, border);
+        gfx.drawString(font, RenderUtils.ellipsis(font, text, rect.width() - 8), rect.x() + 4, rect.y() + 3, textColor);
+    }
+
+    private static void withTarget(RenderTarget target, int width, int height, RectBounds bounds, Runnable runnable) {
+        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
+        ScissorState scissorState = captureScissorState();
+        target.bindWrite(true);
+        RenderSystem.viewport(0, 0, width, height);
+        RenderSystem.disableDepthTest();
+        RenderSystem.disableCull();
+        RenderSystem.disableScissor();
+        RenderSystem.enableBlend();
+        RenderSystem.blendFuncSeparate(
+                GlStateManager.SourceFactor.ONE,
+                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
+                GlStateManager.SourceFactor.ONE,
+                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA
+        );
+
+        ProjectionState projectionState = pushProjection(width, height);
+        try {
+            runnable.run();
+        } finally {
+            popProjection(projectionState);
+            main.bindWrite(true);
+            restoreScissorState(scissorState);
+            RenderSystem.enableBlend();
+            RenderSystem.defaultBlendFunc();
+        }
+    }
+
+    private static ScissorState captureScissorState() {
+        boolean enabled = GL11C.glIsEnabled(GL11C.GL_SCISSOR_TEST);
+        int[] box = new int[4];
+        GL11C.glGetIntegerv(GL11C.GL_SCISSOR_BOX, box);
+        return new ScissorState(enabled, box[0], box[1], box[2], box[3]);
+    }
+
+    private static void restoreScissorState(ScissorState state) {
+        if (state == null || !state.enabled) {
+            RenderSystem.disableScissor();
+            return;
+        }
+        RenderSystem.enableScissor(state.x, state.y, state.width, state.height);
+    }
+
+    private static boolean detectVisibleContent(RenderTarget target, int width, int height, boolean exhaustive) {
+        if (target == null || width <= 0 || height <= 0) {
+            return false;
+        }
+
+        ScissorState scissorState = captureScissorState();
+        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
+
+        try {
+            target.bindWrite(false);
+            RenderSystem.disableScissor();
+            if (exhaustive) {
+                ByteBuffer pixels = BufferUtils.createByteBuffer(width * height * 4);
+                GL11C.glReadPixels(0, 0, width, height, GL11C.GL_RGBA, GL11C.GL_UNSIGNED_BYTE, pixels);
+                for (int i = 3; i < pixels.limit(); i += 4) {
+                    if ((pixels.get(i) & 0xFF) > 1) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+
+            ByteBuffer pixel = BufferUtils.createByteBuffer(4);
+            int sampleCols = Math.max(4, Math.min(10, width / 24));
+            int sampleRows = Math.max(3, Math.min(8, height / 18));
+            for (int row = 0; row < sampleRows; row++) {
+                int py = sampleRows == 1
+                        ? height / 2
+                        : Math.round(row * (Math.max(1, height - 1)) / (float) (sampleRows - 1));
+                for (int col = 0; col < sampleCols; col++) {
+                    int px = sampleCols == 1
+                            ? width / 2
+                            : Math.round(col * (Math.max(1, width - 1)) / (float) (sampleCols - 1));
+                    pixel.clear();
+                    GL11C.glReadPixels(
+                            clamp(px, 0, Math.max(0, width - 1)),
+                            clamp(py, 0, Math.max(0, height - 1)),
+                            1,
+                            1,
+                            GL11C.GL_RGBA,
+                            GL11C.GL_UNSIGNED_BYTE,
+                            pixel
+                    );
+                    if ((pixel.get(3) & 0xFF) > 8) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        } finally {
+            main.bindWrite(true);
+            restoreScissorState(scissorState);
+        }
+    }
+
+    private static ProjectionState pushProjection(int width, int height) {
+        RenderSystem.backupProjectionMatrix();
+        RenderSystem.setProjectionMatrix(new Matrix4f().setOrtho(0.0f, width, height, 0.0f, -1000.0f, 1000.0f), VertexSorting.ORTHOGRAPHIC_Z);
+        Matrix4fStack modelView = RenderSystem.getModelViewStack();
+        modelView.pushMatrix();
+        modelView.identity();
+        RenderSystem.applyModelViewMatrix();
+        return new ProjectionState(modelView);
+    }
+
+    private static void popProjection(ProjectionState state) {
+        state.modelView.popMatrix();
+        RenderSystem.applyModelViewMatrix();
+        RenderSystem.restoreProjectionMatrix();
+    }
+
+    private static void clearTarget(RenderTarget target) {
+        if (target == null) {
+            return;
+        }
+        ScissorState scissorState = captureScissorState();
+        RenderSystem.disableScissor();
+        target.setClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        try {
+            target.clear(Minecraft.ON_OSX);
+        } finally {
+            restoreScissorState(scissorState);
+        }
+    }
+
+    private static void addColorVertex(BufferBuilder buffer, float x, float y, int r, int g, int b, int a) {
+        buffer.addVertex(x, y, 0.0f).setColor(r, g, b, a);
+    }
+
+    private static void addFillQuad(BufferBuilder buffer, double xl, double xr, double yLeft, double yRight, double bottom, int r, int g, int b, int a) {
+        addColorVertex(buffer, (float) xl, (float) bottom, r, g, b, a);
+        addColorVertex(buffer, (float) xl, (float) yLeft, r, g, b, a);
+        addColorVertex(buffer, (float) xr, (float) yRight, r, g, b, a);
+        addColorVertex(buffer, (float) xr, (float) bottom, r, g, b, a);
+    }
+
+    private static void rasterizeAreaColumns(double[] top, int startColumn, int endColumn, Point p0, Point p1, RectBounds bounds) {
+        if (Math.abs(p1.x - p0.x) < 1.0E-6) {
+            int column = clamp((int) Math.floor(p0.x), startColumn, Math.max(startColumn, endColumn - 1));
+            writeColumnTop(top, startColumn, column, Math.min(p0.y, p1.y));
+            return;
+        }
+
+        double left = Math.max(Math.min(p0.x, p1.x), startColumn);
+        double right = Math.min(Math.max(p0.x, p1.x), endColumn);
+        int colStart = clamp((int) Math.floor(left), startColumn, endColumn);
+        int colEnd = clamp((int) Math.ceil(right), startColumn, endColumn);
+        double dx = p1.x - p0.x;
+        double dy = p1.y - p0.y;
+        for (int column = colStart; column < colEnd; column++) {
+            double sampleX = clampD(column + 0.5, Math.min(p0.x, p1.x), Math.max(p0.x, p1.x));
+            double t = (sampleX - p0.x) / dx;
+            double y = clampD(p0.y + dy * t, bounds.minY, bounds.maxY);
+            writeColumnTop(top, startColumn, column, y);
+        }
+    }
+
+    private static void writeColumnTop(double[] top, int startColumn, int column, double y) {
+        int index = column - startColumn;
+        if (index < 0 || index >= top.length) {
+            return;
+        }
+        if (!Double.isFinite(top[index])) {
+            top[index] = y;
+            return;
+        }
+        top[index] = Math.min(top[index], y);
+    }
+
+    private static void addPositionVertex(BufferBuilder buffer, Point point) {
+        buffer.addVertex((float) point.x, (float) point.y, 0.0f);
+    }
+
+    private static void setUniform(ShaderInstance shader, String name, float v0, float v1) {
+        if (shader.getUniform(name) != null) {
+            shader.getUniform(name).set(v0, v1);
+        }
+    }
+
+    private static void setUniform(ShaderInstance shader, String name, float v0) {
+        if (shader.getUniform(name) != null) {
+            shader.getUniform(name).set(v0);
+        }
+    }
+
+    private static void setUniform(ShaderInstance shader, String name, float v0, float v1, float v2, float v3) {
+        if (shader.getUniform(name) != null) {
+            shader.getUniform(name).set(v0, v1, v2, v3);
+        }
+    }
+
+    private static Point clampPoint(Point point, RectBounds bounds) {
+        return new Point(
+                clampD(point.x, bounds.minX, bounds.maxX),
+                clampD(point.y, bounds.minY, bounds.maxY)
+        );
+    }
+
+    private static ClippedSegment clipSegment(Point a, Point b, RectBounds bounds) {
+        double dx = b.x - a.x;
+        double dy = b.y - a.y;
+        double t0 = 0.0;
+        double t1 = 1.0;
+
+        double[] p = {-dx, dx, -dy, dy};
+        double[] q = {a.x - bounds.minX, bounds.maxX - a.x, a.y - bounds.minY, bounds.maxY - a.y};
+        for (int i = 0; i < 4; i++) {
+            double pi = p[i];
+            double qi = q[i];
+            if (Math.abs(pi) < 1.0E-9) {
+                if (qi < 0.0) {
+                    return null;
+                }
+                continue;
+            }
+            double t = qi / pi;
+            if (pi < 0.0) {
+                if (t > t1) return null;
+                if (t > t0) t0 = t;
+            } else {
+                if (t < t0) return null;
+                if (t < t1) t1 = t;
+            }
+        }
+        if (t1 < t0) {
+            return null;
+        }
+        return new ClippedSegment(
+                new Point(a.x + dx * t0, a.y + dy * t0),
+                new Point(a.x + dx * t1, a.y + dy * t1)
+        );
+    }
+
+    private static int premultiply(int color) {
+        int a = (color >>> 24) & 0xFF;
+        int r = (int) Math.round(((color >>> 16) & 0xFF) * (a / 255.0));
+        int g = (int) Math.round(((color >>> 8) & 0xFF) * (a / 255.0));
+        int b = (int) Math.round((color & 0xFF) * (a / 255.0));
+        return (a << 24) | (clamp(r, 0, 255) << 16) | (clamp(g, 0, 255) << 8) | clamp(b, 0, 255);
+    }
+
+    private static float red01(int rgb) {
+        return ((rgb >>> 16) & 0xFF) / 255.0f;
+    }
+
+    private static float green01(int rgb) {
+        return ((rgb >>> 8) & 0xFF) / 255.0f;
+    }
+
+    private static float blue01(int rgb) {
+        return (rgb & 0xFF) / 255.0f;
+    }
+
+    private static int clamp(int v, int min, int max) {
+        return Math.max(min, Math.min(max, v));
+    }
+
+    private static double clampD(double v, double min, double max) {
+        return Math.max(min, Math.min(max, v));
     }
 
     private static String lineModeLabel(LineMode mode) {
@@ -556,54 +1485,38 @@ public final class ChartRenderer {
         };
     }
 
-    private static void drawHeaderButton(
-            GuiGraphics gfx,
-            Font font,
-            UiRect rect,
-            String text,
-            boolean active,
-            boolean enabled
-    ) {
-        int bg = active ? 0xAA23456A : UiThemeTokens.TAB_INACTIVE;
-        if (!enabled) {
-            bg = 0x66192334;
-        }
-        int border = active ? UiThemeTokens.CYAN : UiThemeTokens.SECTION_BORDER;
-        if (!enabled) {
-            border = 0x664A5B72;
-        }
-        int textColor = active ? UiThemeTokens.TEXT : UiThemeTokens.TEXT_MUTED;
-        if (!enabled) {
-            textColor = 0xFF8A97AA;
-        }
-        gfx.fill(rect.x(), rect.y(), rect.right(), rect.bottom(), bg);
-        RenderUtils.drawBorder(gfx, rect, border);
-        gfx.drawString(font, RenderUtils.ellipsis(font, text, rect.width() - 8), rect.x() + 4, rect.y() + 3, textColor);
+    private static LineStyle lineStyleFor(ChartWindow chartWindow) {
+        return DEBUG_DIRECT_LINE_STYLE;
     }
 
     public static final class ChartRenderCache {
         private CacheKey key;
-        private PreparedPlot prepared;
+        private PreparedChart layer;
 
-        public PreparedPlot getOrBuild(CacheKey nextKey, Supplier<PreparedPlot> supplier) {
-            if (prepared == null || key == null || !key.equals(nextKey)) {
-                prepared = supplier.get();
+        public ChartRenderCache() {
+            synchronized (LIVE_CACHES) {
+                LIVE_CACHES.add(this);
+            }
+        }
+
+        public PreparedChart getOrBuild(CacheKey nextKey, Supplier<PreparedChart> renderer) {
+            if (layer == null || key == null || !key.equals(nextKey)) {
+                layer = renderer.get();
                 key = nextKey;
             }
-            return prepared;
+            return layer;
         }
 
         public void clear() {
             key = null;
-            prepared = null;
+            layer = null;
         }
     }
 
     private record CacheKey(
-            int x,
-            int y,
             int width,
             int height,
+            int supersample,
             ChartWindow window,
             ChartPage page,
             LineMode lineMode,
@@ -612,30 +1525,126 @@ public final class ChartRenderer {
     ) {
     }
 
+    private static final class CachedChartTexture implements AutoCloseable {
+        private static final CachedChartTexture EMPTY = new CachedChartTexture(null, null, 0, 0, 0, 0, 0);
+
+        private final RenderTarget highRes;
+        private final RenderTarget lowRes;
+        private final int width;
+        private final int height;
+        private final int highResWidth;
+        private final int highResHeight;
+        private final int sampleScale;
+        private boolean hasVisibleContent;
+        private boolean highResVisible;
+        private boolean lowResVisible;
+
+        private CachedChartTexture(RenderTarget highRes, RenderTarget lowRes, int width, int height, int highResWidth, int highResHeight, int sampleScale) {
+            this.highRes = highRes;
+            this.lowRes = lowRes;
+            this.width = width;
+            this.height = height;
+            this.highResWidth = highResWidth;
+            this.highResHeight = highResHeight;
+            this.sampleScale = sampleScale;
+            this.hasVisibleContent = false;
+            this.highResVisible = false;
+            this.lowResVisible = false;
+        }
+
+        private static CachedChartTexture create(int width, int height, int sampleScale) {
+            if (width <= 0 || height <= 0) {
+                return EMPTY;
+            }
+            int highResWidth = Math.max(1, width * sampleScale);
+            int highResHeight = Math.max(1, height * sampleScale);
+            TextureTarget highRes = new TextureTarget(highResWidth, highResHeight, false, Minecraft.ON_OSX);
+            highRes.setFilterMode(GL11C.GL_NEAREST);
+            TextureTarget lowRes = new TextureTarget(width, height, false, Minecraft.ON_OSX);
+            lowRes.setFilterMode(GL11C.GL_LINEAR);
+            return new CachedChartTexture(highRes, lowRes, width, height, highResWidth, highResHeight, sampleScale);
+        }
+
+        private boolean hasVisibleContent() {
+            return hasVisibleContent;
+        }
+
+        private void setHasVisibleContent(boolean hasVisibleContent) {
+            this.hasVisibleContent = hasVisibleContent;
+        }
+
+        private boolean highResVisible() {
+            return highResVisible;
+        }
+
+        private void setHighResVisible(boolean highResVisible) {
+            this.highResVisible = highResVisible;
+        }
+
+        private boolean lowResVisible() {
+            return lowResVisible;
+        }
+
+        private void setLowResVisible(boolean lowResVisible) {
+            this.lowResVisible = lowResVisible;
+        }
+
+        @Override
+        public void close() {
+            if (highRes != null) {
+                highRes.destroyBuffers();
+            }
+            if (lowRes != null) {
+                lowRes.destroyBuffers();
+            }
+        }
+    }
+
+    private record PreparedChart(
+            RectBounds bounds,
+            Double zeroAxisY,
+            List<PreparedSeries> series,
+            boolean hasVisibleContent
+    ) {
+        private static final PreparedChart EMPTY = new PreparedChart(new RectBounds(0.0, 0.0, 0.0, 0.0), null, List.of(), false);
+    }
+
+    private record PreparedSeries(List<List<Point>> segments, int color) {
+    }
+
     private record Point(double x, double y) {
+    }
+
+    private record ScissorState(boolean enabled, int x, int y, int width, int height) {
+    }
+
+    private record LineStyle(
+            int supersample,
+            float curveSubdivision,
+            float coreWidth,
+            float glowWidth,
+            float feather,
+            float zeroWidth,
+            float coreAlpha,
+            float glowAlpha,
+            float zeroAlpha,
+            int lowResFilter,
+            float resolveEdgeWeight,
+            float resolveInnerWeight,
+            float resolveAlphaBoost
+    ) {
+    }
+
+    private record ClippedSegment(Point a, Point b) {
+    }
+
+    private record RectBounds(double minX, double minY, double maxX, double maxY) {
     }
 
     private record Range(double min, double max) {
     }
 
-    private record PreparedSeries(
-            List<List<Point>> segments,
-            int[] areaTopByX
-    ) {
-        private static PreparedSeries empty() {
-            return new PreparedSeries(List.of(), null);
-        }
-    }
-
-    private record PreparedPlot(
-            ChartPage page,
-            LineMode lineMode,
-            PreparedSeries production,
-            PreparedSeries consumption,
-            PreparedSeries net,
-            PreparedSeries stock,
-            int zeroY
-    ) {
+    private record ProjectionState(Matrix4fStack modelView) {
     }
 
     public enum ChartPage {

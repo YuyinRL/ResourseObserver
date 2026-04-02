@@ -79,6 +79,7 @@
   "screen.resourceobserver.overview.chart.legend.stock": "Stock",
   "screen.resourceobserver.overview.chart.window.day": "24H/5m",
   "screen.resourceobserver.overview.chart.window.week": "7D/30m",
+  "screen.resourceobserver.overview.chart.window.debug": "10m/5s",
   "screen.resourceobserver.overview.chart.mode.all": "All",
   "screen.resourceobserver.overview.chart.mode.production": "Prod",
   "screen.resourceobserver.overview.chart.mode.consumption": "Cons",

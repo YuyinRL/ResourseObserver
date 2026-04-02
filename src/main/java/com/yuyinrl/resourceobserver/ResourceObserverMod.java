@@ -1,14 +1,17 @@
 package com.yuyinrl.resourceobserver;
 
 import com.mojang.logging.LogUtils;
+import com.yuyinrl.resourceobserver.client.ChartRenderShaders;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import com.yuyinrl.resourceobserver.registry.ModBlocks;
 import com.yuyinrl.resourceobserver.registry.ModCreativeTabs;
 import com.yuyinrl.resourceobserver.registry.ModItems;
 import com.yuyinrl.resourceobserver.network.ModNetworking;
+import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.ModContainer;
 import net.neoforged.fml.common.Mod;
+import net.neoforged.fml.loading.FMLEnvironment;
 import org.slf4j.Logger;
 
 @Mod(ResourceObserverMod.MODID)
@@ -22,5 +25,8 @@ public class ResourceObserverMod {
         ModBlockEntities.register(modEventBus);
         ModCreativeTabs.register(modEventBus);
         ModNetworking.register(modEventBus);
+        if (FMLEnvironment.dist == Dist.CLIENT) {
+            ChartRenderShaders.register(modEventBus);
+        }
     }
 }

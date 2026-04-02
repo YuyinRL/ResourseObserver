@@ -23,6 +23,7 @@ public class ObserverHistorySavedData extends SavedData {
     private static final String TAG_HISTORY = "history";
     private static final String TAG_DAY = "day";
     private static final String TAG_WEEK = "week";
+    private static final String TAG_DEBUG_10M = "debug_10m";
     private static final String TAG_LATEST_BUCKET = "latest_bucket";
     private static final String TAG_SLOT_BUCKETS = "slot_buckets";
     private static final String TAG_PRODUCED = "produced";
@@ -157,6 +158,7 @@ public class ObserverHistorySavedData extends SavedData {
             CompoundTag tag = new CompoundTag();
             tag.put(TAG_DAY, windows.get(ChartWindow.DAY_24H_5M).save());
             tag.put(TAG_WEEK, windows.get(ChartWindow.WEEK_7D_30M).save());
+            tag.put(TAG_DEBUG_10M, windows.get(ChartWindow.DEBUG_10M_5S).save());
             return tag;
         }
 
@@ -167,6 +169,9 @@ public class ObserverHistorySavedData extends SavedData {
             }
             if (tag.contains(TAG_WEEK, Tag.TAG_COMPOUND)) {
                 history.windows.put(ChartWindow.WEEK_7D_30M, WindowBuffer.load(ChartWindow.WEEK_7D_30M, tag.getCompound(TAG_WEEK)));
+            }
+            if (tag.contains(TAG_DEBUG_10M, Tag.TAG_COMPOUND)) {
+                history.windows.put(ChartWindow.DEBUG_10M_5S, WindowBuffer.load(ChartWindow.DEBUG_10M_5S, tag.getCompound(TAG_DEBUG_10M)));
             }
             return history;
         }

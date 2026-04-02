@@ -100,6 +100,7 @@ public class ResourceTerminalScreen extends Screen {
     private ChartRenderer.SmoothingMode smoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
 
     private int refreshCounter;
+    private boolean refreshInFlight;
     private int pageScrollPx;
     private int maxPageScrollPx;
     private String selectedItemId;
@@ -173,6 +174,10 @@ public class ResourceTerminalScreen extends Screen {
     }
 
     public void applyPayload(ObserverDataPayload payload) {
+        refreshInFlight = false;
+        if (payload.equals(this.payload)) {
+            return;
+        }
         this.payload = payload;
         this.chartWindow = payload.chartWindow();
         syncScopeFromPayload(payload);
@@ -197,7 +202,7 @@ public class ResourceTerminalScreen extends Screen {
     public void tick() {
         super.tick();
         refreshCounter++;
-        if (refreshCounter >= REFRESH_INTERVAL_TICKS) {
+        if (!refreshInFlight && refreshCounter >= REFRESH_INTERVAL_TICKS) {
             refreshCounter = 0;
             requestRefreshNow();
         }
@@ -260,7 +265,7 @@ public class ResourceTerminalScreen extends Screen {
             }
 
             if (button == 0 && chartWindowButtonHitbox != null && chartWindowButtonHitbox.contains(mouseX, mouseY)) {
-                chartWindow = chartWindow == ChartWindow.DAY_24H_5M ? ChartWindow.WEEK_7D_30M : ChartWindow.DAY_24H_5M;
+                chartWindow = chartWindow.next();
                 requestRefreshNow();
                 return true;
             }
@@ -661,6 +666,7 @@ public class ResourceTerminalScreen extends Screen {
         if (payload == null) {
             return;
         }
+        refreshInFlight = true;
         ChartScope scope = selectedItemId == null || selectedItemId.isBlank() ? ChartScope.GLOBAL : ChartScope.ITEM;
         PacketDistributor.sendToServer(new ObserverRefreshRequestPayload(
                 payload.observerPos(),
