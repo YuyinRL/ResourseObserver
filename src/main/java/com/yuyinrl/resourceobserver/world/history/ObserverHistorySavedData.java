@@ -375,7 +375,12 @@ public class ObserverHistorySavedData extends SavedData {
             }
         }
 
-        /** 清理过期物品系列 —— 移除所有槽位 bucket 均早于最小有效 bucket 的系列 */
+        /**
+         * 清理过期物品系列 —— 移除所有槽位 bucket 均早于最小有效 bucket 的系列。
+         * <p>
+         * 最小有效 bucket = latestBucket - size + 1（+1 是因为 latestBucket 本身也占一个槽位，
+         * size 个槽位覆盖的范围是 [latestBucket-size+1, latestBucket]）。
+         */
         private void pruneStaleItemSeries() {
             long minValidBucket = latestBucket - size + 1L;
             Iterator<Map.Entry<String, ItemSeries>> iterator = itemSeries.entrySet().iterator();

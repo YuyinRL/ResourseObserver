@@ -14,6 +14,10 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+/**
+ * 资源总览表格渲染器 —— 绘制分组/物品行、筛选按钮、可排序表头、选中高亮等。
+ * 数据源为 OverviewViewModel.TableGroup 分组结构，经 flatten() 扁平化后逐行绘制。
+ */
 public final class TableRenderer {
     private static final int ROW_HEIGHT = 12;
     private static final int GROUP_HEADER_HEIGHT = 12;
@@ -22,6 +26,7 @@ public final class TableRenderer {
     private TableRenderer() {
     }
 
+    /** 计算表格所需总高度（62px 基础偏移（标题+筛选+表头）+ 数据行数 × 行高） */
     public static int measureHeight(
             List<OverviewViewModel.TableGroup> groups,
             Map<String, Boolean> expandedState
@@ -64,6 +69,7 @@ public final class TableRenderer {
         gfx.fill(table.x(), table.y(), table.right(), table.bottom(), 0x5510182C);
         RenderUtils.drawBorder(gfx, table, UiThemeTokens.DIVIDER);
 
+        // 列宽按百分比分配：星标(5px) | 名称(16px~40%) | 产量(40%~56%) | 消耗(56%~70%) | 净值(70%~83%) | 库存(83%~右边)
         int colStarX = table.x() + 5;
         int colNameX = table.x() + 16;
         int colProdX = table.x() + (int) (table.width() * 0.40f);
@@ -160,6 +166,7 @@ public final class TableRenderer {
         );
     }
 
+    /** 从右向左排列筛选按钮（重置 → 状态筛选 → 分组筛选） */
     private static FilterControls drawFilterControls(
             GuiGraphics gfx,
             Font font,
@@ -314,6 +321,7 @@ public final class TableRenderer {
         return new SortHeaderHitbox(hitbox, sortMode);
     }
 
+    /** 将内部排序模式 NET_ABS 映射为显示模式 NET（表头箭头显示在正确列） */
     private static TableSortMode displayedSortMode(TableSortMode sortMode) {
         if (sortMode == TableSortMode.NET_ABS) {
             return TableSortMode.NET;
@@ -353,6 +361,7 @@ public final class TableRenderer {
         return ButtonVisualState.NORMAL;
     }
 
+    /** 将分组树结构扁平化为渲染列表（分组头 + 展开时的物品行） */
     private static List<RowEntry> flatten(
             List<OverviewViewModel.TableGroup> groups,
             Map<String, Boolean> expandedState

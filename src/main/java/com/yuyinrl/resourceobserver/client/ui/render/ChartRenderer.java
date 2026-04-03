@@ -73,7 +73,7 @@ public final class ChartRenderer {
     private static final LineStyle DEFAULT_LINE_STYLE = new LineStyle(DEFAULT_SUPERSAMPLE, 1.0f, 0.82f, 1.26f, 0.50f, 0.75f, 0.92f, 0.20f, 0.34f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
     /** 调试模式直接渲染线条样式 */
     private static final LineStyle DEBUG_DIRECT_LINE_STYLE = new LineStyle(1, 16.0f, 0.80f, 0.96f, 0.40f, 0.72f, 1.00f, 0.00f, 0.28f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
-    private static final boolean ENABLE_AREA_FILL = false; // TODO restore after replacing the current fill path with a seam-free shader fill.
+    private static final boolean ENABLE_AREA_FILL = false; // TODO 将当前填充路径替换为无接缝着色器填充后恢复此功能
 
     /** 弱引用缓存集合，用于统一失效所有缓存 */
     private static final Set<ChartRenderCache> LIVE_CACHES = Collections.newSetFromMap(new WeakHashMap<>());
@@ -194,12 +194,14 @@ public final class ChartRenderer {
                 key,
                 () -> prepareChart(plot.width(), plot.height(), series, chartPage, lineMode, smoothingMode, lineStyle)
         );
+        List<ChartHoverPoint> hoverPoints = List.of();
         if (prepared != null && prepared != PreparedChart.EMPTY && prepared.hasVisibleContent()) {
             drawPreparedChartVector(gfx, plot, prepared, lineStyle);
+            hoverPoints = prepared.hoverPoints();
         }
         drawLegend(gfx, font, plot, chartPage, lineMode);
 
-        return new RenderResult(windowToggle, pageToggle, modeButton, smoothButton, resetButton, lineModeEnabled);
+        return new RenderResult(windowToggle, pageToggle, modeButton, smoothButton, resetButton, lineModeEnabled, plot, hoverPoints);
     }
 
     private static void drawLegend(GuiGraphics gfx, Font font, UiRect plot, ChartPage page, LineMode mode) {
@@ -374,6 +376,7 @@ public final class ChartRenderer {
         );
         boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
         List<PreparedSeries> preparedSeries = new ArrayList<>();
+        List<ChartHoverPoint> hoverPoints = new ArrayList<>();
         Double zeroAxisY = null;
 
         if (page == ChartPage.THROUGHPUT) {
@@ -389,18 +392,21 @@ public final class ChartRenderer {
                 if (!segments.isEmpty()) {
                     preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.CYAN));
                 }
+                appendHoverPoints(hoverPoints, ChartSeriesType.PRODUCTION, series, ps, fm, range.min, range.max, plotWidth, plotHeight, sampleScale);
             }
             if (lineMode.showConsumption()) {
                 List<List<Point>> segments = buildPolylines(plotWidth, plotHeight, sampleScale, lineStyle.curveSubdivision(), cs, fm, range.min, range.max, smooth);
                 if (!segments.isEmpty()) {
                     preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.AMBER));
                 }
+                appendHoverPoints(hoverPoints, ChartSeriesType.CONSUMPTION, series, cs, fm, range.min, range.max, plotWidth, plotHeight, sampleScale);
             }
             if (lineMode.showNet()) {
                 List<List<Point>> segments = buildPolylines(plotWidth, plotHeight, sampleScale, lineStyle.curveSubdivision(), ns, fm, range.min, range.max, smooth);
                 if (!segments.isEmpty()) {
                     preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.EMERALD));
                 }
+                appendHoverPoints(hoverPoints, ChartSeriesType.NET, series, ns, fm, range.min, range.max, plotWidth, plotHeight, sampleScale);
             }
         } else {
             double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
@@ -409,9 +415,16 @@ public final class ChartRenderer {
             if (!segments.isEmpty()) {
                 preparedSeries.add(new PreparedSeries(segments, UiThemeTokens.BLUE));
             }
+            appendHoverPoints(hoverPoints, ChartSeriesType.STOCK, series, ss, sm, range.min, range.max, plotWidth, plotHeight, sampleScale);
         }
 
-        return new PreparedChart(bounds, zeroAxisY, preparedSeries, zeroAxisY != null || !preparedSeries.isEmpty());
+        return new PreparedChart(
+                bounds,
+                zeroAxisY,
+                preparedSeries,
+                List.copyOf(hoverPoints),
+                zeroAxisY != null || !preparedSeries.isEmpty()
+        );
     }
 
     /** 使用预计算数据在屏幕空间直接绘制向量图表 */
@@ -420,6 +433,7 @@ public final class ChartRenderer {
             return;
         }
 
+        // 将预计算的绘图区边界偏移到屏幕坐标
         RectBounds bounds = new RectBounds(
                 plot.x() + prepared.bounds().minX,
                 plot.y() + prepared.bounds().minY,
@@ -433,6 +447,8 @@ public final class ChartRenderer {
             RenderSystem.enableBlend();
             RenderSystem.disableDepthTest();
             RenderSystem.disableCull();
+            // 预乘 alpha 混合：Src=ONE, Dst=ONE_MINUS_SRC_ALPHA
+            // 线段颜色已在 shader 中预乘 alpha，可防止多层叠加时边缘亮度异常
             RenderSystem.blendFuncSeparate(
                     GlStateManager.SourceFactor.ONE,
                     GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
@@ -466,6 +482,11 @@ public final class ChartRenderer {
             gfx.disableScissor();
         }
     }
+    /**
+     * 将数据序列构建为多段折线。
+     * 跳过无效数据点，将连续有效段分别转为折线；
+     * 若启用平滑且段长>=3，则使用 Monotone Hermite 插值生成曲线。
+     */
     private static List<List<Point>> buildPolylines(
             int hw,
             int hh,
@@ -495,6 +516,36 @@ public final class ChartRenderer {
         return out;
     }
 
+    private static void appendHoverPoints(
+            List<ChartHoverPoint> out,
+            ChartSeriesType type,
+            List<OverviewViewModel.FlowPoint> source,
+            double[] values,
+            boolean[] valid,
+            double min,
+            double max,
+            int plotWidth,
+            int plotHeight,
+            int sampleScale
+    ) {
+        if (out == null || source == null || values == null || valid == null) {
+            return;
+        }
+        int size = Math.min(Math.min(source.size(), values.length), valid.length);
+        if (size <= 0) {
+            return;
+        }
+        for (int i = 0; i < size; i++) {
+            if (!valid[i]) {
+                continue;
+            }
+            OverviewViewModel.FlowPoint point = source.get(i);
+            double localX = x4(i, size, plotWidth, sampleScale) / sampleScale;
+            double localY = valueY4(values[i], min, max, plotHeight, sampleScale) / sampleScale;
+            out.add(new ChartHoverPoint(type, localX, localY, point.slotIndex(), values[i]));
+        }
+    }
+
     private static List<Point> clampPoints(List<Point> in, int hw, int hh, int sampleScale) {
         List<Point> out = new ArrayList<>(in.size());
         double minX = plotMinX(sampleScale);
@@ -507,6 +558,22 @@ public final class ChartRenderer {
         return out;
     }
 
+    /**
+     * Monotone Hermite 三次插值 —— 生成保持单调性的平滑曲线。
+     * <p>
+     * 算法流程：
+     * <ol>
+     *   <li>计算每段斜率 d[i]</li>
+     *   <li>用相邻段斜率均值估计端点切线 m[i]</li>
+     *   <li>Fritsch-Carlson 单调性约束：若 α² + β² > 9 则缩放切线</li>
+     *   <li>三次 Hermite 基函数插值 (h00, h10, h01, h11) 生成子像素点</li>
+     * </ol>
+     * <p>
+     * 魔法数字说明：
+     * - 9.0：Fritsch-Carlson 定理的单调性阈值（α² + β² ≤ 9 保证单调）
+     * - 1.0E-9：斜率为零的判定精度（避免浮点误差）
+     * - 1.0E-6：相邻点最小间距（防除零）
+     */
     private static List<Point> monotone(List<Point> base, int hw, int hh, int sampleScale, float curveSubdivision) {
         int n = base.size();
         double[] x = new double[n];
@@ -515,24 +582,29 @@ public final class ChartRenderer {
             x[i] = base.get(i).x;
             y[i] = base.get(i).y;
         }
+        // 第 1 步：计算每段差商斜率
         double[] d = new double[n - 1];
         for (int i = 0; i < n - 1; i++) {
             double h = Math.max(1.0E-6, x[i + 1] - x[i]);
             d[i] = (y[i + 1] - y[i]) / h;
         }
+        // 第 2 步：估计端点切线（内点取相邻斜率均值，端点直接取相邻斜率）
         double[] m = new double[n];
         m[0] = d[0];
         m[n - 1] = d[n - 2];
         for (int i = 1; i < n - 1; i++) m[i] = 0.5 * (d[i - 1] + d[i]);
+        // 第 3 步：Fritsch-Carlson 单调性约束
         for (int i = 0; i < n - 1; i++) {
             if (Math.abs(d[i]) < 1.0E-9) {
+                // 平坦段：两端切线归零
                 m[i] = 0.0;
                 m[i + 1] = 0.0;
             } else {
-                double a = m[i] / d[i];
-                double b = m[i + 1] / d[i];
+                double a = m[i] / d[i];       // α = m[i] / d[i]
+                double b = m[i + 1] / d[i];   // β = m[i+1] / d[i]
                 double s = a * a + b * b;
                 if (s > 9.0) {
+                    // 超出单调性圆，按 τ = 3/√(α²+β²) 缩放切线
                     double t = 3.0 / Math.sqrt(s);
                     m[i] = t * a * d[i];
                     m[i + 1] = t * b * d[i];
@@ -543,6 +615,7 @@ public final class ChartRenderer {
         double maxX = maxCoordX(hw, sampleScale);
         double minY = plotMinY(sampleScale);
         double maxY = maxCoordY(hh, sampleScale);
+        // 第 4 步：三次 Hermite 基函数插值
         List<Point> out = new ArrayList<>();
         for (int i = 0; i < n - 1; i++) {
             double x0 = x[i];
@@ -550,12 +623,14 @@ public final class ChartRenderer {
             double y0 = y[i];
             double y1 = y[i + 1];
             double h = Math.max(1.0E-6, x1 - x0);
+            // 细分步数 = 段长 × 细分密度，保证曲线足够平滑
             int steps = Math.max(1, (int) Math.ceil(h * Math.max(1.0f, curveSubdivision)));
-            int from = i == 0 ? 0 : 1;
+            int from = i == 0 ? 0 : 1; // 首段从 t=0 开始，后续段从 t=1/steps 开始避免重复端点
             for (int step = from; step <= steps; step++) {
                 double t = step / (double) steps;
                 double t2 = t * t;
                 double t3 = t2 * t;
+                // Hermite 基函数：h00(值起点), h10(切线起点), h01(值终点), h11(切线终点)
                 double h00 = 2.0 * t3 - 3.0 * t2 + 1.0;
                 double h10 = t3 - 2.0 * t2 + t;
                 double h01 = -2.0 * t3 + 3.0 * t2;
@@ -568,6 +643,10 @@ public final class ChartRenderer {
         return out;
     }
 
+    /**
+     * 面积填充 —— 将折线下方区域填充为半透明色。
+     * 实现方式：按列光栅化，对每列求折线的最高 Y 值，然后从该点向下填充到底部。
+     */
     private static void fillArea(List<List<Point>> segments, RectBounds bounds, int color) {
         int premult = premultiply(color);
         int r = (premult >>> 16) & 0xFF;
@@ -713,20 +792,25 @@ public final class ChartRenderer {
         }
 
         float outerHalf = Math.max(scaledCoreWidth, scaledGlowWidth) * 0.5f + scaledFeather;
+        // 计算线段的切线方向 (tx, ty) 和法线方向 (nx, ny)
         double dx = b.x - a.x;
         double dy = b.y - a.y;
         double len = Math.hypot(dx, dy);
         double tx = len > 1.0E-6 ? dx / len : 1.0;
         double ty = len > 1.0E-6 ? dy / len : 0.0;
-        double nx = -ty;
+        double nx = -ty;  // 法线 = 切线旋转 90°
         double ny = tx;
 
+        // 沿切线/法线方向向外扩展 outerHalf，构成包含线段+辉光+羽化的四边形
         Point s = new Point(a.x - tx * outerHalf, a.y - ty * outerHalf);
         Point e = new Point(b.x + tx * outerHalf, b.y + ty * outerHalf);
         Point v0 = new Point(s.x - nx * outerHalf, s.y - ny * outerHalf);
         Point v1 = new Point(e.x - nx * outerHalf, e.y - ny * outerHalf);
         Point v2 = new Point(e.x + nx * outerHalf, e.y + ny * outerHalf);
         Point v3 = new Point(s.x + nx * outerHalf, s.y + ny * outerHalf);
+
+        // 设置自定义 shader uniform：线段端点、宽度参数、颜色
+        // shader 根据片元到线段的距离场计算透明度，实现核心线+辉光效果
 
         RenderSystem.setShader(() -> shader);
         setUniform(shader, "LineStartEnd", (float) a.x, (float) a.y, (float) b.x, (float) b.y);
@@ -1237,6 +1321,13 @@ public final class ChartRenderer {
         return seed;
     }
 
+    /**
+     * 将数据索引映射为超采样坐标系的 X 值。
+     * 三套坐标系：
+     * 1. 数据索引 [0, size-1]
+     * 2. 超采样坐标 [plotMinX, maxCoordX]（比显示分辨率大 sampleScale 倍）
+     * 3. 屏幕坐标（最终显示，= 超采样/sampleScale + plot偏移）
+     */
     private static double x4(int index, int size, int hw, int sampleScale) {
         double min = plotMinX(sampleScale);
         double max = maxCoordX(hw, sampleScale);
@@ -1244,6 +1335,7 @@ public final class ChartRenderer {
         return min + (index / (double) (size - 1)) * (max - min);
     }
 
+    /** 将数据值映射为超采样坐标系的 Y 值（Y 轴反向：值越大 Y 越小） */
     private static double valueY4(double value, double min, double max, int hh, int sampleScale) {
         double low = plotMinY(sampleScale);
         double high = maxCoordY(hh, sampleScale);
@@ -1329,7 +1421,14 @@ public final class ChartRenderer {
         RenderSystem.enableScissor(state.x, state.y, state.width, state.height);
     }
 
-    /** 检测渲染目标是否包含可见内容（alpha > 阈值的像素） */
+    /**
+     * 检测渲染目标是否包含可见内容。
+     * <p>
+     * 双策略检测：
+     * - exhaustive=true：读取全部像素，阈值 alpha>1（用于降采样后的低分辨率纹理）
+     * - exhaustive=false：采样网格检测，阈值 alpha>8（用于高分辨率纹理的快速检查）
+     * - 采样网格参数：列数=width/24（最少 4 最多 10），行数=height/18（最少 3 最多 8）
+     */
     private static boolean detectVisibleContent(RenderTarget target, int width, int height, boolean exhaustive) {
         if (target == null || width <= 0 || height <= 0) {
             return false;
@@ -1429,7 +1528,9 @@ public final class ChartRenderer {
         addColorVertex(buffer, (float) xr, (float) bottom, r, g, b, a);
     }
 
+    /** 对单条线段进行列光栅化 —— 在每列的中心点(column+0.5)处采样线段高度 */
     private static void rasterizeAreaColumns(double[] top, int startColumn, int endColumn, Point p0, Point p1, RectBounds bounds) {
+        // 垂直或近垂直线段：直接取较小 Y 写入所在列
         if (Math.abs(p1.x - p0.x) < 1.0E-6) {
             int column = clamp((int) Math.floor(p0.x), startColumn, Math.max(startColumn, endColumn - 1));
             writeColumnTop(top, startColumn, column, Math.min(p0.y, p1.y));
@@ -1443,6 +1544,7 @@ public final class ChartRenderer {
         double dx = p1.x - p0.x;
         double dy = p1.y - p0.y;
         for (int column = colStart; column < colEnd; column++) {
+            // 中心采样：在列中点 x=column+0.5 处计算线段的 Y 值
             double sampleX = clampD(column + 0.5, Math.min(p0.x, p1.x), Math.max(p0.x, p1.x));
             double t = (sampleX - p0.x) / dx;
             double y = clampD(p0.y + dy * t, bounds.minY, bounds.maxY);
@@ -1491,7 +1593,16 @@ public final class ChartRenderer {
         );
     }
 
-    /** Liang-Barsky 线段裁剪算法 */
+    /**
+     * Liang-Barsky 线段裁剪算法 —— 将线段裁剪到矩形边界内。
+     * <p>
+     * p[]、q[] 分别编码四个边界的方向和位置约束：
+     * i=0: 左边界（-dx, x-minX）
+     * i=1: 右边界（+dx, maxX-x）
+     * i=2: 上边界（-dy, y-minY）
+     * i=3: 下边界（+dy, maxY-y）
+     * t0/t1 跟踪裁剪后的参数范围 [t0, t1] ⊆ [0, 1]
+     */
     private static ClippedSegment clipSegment(Point a, Point b, RectBounds bounds) {
         double dx = b.x - a.x;
         double dy = b.y - a.y;
@@ -1566,8 +1677,9 @@ public final class ChartRenderer {
         };
     }
 
-    /** 根据时间窗口选择线条样式 */
+    /** 根据时间窗口选择线条样式（使用直接向量渲染路径，supersample=1） */
     private static LineStyle lineStyleFor(ChartWindow chartWindow) {
+        // 向量路径直接在屏幕空间渲染，无需超采样。
         return DEBUG_DIRECT_LINE_STYLE;
     }
 
@@ -1643,17 +1755,31 @@ public final class ChartRenderer {
             this.lowResVisible = false;
         }
 
+        private static final int MAX_TEXTURE_SIZE = 8192; // 保守限制，低于 GPU 最大值 (16384) 以避免边界情况
+
         private static CachedChartTexture create(int width, int height, int sampleScale) {
             if (width <= 0 || height <= 0) {
                 return EMPTY;
             }
             int highResWidth = Math.max(1, width * sampleScale);
             int highResHeight = Math.max(1, height * sampleScale);
+            // 限制纹理尺寸以防止高 DPI / 大视口下的 OpenGL 崩溃
+            if (highResWidth > MAX_TEXTURE_SIZE || highResHeight > MAX_TEXTURE_SIZE) {
+                int clampedScale = sampleScale;
+                while (clampedScale > 1 && (width * clampedScale > MAX_TEXTURE_SIZE || height * clampedScale > MAX_TEXTURE_SIZE)) {
+                    clampedScale--;
+                }
+                sampleScale = clampedScale;
+                highResWidth = Math.min(MAX_TEXTURE_SIZE, Math.max(1, width * sampleScale));
+                highResHeight = Math.min(MAX_TEXTURE_SIZE, Math.max(1, height * sampleScale));
+            }
+            int clampedWidth = Math.min(width, MAX_TEXTURE_SIZE);
+            int clampedHeight = Math.min(height, MAX_TEXTURE_SIZE);
             TextureTarget highRes = new TextureTarget(highResWidth, highResHeight, false, Minecraft.ON_OSX);
             highRes.setFilterMode(GL11C.GL_NEAREST);
-            TextureTarget lowRes = new TextureTarget(width, height, false, Minecraft.ON_OSX);
+            TextureTarget lowRes = new TextureTarget(clampedWidth, clampedHeight, false, Minecraft.ON_OSX);
             lowRes.setFilterMode(GL11C.GL_LINEAR);
-            return new CachedChartTexture(highRes, lowRes, width, height, highResWidth, highResHeight, sampleScale);
+            return new CachedChartTexture(highRes, lowRes, clampedWidth, clampedHeight, highResWidth, highResHeight, sampleScale);
         }
 
         private boolean hasVisibleContent() {
@@ -1696,9 +1822,16 @@ public final class ChartRenderer {
             RectBounds bounds,
             Double zeroAxisY,
             List<PreparedSeries> series,
+            List<ChartHoverPoint> hoverPoints,
             boolean hasVisibleContent
     ) {
-        private static final PreparedChart EMPTY = new PreparedChart(new RectBounds(0.0, 0.0, 0.0, 0.0), null, List.of(), false);
+        private static final PreparedChart EMPTY = new PreparedChart(
+                new RectBounds(0.0, 0.0, 0.0, 0.0),
+                null,
+                List.of(),
+                List.of(),
+                false
+        );
     }
 
     /** 预计算单系列 —— 折线段列表和颜色 */
@@ -1826,13 +1959,31 @@ public final class ChartRenderer {
     }
 
     /** 图表渲染结果 —— 包含各控制按钮的热区 */
+    public enum ChartSeriesType {
+        PRODUCTION,
+        CONSUMPTION,
+        NET,
+        STOCK
+    }
+
+    public record ChartHoverPoint(
+            ChartSeriesType seriesType,
+            double x,
+            double y,
+            int slotIndex,
+            double value
+    ) {
+    }
+
     public record RenderResult(
             UiRect windowToggle,
             UiRect pageToggle,
             UiRect lineModeButton,
             UiRect smoothingButton,
             UiRect resetButton,
-            boolean lineModeEnabled
+            boolean lineModeEnabled,
+            UiRect plotRect,
+            List<ChartHoverPoint> hoverPoints
     ) {
     }
 }

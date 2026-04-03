@@ -40,6 +40,10 @@ public final class HeaderRenderer {
 
         // 右侧：连接状态卡片（响应式宽度计算）
         int padding = 10;
+        // 响应式卡片宽度三级夺紧：
+        // 1° 上限 = min(300, max(160, 头部宽度/2))
+        // 2° 期望值 250 在 [160, 上限] 内夺紧
+        // 3° 若右对齐后卡片左边超过头部中线，则锚定中线并重算宽度，防止遮挡标题
         int minCardW = 160;
         int desiredCardW = 250;
         int maxCardW = Math.min(300, Math.max(minCardW, header.width() / 2));

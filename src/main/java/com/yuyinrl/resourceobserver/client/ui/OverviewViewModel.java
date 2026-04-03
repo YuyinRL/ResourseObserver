@@ -33,8 +33,16 @@ public record OverviewViewModel(
         List<FlowPoint> chartSeries,
         UiState uiState,
         List<WatchlistItem> watchlistItems,
-        List<TableGroup> tableGroups
+        List<TableGroup> tableGroups,
+        StorageDetail storageDetail
 ) {
+    public enum KpiType {
+        PRODUCTION,
+        CONSUMPTION,
+        STORAGE,
+        EFFICIENCY
+    }
+
     /**
      * KPI 指标卡数据。
      * @param label      指标标签（如"生产"、"消耗"）
@@ -44,12 +52,42 @@ public record OverviewViewModel(
      * @param iconSprite 图标精灵路径
      */
     public record KpiMetric(
+            KpiType type,
             String label,
             String value,
             String trend,
             Status status,
             String iconSprite
     ) {
+    }
+
+    public record StorageDetail(
+            boolean hasAe2Binding,
+            boolean diskReliable,
+            boolean externalReliable,
+            String hintText,
+            StorageChannel diskItem,
+            StorageChannel diskFluid,
+            StorageChannel externalItem,
+            StorageChannel externalFluid
+    ) {
+        public static StorageDetail unavailable(String hintText) {
+            StorageChannel na = StorageChannel.na();
+            return new StorageDetail(false, false, false, hintText, na, na, na, na);
+        }
+    }
+
+    public record StorageChannel(
+            String label,
+            String usageText,
+            String typesText,
+            String usageDetailText,
+            String typesDetailText,
+            boolean available
+    ) {
+        public static StorageChannel na() {
+            return new StorageChannel("N/A", "N/A", "N/A", "N/A", "N/A", false);
+        }
     }
 
     /**
@@ -72,7 +110,6 @@ public record OverviewViewModel(
      * @param displayName  显示名称
      * @param netPerMinute 每分钟净变化量
      * @param stock        当前库存
-     * @param capacity     库存容量
      * @param starred      是否已关注
      * @param iconSprite   图标精灵路径
      */
@@ -81,7 +118,6 @@ public record OverviewViewModel(
             String displayName,
             long netPerMinute,
             long stock,
-            long capacity,
             boolean starred,
             String iconSprite
     ) {
@@ -112,7 +148,6 @@ public record OverviewViewModel(
      * @param consumption 消耗量
      * @param net         净变化量
      * @param stock       库存
-     * @param capacity    容量
      * @param critical    是否处于严重亏损状态
      * @param starred     是否已关注
      * @param iconSprite  图标精灵路径
@@ -125,7 +160,6 @@ public record OverviewViewModel(
             long consumption,
             long net,
             long stock,
-            long capacity,
             boolean critical,
             boolean starred,
             String iconSprite

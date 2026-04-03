@@ -16,7 +16,7 @@ import java.util.List;
  * <p>
  * 布局逻辑：
  * - 根据可用宽度自动选择 1~3 列（640px 以上 3 列，420px 以上 2 列，否则 1 列）
- * - 每张卡片显示：物品图标、名称、净流量、库存/容量、进度条
+ * - 每张卡片显示：物品图标、名称、净流量、库存
  * - 选中的物品卡片使用高亮边框和背景
  * - 每张卡片右上角有移除按钮
  */
@@ -100,10 +100,7 @@ public final class WatchlistRenderer {
         String netText = (item.netPerMinute() >= 0 ? "+" : "") + item.netPerMinute() + "/min";
         gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.watchlist.net", netText), x, y, netColor);
         y += 11;
-        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.watchlist.stock", item.stock(), item.capacity()), x, y, UiThemeTokens.TEXT_MUTED);
-        y += 11;
-        double ratio = item.capacity() > 0 ? (double) item.stock() / (double) item.capacity() : 0.0;
-        RenderUtils.drawProgressBar(gfx, x, y, card.width() - 14, 3, ratio, 0xFF1E293B, UiThemeTokens.CYAN);
+        gfx.drawString(font, Component.translatable("screen.resourceobserver.overview.watchlist.stock", item.stock()), x, y, UiThemeTokens.TEXT_MUTED);
         return removeRect;
     }
 

@@ -1,13 +1,20 @@
 package com.yuyinrl.resourceobserver.client.ui.render;
 
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.renderer.texture.TextureAtlasSprite;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.resources.ResourceLocation;
+import net.minecraft.world.inventory.InventoryMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.Items;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
+import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
+import net.neoforged.neoforge.fluids.FluidStack;
 
 import java.util.List;
 
@@ -134,8 +141,9 @@ public final class RenderUtils {
     /**
      * 绘制物品图标或回退精灵。
      * 优先尝试从物品注册表获取真实物品图标；
+     * 若 itemId 以 "fluid:" 开头，则尝试从流体注册表获取流体纹理并绘制；
      * 失败时使用 fallbackSprite 精灵图作为替代。
-     * @return 是否成功绘制了真实物品图标
+     * @return 是否成功绘制了真实物品/流体图标
      */
     public static boolean drawItemIconOrSprite(
             GuiGraphics gfx,
@@ -145,6 +153,11 @@ public final class RenderUtils {
             int size,
             ResourceLocation fallbackSprite
     ) {
+        // 流体：以 "fluid:" 开头
+        if (itemId != null && itemId.startsWith(FLUID_PREFIX)) {
+            return drawFluidIconOrSprite(gfx, itemId.substring(FLUID_PREFIX.length()), x, y, size, fallbackSprite);
+        }
+        // 普通物品
         ItemStack stack = itemStackFromItemId(itemId);
         if (!stack.isEmpty()) {
             float scale = size / 16.0f;
@@ -157,6 +170,58 @@ public final class RenderUtils {
         }
         gfx.blitSprite(fallbackSprite, x, y, size, size);
         return false;
+    }
+
+    private static final String FLUID_PREFIX = "fluid:";
+
+    /**
+     * 绘制流体图标：从流体注册表查找流体，获取静态纹理并带染色绘制。
+     * 失败时回退到 fallbackSprite。
+     */
+    private static boolean drawFluidIconOrSprite(
+            GuiGraphics gfx,
+            String fluidIdStr,
+            int x,
+            int y,
+            int size,
+            ResourceLocation fallbackSprite
+    ) {
+        try {
+            ResourceLocation fluidId = ResourceLocation.parse(fluidIdStr);
+            Fluid fluid = BuiltInRegistries.FLUID.getOptional(fluidId).orElse(null);
+            if (fluid == null || fluid == Fluids.EMPTY) {
+                gfx.blitSprite(fallbackSprite, x, y, size, size);
+                return false;
+            }
+            IClientFluidTypeExtensions fluidExt = IClientFluidTypeExtensions.of(fluid);
+            FluidStack fluidStack = new FluidStack(fluid, 1000);
+            ResourceLocation stillTexture = fluidExt.getStillTexture(fluidStack);
+            if (stillTexture == null) {
+                gfx.blitSprite(fallbackSprite, x, y, size, size);
+                return false;
+            }
+            TextureAtlasSprite sprite = Minecraft.getInstance()
+                    .getTextureAtlas(InventoryMenu.BLOCK_ATLAS)
+                    .apply(stillTexture);
+            int tintColor = fluidExt.getTintColor(fluidStack);
+            float a = ((tintColor >> 24) & 0xFF) / 255.0f;
+            float r = ((tintColor >> 16) & 0xFF) / 255.0f;
+            float g = ((tintColor >> 8) & 0xFF) / 255.0f;
+            float b = (tintColor & 0xFF) / 255.0f;
+            if (a <= 0.0f) {
+                a = 1.0f; // 如果 alpha 为 0 则默认不透明
+            }
+            gfx.pose().pushPose();
+            gfx.pose().translate(x, y, 0);
+            gfx.setColor(r, g, b, a);
+            gfx.blit(0, 0, 0, size, size, sprite);
+            gfx.setColor(1.0f, 1.0f, 1.0f, 1.0f);
+            gfx.pose().popPose();
+            return true;
+        } catch (Exception ignored) {
+            gfx.blitSprite(fallbackSprite, x, y, size, size);
+            return false;
+        }
     }
 
     /** 从物品 ID 字符串获取 ItemStack，无效 ID 返回空栈 */

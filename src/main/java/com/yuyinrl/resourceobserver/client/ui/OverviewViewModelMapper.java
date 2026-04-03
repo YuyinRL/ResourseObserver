@@ -61,7 +61,6 @@ public final class OverviewViewModelMapper {
                 long production = Math.max(0L, item.delta());     // 正增量 → 生产
                 long consumption = Math.max(0L, -item.delta());   // 负增量 → 消耗
                 long net = item.delta();
-                long capacity = estimateCapacity(item.amount());  // 估算容量（用于进度条显示）
                 String localizedName = localizeEntryName(item.entryType(), item.itemId(), item.displayName());
                 allRows.add(new OverviewViewModel.TableRow(
                         item.itemId(),
@@ -71,8 +70,7 @@ public final class OverviewViewModelMapper {
                         consumption,
                         net,
                         item.amount(),
-                        capacity,
-                        isCritical(net, item.amount(), capacity),
+                        isCritical(net, item.amount()),
                         watchlistSet.contains(item.itemId()),
                         item.iconSprite()
                 ));
@@ -85,7 +83,12 @@ public final class OverviewViewModelMapper {
         }
 
         // 构建四个 KPI 指标卡
-        List<OverviewViewModel.KpiMetric> kpis = buildKpis(totalProduced, totalConsumed, cellCapacityAggregation);
+        StoragePresentation storagePresentation = buildStoragePresentation(cellCapacityAggregation);
+        List<OverviewViewModel.KpiMetric> kpis = buildKpis(
+                totalProduced,
+                totalConsumed,
+                storagePresentation.storageKpi()
+        );
         // 转换图表数据点
         List<OverviewViewModel.FlowPoint> chartSeries = new ArrayList<>(payload.chartSeries().size());
         for (ObserverDataPayload.ChartPoint point : payload.chartSeries()) {
@@ -121,7 +124,7 @@ public final class OverviewViewModelMapper {
                 "Global monitoring of linked storage networks and resource flow.",
                 "LINK ESTABLISHED",
                 kpis, payload.chartWindow(), payload.chartScopeItemId(),
-                chartSeries, uiState, watchlist, groupedRows
+                chartSeries, uiState, watchlist, groupedRows, storagePresentation.storageDetail()
         );
     }
 
@@ -135,13 +138,18 @@ public final class OverviewViewModelMapper {
     private static List<OverviewViewModel.KpiMetric> buildKpis(
             long totalProduced,
             long totalConsumed,
-            CellCapacityAggregation cellCapacityAggregation
+            OverviewViewModel.KpiMetric storageKpi
     ) {
         long net = totalProduced - totalConsumed;
+        // 效率公式：消耗/生产比。efficiency=1.0 表示生产与消耗完全平衡，
+        // 显示值 = (1 - max(0, ratio-1)) * 100：
+        //   ratio=0.8 → 消耗低于生产 → 显示 100%（因为 max(0, -0.2)=0）
+        //   ratio=1.5 → 消耗超出生产 50% → 显示 50%
         double efficiency = totalProduced > 0 ? (double) totalConsumed / (double) totalProduced : 0.0;
 
         List<OverviewViewModel.KpiMetric> result = new ArrayList<>(4);
         result.add(new OverviewViewModel.KpiMetric(
+                OverviewViewModel.KpiType.PRODUCTION,
                 "screen.resourceobserver.overview.section.kpi_production",
                 formatCompact(totalProduced) + " /min",
                 net >= 0 ? "+5.2% vs cycle" : "-2.4% vs cycle",
@@ -149,14 +157,16 @@ public final class OverviewViewModelMapper {
                 "resourceobserver:terminal/kpi_production"
         ));
         result.add(new OverviewViewModel.KpiMetric(
+                OverviewViewModel.KpiType.CONSUMPTION,
                 "screen.resourceobserver.overview.section.kpi_consumption",
                 formatCompact(totalConsumed) + " /min",
                 totalConsumed > totalProduced ? "+2.1% vs cycle" : "-1.3% vs cycle",
                 totalConsumed > totalProduced ? OverviewViewModel.Status.WARNING : OverviewViewModel.Status.NEUTRAL,
                 "resourceobserver:terminal/kpi_consumption"
         ));
-        result.add(buildStorageKpi(cellCapacityAggregation));
+        result.add(storageKpi);
         result.add(new OverviewViewModel.KpiMetric(
+                OverviewViewModel.KpiType.EFFICIENCY,
                 "screen.resourceobserver.overview.section.kpi_efficiency",
                 String.format(Locale.ROOT, "%.1f%%", Math.max(0.0, (1.0 - Math.max(0.0, efficiency - 1.0)) * 100.0)),
                 "Nominal",
@@ -166,41 +176,27 @@ public final class OverviewViewModelMapper {
         return result;
     }
 
-    private static OverviewViewModel.KpiMetric buildStorageKpi(CellCapacityAggregation aggregation) {
+    /**
+     * 构建存储 KPI 指标卡。
+     * <p>
+     * 多层条件链处理各种边界情况（优先级从高到低）：
+     * 1. 无 AE2 绑定 → 显示 N/A + "非 AE2 网络"
+     * 2. 容量数据不可用 → 显示 N/A + "单元格不可用"
+     * 3. 不可靠且无可读数据 → 显示 N/A + "部分读取"
+     * 4. 正常情况 → 显示实际填充率，并根据填充率/类型占满等设置警告状态
+     */
+    private static StoragePresentation buildStoragePresentation(CellCapacityAggregation aggregation) {
         if (!aggregation.hasAe2Binding()) {
-            return new OverviewViewModel.KpiMetric(
+            String hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.not_ae2").getString();
+            OverviewViewModel.KpiMetric kpi = new OverviewViewModel.KpiMetric(
+                    OverviewViewModel.KpiType.STORAGE,
                     "screen.resourceobserver.overview.section.kpi_storage",
                     "N/A",
-                    Component.translatable("screen.resourceobserver.overview.kpi.storage.not_ae2").getString(),
+                    hint,
                     OverviewViewModel.Status.NEUTRAL,
                     "resourceobserver:terminal/kpi_storage"
             );
-        }
-        if (!aggregation.available()) {
-            return new OverviewViewModel.KpiMetric(
-                    "screen.resourceobserver.overview.section.kpi_storage",
-                    "N/A",
-                    Component.translatable("screen.resourceobserver.overview.kpi.storage.cells_unavailable").getString(),
-                    OverviewViewModel.Status.WARNING,
-                "resourceobserver:terminal/kpi_storage"
-            );
-        }
-        boolean hasReadableTotals = aggregation.itemTotalBytes() > 0L
-                || aggregation.itemTotalTypes() > 0L
-                || aggregation.itemUsedBytes() > 0L
-                || aggregation.itemUsedTypes() > 0L
-                || aggregation.fluidTotalBytes() > 0L
-                || aggregation.fluidTotalTypes() > 0L
-                || aggregation.fluidUsedBytes() > 0L
-                || aggregation.fluidUsedTypes() > 0L;
-        if (!aggregation.reliable() && !hasReadableTotals) {
-            return new OverviewViewModel.KpiMetric(
-                    "screen.resourceobserver.overview.section.kpi_storage",
-                    "N/A",
-                    Component.translatable("screen.resourceobserver.overview.kpi.storage.unreliable").getString(),
-                    OverviewViewModel.Status.WARNING,
-                "resourceobserver:terminal/kpi_storage"
-            );
+            return new StoragePresentation(kpi, OverviewViewModel.StorageDetail.unavailable(hint));
         }
 
         long itemUsedBytes = aggregation.itemUsedBytes();
@@ -211,51 +207,168 @@ public final class OverviewViewModelMapper {
         long fluidTotalBytes = Math.max(aggregation.fluidTotalBytes(), fluidUsedBytes);
         long fluidUsedTypes = aggregation.fluidUsedTypes();
         long fluidTotalTypes = Math.max(aggregation.fluidTotalTypes(), fluidUsedTypes);
-
-        String value = Component.translatable(
-                "screen.resourceobserver.overview.kpi.storage.item_capacity",
-                formatByteLike(itemUsedBytes),
-                formatByteLike(itemTotalBytes)
-        ).getString() + "\n" + Component.translatable(
-                "screen.resourceobserver.overview.kpi.storage.item_types",
-                formatCompact(itemUsedTypes),
-                formatCompact(itemTotalTypes)
-        ).getString();
-        String trend = Component.translatable(
-                "screen.resourceobserver.overview.kpi.storage.fluid_capacity",
-                formatByteLike(fluidUsedBytes),
-                formatByteLike(fluidTotalBytes)
-        ).getString() + "\n" + Component.translatable(
-                "screen.resourceobserver.overview.kpi.storage.fluid_types",
-                formatCompact(fluidUsedTypes),
-                formatCompact(fluidTotalTypes)
-        ).getString();
+        long externalItemUsed = aggregation.externalItemUsedUnits();
+        long externalItemTotal = Math.max(aggregation.externalItemTotalUnits(), externalItemUsed);
+        long externalFluidUsed = aggregation.externalFluidUsedUnits();
+        long externalFluidTotal = Math.max(aggregation.externalFluidTotalUnits(), externalFluidUsed);
 
         OverviewViewModel.Status status = OverviewViewModel.Status.POSITIVE;
-        if (!aggregation.reliable()) {
+        String hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.normal").getString();
+        if (!aggregation.diskAvailable() && !aggregation.externalAvailable()) {
             status = OverviewViewModel.Status.WARNING;
-            trend = trend + " - "
-                    + Component.translatable("screen.resourceobserver.overview.kpi.storage.partial_read").getString();
-        } else if ((itemTotalTypes > 0 && itemUsedTypes >= itemTotalTypes)
-                || (fluidTotalTypes > 0 && fluidUsedTypes >= fluidTotalTypes)) {
+            hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.cells_unavailable").getString();
+        } else if (!aggregation.diskReliable() || !aggregation.externalReliable()) {
             status = OverviewViewModel.Status.WARNING;
-            trend = trend + " - "
-                    + Component.translatable("screen.resourceobserver.overview.kpi.storage.types_full").getString();
+            hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.unreliable").getString();
+        } else if ((itemTotalTypes > 0L && itemUsedTypes >= itemTotalTypes)
+                || (fluidTotalTypes > 0L && fluidUsedTypes >= fluidTotalTypes)) {
+            status = OverviewViewModel.Status.WARNING;
+            hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.types_full").getString();
         } else {
             double itemFill = itemTotalBytes > 0 ? (double) itemUsedBytes / (double) itemTotalBytes : 0.0d;
             double fluidFill = fluidTotalBytes > 0 ? (double) fluidUsedBytes / (double) fluidTotalBytes : 0.0d;
             if (Math.max(itemFill, fluidFill) >= 0.9d) {
                 status = OverviewViewModel.Status.WARNING;
+                hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.bytes_high").getString();
             }
         }
 
-        return new OverviewViewModel.KpiMetric(
+        OverviewViewModel.StorageDetail detail = new OverviewViewModel.StorageDetail(
+                true,
+                aggregation.diskReliable(),
+                aggregation.externalReliable(),
+                hint,
+                new OverviewViewModel.StorageChannel(
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.disk_item").getString(),
+                        formatBytesUsage(itemUsedBytes, itemTotalBytes, aggregation.diskAvailable()),
+                        formatTypesUsage(itemUsedTypes, itemTotalTypes, aggregation.diskAvailable()),
+                        formatBytesUsageExact(itemUsedBytes, itemTotalBytes, aggregation.diskAvailable()),
+                        formatTypesUsageExact(itemUsedTypes, itemTotalTypes, aggregation.diskAvailable()),
+                        aggregation.diskAvailable()
+                ),
+                new OverviewViewModel.StorageChannel(
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.disk_fluid").getString(),
+                        formatBytesUsage(fluidUsedBytes, fluidTotalBytes, aggregation.diskAvailable()),
+                        formatTypesUsage(fluidUsedTypes, fluidTotalTypes, aggregation.diskAvailable()),
+                        formatBytesUsageExact(fluidUsedBytes, fluidTotalBytes, aggregation.diskAvailable()),
+                        formatTypesUsageExact(fluidUsedTypes, fluidTotalTypes, aggregation.diskAvailable()),
+                        aggregation.diskAvailable()
+                ),
+                new OverviewViewModel.StorageChannel(
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.external_item").getString(),
+                        formatExternalItemUsage(externalItemUsed, externalItemTotal, aggregation.externalAvailable()),
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.types_na").getString(),
+                        formatExternalItemUsageExact(externalItemUsed, externalItemTotal, aggregation.externalAvailable()),
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.types_na").getString(),
+                        aggregation.externalAvailable()
+                ),
+                new OverviewViewModel.StorageChannel(
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.external_fluid").getString(),
+                        formatExternalFluidUsage(externalFluidUsed, externalFluidTotal, aggregation.externalAvailable()),
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.types_na").getString(),
+                        formatExternalFluidUsageExact(externalFluidUsed, externalFluidTotal, aggregation.externalAvailable()),
+                        Component.translatable("screen.resourceobserver.overview.storage.detail.types_na").getString(),
+                        aggregation.externalAvailable()
+                )
+        );
+
+        OverviewViewModel.KpiMetric kpi = new OverviewViewModel.KpiMetric(
+                OverviewViewModel.KpiType.STORAGE,
                 "screen.resourceobserver.overview.section.kpi_storage",
-                value,
-                trend,
+                Component.translatable("screen.resourceobserver.overview.kpi.storage.open_detail").getString(),
+                hint,
                 status,
                 "resourceobserver:terminal/kpi_storage"
         );
+        return new StoragePresentation(kpi, detail);
+    }
+
+    private static String formatBytesUsage(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.bytes_usage",
+                formatByteLike(used),
+                formatByteLike(total)
+        ).getString();
+    }
+
+    private static String formatTypesUsage(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.types_usage",
+                formatCompact(used),
+                formatCompact(total)
+        ).getString();
+    }
+
+    private static String formatBytesUsageExact(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.bytes_usage",
+                formatExactByteLike(used),
+                formatExactByteLike(total)
+        ).getString();
+    }
+
+    private static String formatTypesUsageExact(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.types_usage",
+                formatExactCount(used),
+                formatExactCount(total)
+        ).getString();
+    }
+
+    private static String formatExternalItemUsage(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.external_item_usage",
+                formatCompact(used),
+                formatCompact(total)
+        ).getString();
+    }
+
+    private static String formatExternalItemUsageExact(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.external_item_usage",
+                formatExactCount(used),
+                formatExactCount(total)
+        ).getString();
+    }
+
+    private static String formatExternalFluidUsage(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.external_fluid_usage",
+                formatCompact(used),
+                formatCompact(total)
+        ).getString();
+    }
+
+    private static String formatExternalFluidUsageExact(long used, long total, boolean available) {
+        if (!available) {
+            return "N/A";
+        }
+        return Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.external_fluid_usage",
+                formatExactCount(used),
+                formatExactCount(total)
+        ).getString();
     }
 
     /** 构建分组选项列表，确保"未分组"始终在首位 */
@@ -339,7 +452,6 @@ public final class OverviewViewModelMapper {
                     row.displayName(),
                     row.net(),
                     row.stock(),
-                    row.capacity(),
                     true,
                     row.iconSprite()
             ));
@@ -408,7 +520,6 @@ public final class OverviewViewModelMapper {
         for (ObserverDataPayload.BindingEntry binding : payload.bindings()) {
             String fallbackId = binding.networkType().toLowerCase(Locale.ROOT) + "_" + idx++;
             long stock = binding.currentValue();
-            long capacity = Math.max(binding.capacity(), stock + 1);
             long net = binding.totalProduced() - binding.totalConsumed();
             rows.add(new OverviewViewModel.TableRow(
                     fallbackId,
@@ -418,8 +529,7 @@ public final class OverviewViewModelMapper {
                     binding.totalConsumed(),
                     net,
                     stock,
-                    capacity,
-                    isCritical(net, stock, capacity),
+                    isCritical(net, stock),
                     starredItems.contains(fallbackId),
                     binding.iconSprite()
             ));
@@ -452,19 +562,9 @@ public final class OverviewViewModelMapper {
                 }
             }
         } catch (Exception ignored) {
-            // Keep fallback name when id is invalid or not resolvable on client.
+            // 当 id 无效或在客户端无法解析时，保留备用名称
         }
         return fallbackDisplayName == null || fallbackDisplayName.isBlank() ? itemId : fallbackDisplayName;
-    }
-
-    /**
-     * 估算物品容量（用于进度条显示）。
-     * 将当前数量向上取整到最近的千位，并至少多 250 作为余量。
-     */
-    private static long estimateCapacity(long amount) {
-        long cap = Math.max(1L, amount);
-        long rounded = ((cap + 999L) / 1000L) * 1000L;
-        return Math.max(rounded, cap + 250L);
     }
 
     /** 规范化分组键，空值映射到"未分组" */
@@ -518,12 +618,18 @@ public final class OverviewViewModelMapper {
         return comparator.thenComparing(OverviewViewModel.TableRow::displayName);
     }
 
-    /** 判断物品是否处于严重亏损状态（净消耗且库存低于 15%） */
-    private static boolean isCritical(long net, long stock, long capacity) {
-        if (net >= 0 || capacity <= 0) {
+    /** 判断物品是否处于严重亏损状态（净消耗且库存极低） */
+    private static boolean isCritical(long net, long stock) {
+        if (net >= 0) {
             return false;
         }
-        return (double) stock / (double) capacity < 0.15d;
+        return stock <= 64L;
+    }
+
+    private record StoragePresentation(
+            OverviewViewModel.KpiMetric storageKpi,
+            OverviewViewModel.StorageDetail storageDetail
+    ) {
     }
 
     /**
@@ -534,21 +640,44 @@ public final class OverviewViewModelMapper {
         return formatCompact(value) + " B";
     }
 
+    private static String formatExactByteLike(long value) {
+        return formatExactCount(value) + " B";
+    }
+
+    private static String formatExactCount(long value) {
+        return String.format(Locale.ROOT, "%,d", value);
+    }
+
     private record CellCapacityAggregation(
             long itemUsedBytes,
             long itemTotalBytes,
             long itemUsedTypes,
             long itemTotalTypes,
+            long itemUsedUnits,
+            long itemMaxUnits,
             long fluidUsedBytes,
             long fluidTotalBytes,
             long fluidUsedTypes,
             long fluidTotalTypes,
+            long fluidUsedUnits,
+            long fluidMaxUnits,
+            long externalItemUsedUnits,
+            long externalItemTotalUnits,
+            long externalFluidUsedUnits,
+            long externalFluidTotalUnits,
             boolean hasAe2Binding,
-            boolean available,
-            boolean reliable
+            boolean diskAvailable,
+            boolean diskReliable,
+            boolean externalAvailable,
+            boolean externalReliable
     ) {
         private static CellCapacityAggregation empty() {
-            return new CellCapacityAggregation(0L, 0L, 0L, 0L, 0L, 0L, 0L, 0L, false, false, true);
+            return new CellCapacityAggregation(
+                    0L, 0L, 0L, 0L, 0L, 0L,
+                    0L, 0L, 0L, 0L, 0L, 0L,
+                    0L, 0L, 0L, 0L,
+                    false, false, true, false, true
+            );
         }
 
         private CellCapacityAggregation merge(ObserverDataPayload.BindingEntry binding) {
@@ -562,12 +691,22 @@ public final class OverviewViewModelMapper {
                         itemTotalBytes,
                         itemUsedTypes,
                         itemTotalTypes,
+                        itemUsedUnits,
+                        itemMaxUnits,
                         fluidUsedBytes,
                         fluidTotalBytes,
                         fluidUsedTypes,
                         fluidTotalTypes,
+                        fluidUsedUnits,
+                        fluidMaxUnits,
+                        externalItemUsedUnits,
+                        externalItemTotalUnits,
+                        externalFluidUsedUnits,
+                        externalFluidTotalUnits,
                         true,
-                        available,
+                        diskAvailable,
+                        false,
+                        externalAvailable,
                         false
                 );
             }
@@ -576,13 +715,23 @@ public final class OverviewViewModelMapper {
                     saturatingAdd(itemTotalBytes, Math.max(0L, metrics.itemTotalBytes())),
                     saturatingAdd(itemUsedTypes, Math.max(0L, metrics.itemUsedTypes())),
                     saturatingAdd(itemTotalTypes, Math.max(0L, metrics.itemTotalTypes())),
+                    saturatingAdd(itemUsedUnits, Math.max(0L, metrics.itemUsedUnits())),
+                    saturatingAdd(itemMaxUnits, Math.max(0L, metrics.itemMaxUnits())),
                     saturatingAdd(fluidUsedBytes, Math.max(0L, metrics.fluidUsedBytes())),
                     saturatingAdd(fluidTotalBytes, Math.max(0L, metrics.fluidTotalBytes())),
                     saturatingAdd(fluidUsedTypes, Math.max(0L, metrics.fluidUsedTypes())),
                     saturatingAdd(fluidTotalTypes, Math.max(0L, metrics.fluidTotalTypes())),
+                    saturatingAdd(fluidUsedUnits, Math.max(0L, metrics.fluidUsedUnits())),
+                    saturatingAdd(fluidMaxUnits, Math.max(0L, metrics.fluidMaxUnits())),
+                    saturatingAdd(externalItemUsedUnits, Math.max(0L, metrics.externalItemUsedUnits())),
+                    saturatingAdd(externalItemTotalUnits, Math.max(0L, metrics.externalItemTotalUnits())),
+                    saturatingAdd(externalFluidUsedUnits, Math.max(0L, metrics.externalFluidUsedUnits())),
+                    saturatingAdd(externalFluidTotalUnits, Math.max(0L, metrics.externalFluidTotalUnits())),
                     true,
-                    available || metrics.available(),
-                    reliable && metrics.reliable()
+                    diskAvailable || metrics.available(),
+                    diskReliable && metrics.reliable(),
+                    externalAvailable || metrics.externalAvailable(),
+                    externalReliable && metrics.externalReliable()
             );
         }
     }

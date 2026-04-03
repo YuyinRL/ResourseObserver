@@ -359,9 +359,15 @@ public class ResourceTerminalItem extends Item {
                 metrics.fluidTotalTypes(),
                 metrics.fluidUsedUnits(),
                 metrics.fluidMaxUnits(),
+                metrics.externalItemUsedUnits(),
+                metrics.externalItemTotalUnits(),
+                metrics.externalFluidUsedUnits(),
+                metrics.externalFluidTotalUnits(),
                 metrics.scope(),
                 metrics.reliable(),
-                metrics.available()
+                metrics.available(),
+                metrics.externalReliable(),
+                metrics.externalAvailable()
         );
     }
 

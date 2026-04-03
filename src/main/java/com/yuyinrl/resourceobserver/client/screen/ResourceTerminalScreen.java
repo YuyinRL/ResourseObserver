@@ -34,7 +34,9 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 /**
@@ -60,6 +62,7 @@ public class ResourceTerminalScreen extends Screen {
     private static final int POPUP_ROW_HEIGHT = 14;        // 弹出菜单行高
     private static final int POPUP_MAX_HEIGHT = 172;       // 弹出菜单最大高度
     private static final int POPUP_SCROLL_STEP = 20;       // 弹出菜单滚动步进
+    private static final double CHART_HOVER_RADIUS_PX = 8.0;
 
     /** 面板尺寸模式枚举（S/M/L 三档） */
     private enum SizeMode {
@@ -137,10 +140,13 @@ public class ResourceTerminalScreen extends Screen {
     private UiRect chartSmoothingButtonHitbox;
     private UiRect chartWindowButtonHitbox;
     private UiRect chartLineModeButtonHitbox;
+    private UiRect chartPlotHitbox;
+    private List<ChartRenderer.ChartHoverPoint> chartHoverPoints = List.of();
     private UiRect pageScrollTrackHitbox;
     private UiRect pageScrollThumbHitbox;
     private boolean pageScrollDragging;
     private int pageScrollDragOffset;
+    private List<KpiRenderer.KpiHitbox> kpiHitboxes = List.of();
     private List<WatchlistRenderer.Hitbox> watchlistHitboxes = List.of();
     private List<WatchlistRenderer.RemoveHitbox> watchlistRemoveHitboxes = List.of();
     private List<TableRenderer.GroupHitbox> groupHitboxes = List.of();
@@ -180,9 +186,16 @@ public class ResourceTerminalScreen extends Screen {
     private Button groupInputConfirmButton;
     private Button groupInputCancelButton;
 
+    // ========== KPI 详情弹窗状态 ==========
+    private boolean storageDetailDialogOpen;
+    private UiRect storageDetailDialogRect;
+    private UiRect storageDetailDialogCloseHitbox;
+    private List<DialogTooltipHitbox> storageDetailTooltipHitboxes = List.of();
+
     // ========== Widget 引用 ==========
     private Button closeButton;
     private Button sizeModeButton;
+    private long storageKpiPressedUntilMs;
     private long groupButtonPressedUntilMs;
     private long statusButtonPressedUntilMs;
     private long resetButtonPressedUntilMs;
@@ -249,6 +262,10 @@ public class ResourceTerminalScreen extends Screen {
             return true;
         }
         if (keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (storageDetailDialogOpen) {
+                closeStorageDetailDialog();
+                return true;
+            }
             if (groupInputMode != GroupInputMode.NONE) {
                 closeGroupInput();
                 return true;
@@ -268,6 +285,25 @@ public class ResourceTerminalScreen extends Screen {
      */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (storageDetailDialogOpen) {
+            if (button != 0) {
+                return true;
+            }
+            if (storageDetailDialogRect == null) {
+                closeStorageDetailDialog();
+                return true;
+            }
+            if (storageDetailDialogCloseHitbox != null && storageDetailDialogCloseHitbox.contains(mouseX, mouseY)) {
+                closeStorageDetailDialog();
+                return true;
+            }
+            if (!storageDetailDialogRect.contains(mouseX, mouseY)) {
+                closeStorageDetailDialog();
+                return true;
+            }
+            return true;
+        }
+        // ===== 优先级 1：分组输入面板（模态对话框）=====
         if (groupInputMode != GroupInputMode.NONE) {
             if (groupInputPanel != null && !groupInputPanel.contains(mouseX, mouseY)) {
                 closeGroupInput();
@@ -276,10 +312,12 @@ public class ResourceTerminalScreen extends Screen {
             return super.mouseClicked(mouseX, mouseY, button);
         }
 
+        // ===== 优先级 2：弹出菜单（滚动条 → 菜单外关闭 → 选项命中）=====
         if (handlePopupMouseClicked(mouseX, mouseY, button)) {
             return true;
         }
 
+        // ===== 优先级 3：页面滚动条拖拽/点击 =====
         if (pageScrollThumbHitbox != null && pageScrollThumbHitbox.contains(mouseX, mouseY)) {
             pageScrollDragging = true;
             pageScrollDragOffset = (int) mouseY - pageScrollThumbHitbox.y();
@@ -291,6 +329,10 @@ public class ResourceTerminalScreen extends Screen {
         }
 
         if (layoutState != null && layoutState.scrollViewport().contains(mouseX, mouseY)) {
+            if (button == 0 && handleKpiClick(mouseX, mouseY)) {
+                return true;
+            }
+            // ===== 优先级 4：图表控制按钮组 =====
             if (button == 0 && chartPageToggleHitbox != null && chartPageToggleHitbox.contains(mouseX, mouseY)) {
                 chartPage = chartPage.next();
                 return true;
@@ -328,6 +370,7 @@ public class ResourceTerminalScreen extends Screen {
                 return true;
             }
 
+            // ===== 优先级 5：筛选/排序按钮 =====
             if (button == 0 && handleFilterButtonClick(mouseX, mouseY)) {
                 return true;
             }
@@ -336,6 +379,7 @@ public class ResourceTerminalScreen extends Screen {
                 return true;
             }
 
+            // ===== 优先级 6：关注列表移除按钮 =====
             if (button == 0) {
                 for (WatchlistRenderer.RemoveHitbox hitbox : watchlistRemoveHitboxes) {
                     if (hitbox.rect().contains(mouseX, mouseY)) {
@@ -345,6 +389,7 @@ public class ResourceTerminalScreen extends Screen {
                 }
             }
 
+            // ===== 优先级 7：表格行星标按钮 =====
             if (button == 0) {
                 for (TableRenderer.RowStarHitbox hitbox : rowStarHitboxes) {
                     if (hitbox.rect().contains(mouseX, mouseY)) {
@@ -354,6 +399,7 @@ public class ResourceTerminalScreen extends Screen {
                 }
             }
 
+            // ===== 优先级 8：关注列表物品选中 =====
             if (button == 0) {
                 for (WatchlistRenderer.Hitbox hitbox : watchlistHitboxes) {
                     if (hitbox.rect().contains(mouseX, mouseY)) {
@@ -366,6 +412,7 @@ public class ResourceTerminalScreen extends Screen {
                 }
             }
 
+            // ===== 优先级 9：分组标题折叠/展开 =====
             if (button == 0) {
                 for (TableRenderer.GroupHitbox hitbox : groupHitboxes) {
                     if (hitbox.rect().contains(mouseX, mouseY)) {
@@ -377,11 +424,13 @@ public class ResourceTerminalScreen extends Screen {
                 }
             }
 
+            // ===== 优先级 10：表格行点击（左键单选/Ctrl多选/右键菜单）=====
             for (TableRenderer.RowHitbox hitbox : rowHitboxes) {
                 if (!hitbox.rect().contains(mouseX, mouseY)) {
                     continue;
                 }
                 if (button == 1) {
+                    // 右键：如果多选集合包含当前行则对整个多选集操作，否则仅操作当前行
                     List<String> targets;
                     if (selectedItemIds.size() > 1 && selectedItemIds.contains(hitbox.itemId())) {
                         targets = List.copyOf(selectedItemIds);
@@ -393,6 +442,7 @@ public class ResourceTerminalScreen extends Screen {
                 }
                 if (button == 0) {
                     if (hasControlDown()) {
+                        // Ctrl+左键：切换多选状态
                         if (selectedItemIds.contains(hitbox.itemId())) {
                             selectedItemIds.remove(hitbox.itemId());
                             if (hitbox.itemId().equals(selectedItemId)) {
@@ -425,6 +475,9 @@ public class ResourceTerminalScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
+        if (storageDetailDialogOpen) {
+            return true;
+        }
         if (popupScrollDragging && popupScrollTrackHitbox != null && popupScrollThumbHitbox != null) {
             dragPopupScrollTo((int) mouseY - popupScrollDragOffset);
             return true;
@@ -438,6 +491,9 @@ public class ResourceTerminalScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
+        if (storageDetailDialogOpen) {
+            return true;
+        }
         if (popupMenuType != PopupMenuType.NONE && popupMenuRect != null && popupMenuRect.contains(mouseX, mouseY)) {
             int delta = scrollY > 0 ? -POPUP_SCROLL_STEP : (scrollY < 0 ? POPUP_SCROLL_STEP : 0);
             popupScrollPx = Math.max(0, Math.min(popupMaxScrollPx, popupScrollPx + delta));
@@ -463,10 +519,17 @@ public class ResourceTerminalScreen extends Screen {
             rebuildViewModel();
         }
 
+        // 当模态弹窗（KPI 详情 / 分组输入）打开时，抑制面板背景的鼠标悬停反馈
+        boolean modalOpen = storageDetailDialogOpen || groupInputMode != GroupInputMode.NONE;
+        int bgMouseX = modalOpen ? Integer.MIN_VALUE : mouseX;
+        int bgMouseY = modalOpen ? Integer.MIN_VALUE : mouseY;
+
         RenderUtils.fillPanel(gfx, layoutState.panel(), UiThemeTokens.PANEL_BG, UiThemeTokens.PANEL_BORDER);
         RenderUtils.fillPanel(gfx, layoutState.fixedChrome(), UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER);
 
         ContentLayout content = computeContentLayout(pageScrollPx);
+        // 内容布局双重计算防护：先计算布局→确定最大滚动范围→ clamp 滚动值
+        // 若 clamp 修正了滚动值（窗口缩小导致内容变短），则重新计算布局
         maxPageScrollPx = Math.max(0, content.totalHeight() - layoutState.scrollViewport().height());
         int clampedScroll = Math.max(0, Math.min(pageScrollPx, maxPageScrollPx));
         if (clampedScroll != pageScrollPx) {
@@ -474,11 +537,25 @@ public class ResourceTerminalScreen extends Screen {
             content = computeContentLayout(pageScrollPx);
         }
 
+        // 开启 scissor 裁剪，限制内容绘制在滚动视口内
         UiRect viewport = layoutState.scrollViewport();
         gfx.enableScissor(viewport.x(), viewport.y(), viewport.right(), viewport.bottom());
 
         HeaderRenderer.render(gfx, font, content.headerArea(), payload.observerPos(), payload.isBound());
-        KpiRenderer.render(gfx, font, content.kpiArea(), viewModel.kpis());
+        KpiRenderer.InteractionState kpiInteractionState = new KpiRenderer.InteractionState(
+                Set.of(OverviewViewModel.KpiType.STORAGE),
+                isStorageKpiPressed() ? Set.of(OverviewViewModel.KpiType.STORAGE) : Set.of()
+        );
+        KpiRenderer.RenderResult kpiResult = KpiRenderer.render(
+                gfx,
+                font,
+                content.kpiArea(),
+                viewModel.kpis(),
+                kpiInteractionState,
+                bgMouseX,
+                bgMouseY
+        );
+        kpiHitboxes = kpiResult.kpiHitboxes();
         ChartRenderer.RenderResult chartResult = ChartRenderer.render(
                 gfx,
                 font,
@@ -496,6 +573,8 @@ public class ResourceTerminalScreen extends Screen {
         chartLineModeButtonHitbox = chartResult.lineModeButton();
         chartSmoothingButtonHitbox = chartResult.smoothingButton();
         resetButtonHitbox = chartResult.resetButton();
+        chartPlotHitbox = chartResult.plotRect();
+        chartHoverPoints = chartResult.hoverPoints();
 
         if (content.watchlistVisible()) {
             WatchlistRenderer.RenderResult watchResult = WatchlistRenderer.render(
@@ -521,8 +600,8 @@ public class ResourceTerminalScreen extends Screen {
                 selectedItemId,
                 Set.copyOf(selectedItemIds),
                 viewModel.uiState(),
-                mouseX,
-                mouseY,
+                bgMouseX,
+                bgMouseY,
                 new TableRenderer.FilterPressState(
                         isFilterPressed(groupButtonPressedUntilMs),
                         isFilterPressed(statusButtonPressedUntilMs),
@@ -540,13 +619,18 @@ public class ResourceTerminalScreen extends Screen {
 
         renderPageScrollbar(gfx);
 
-        sizeModeButton.render(gfx, mouseX, mouseY, partialTick);
-        closeButton.render(gfx, mouseX, mouseY, partialTick);
+        sizeModeButton.render(gfx, bgMouseX, bgMouseY, partialTick);
+        closeButton.render(gfx, bgMouseX, bgMouseY, partialTick);
 
         if (groupInputMode != GroupInputMode.NONE) {
             renderGroupInputOverlay(gfx, mouseX, mouseY, partialTick);
+        } else if (storageDetailDialogOpen) {
+            renderStorageDetailDialog(gfx, mouseX, mouseY);
         } else {
             renderPopupMenu(gfx, mouseX, mouseY);
+        }
+        if (groupInputMode == GroupInputMode.NONE && !storageDetailDialogOpen && popupMenuType == PopupMenuType.NONE) {
+            renderChartHoverTooltip(gfx, mouseX, mouseY);
         }
     }
 
@@ -705,8 +789,11 @@ public class ResourceTerminalScreen extends Screen {
             pageScrollThumbHitbox = null;
             return;
         }
+        // 滑块高度 = 视口占总内容的比例 × 轨道高度（最小 18px）
         int thumbH = Math.max(18, Math.round((viewport.height() / (float) (viewport.height() + maxPageScrollPx)) * trackH));
+        // 可用行程 = 轨道高度 - 滑块高度
         int travel = Math.max(1, trackH - thumbH);
+        // 滑块位置 = 滚动进度 × 行程
         int thumbY = trackY + Math.round((pageScrollPx / (float) maxPageScrollPx) * travel);
         pageScrollThumbHitbox = new UiRect(trackX, thumbY, trackW, thumbH);
         gfx.fill(pageScrollThumbHitbox.x(), pageScrollThumbHitbox.y(), pageScrollThumbHitbox.right(), pageScrollThumbHitbox.bottom(), UiThemeTokens.CYAN);
@@ -775,6 +862,40 @@ public class ResourceTerminalScreen extends Screen {
             }
         }
         return selectedItemId;
+    }
+
+    private boolean handleKpiClick(double mouseX, double mouseY) {
+        for (KpiRenderer.KpiHitbox hitbox : kpiHitboxes) {
+            if (!hitbox.rect().contains(mouseX, mouseY)) {
+                continue;
+            }
+            if (hitbox.type() == OverviewViewModel.KpiType.STORAGE) {
+                storageKpiPressedUntilMs = Util.getMillis() + 140L;
+                openStorageDetailDialog();
+                return true;
+            }
+            return false;
+        }
+        return false;
+    }
+
+    private boolean isStorageKpiPressed() {
+        return Util.getMillis() < storageKpiPressedUntilMs;
+    }
+
+    private void openStorageDetailDialog() {
+        if (viewModel == null || viewModel.storageDetail() == null) {
+            return;
+        }
+        closePopupMenu();
+        storageDetailDialogOpen = true;
+    }
+
+    private void closeStorageDetailDialog() {
+        storageDetailDialogOpen = false;
+        storageDetailDialogRect = null;
+        storageDetailDialogCloseHitbox = null;
+        storageDetailTooltipHitboxes = List.of();
     }
 
     /** 处理筛选按钮点击（打开对应弹出菜单） */
@@ -892,10 +1013,12 @@ public class ResourceTerminalScreen extends Screen {
         return true;
     }
 
+    /** 根据鼠标坐标定位弹出菜单选项（屏幕 Y → 滚动局部 Y → 行索引） */
     private PopupOption popupOptionAt(double mouseX, double mouseY) {
         if (popupContentRect == null || !popupContentRect.contains(mouseX, mouseY)) {
             return null;
         }
+        // 屏幕 Y 转换为滚动内容局部坐标，再整除行高得到行索引
         int localY = (int) mouseY - popupContentRect.y() + popupScrollPx;
         int index = localY / POPUP_ROW_HEIGHT;
         if (index < 0 || index >= popupOptions.size()) {
@@ -945,7 +1068,6 @@ public class ResourceTerminalScreen extends Screen {
         return options;
     }
 
-    /** 构建排序模式弹出菜单选项 */
     /** 构建状态筛选弹出菜单选项 */
     private List<PopupOption> buildStatusOptions() {
         if (viewModel == null) {
@@ -1024,10 +1146,6 @@ public class ResourceTerminalScreen extends Screen {
         return (selected ? "* " : "  ") + label;
     }
 
-    private String withSelectedMarker(boolean selected, String label) {
-        return (selected ? "• " : "  ") + label;
-    }
-
     private OverviewViewModel.GroupOption groupByKey(String key) {
         if (viewModel == null || key == null) {
             return null;
@@ -1057,9 +1175,11 @@ public class ResourceTerminalScreen extends Screen {
             return;
         }
 
+        // 锚点 Y 从内容坐标系还原为屏幕坐标系（减去页面滚动偏移）
         int anchorTopY = popupAnchorContentTopY - pageScrollPx;
         int anchorBottomY = popupAnchorContentBottomY - pageScrollPx;
         UiRect viewport = layoutState.scrollViewport();
+        // 锚点超出视口范围则自动关闭菜单
         if (anchorBottomY < viewport.y() - 12 || anchorTopY > viewport.bottom() + 12) {
             closePopupMenu();
             return;
@@ -1078,19 +1198,23 @@ public class ResourceTerminalScreen extends Screen {
         int fullContentHeight = popupOptions.size() * POPUP_ROW_HEIGHT;
         int desiredHeight = Math.min(POPUP_MAX_HEIGHT, fullContentHeight + 4);
 
+        // 菜单定位策略：优先向下展开，空间不足且上方更大则向上翻转
         int x = Math.max(4, Math.min(width - menuWidth - 4, popupAnchorX));
         int panelMinY = layoutState.panel().y() + 2;
         int panelMaxY = layoutState.panel().bottom() - 2;
-        int y = anchorBottomY + 1;
-        int belowSpace = panelMaxY - y;
-        int aboveSpace = anchorTopY - panelMinY;
+        int y = anchorBottomY + 1;          // 默认在锚点下方
+        int belowSpace = panelMaxY - y;     // 下方可用空间
+        int aboveSpace = anchorTopY - panelMinY; // 上方可用空间
         int menuHeight = desiredHeight;
         if (menuHeight > belowSpace && aboveSpace >= belowSpace) {
+            // 上方空间更大：翻转到锚点上方
             menuHeight = Math.max(48, Math.min(desiredHeight, aboveSpace));
             y = anchorTopY - menuHeight - 1;
         } else if (menuHeight > belowSpace) {
+            // 下方空间不足但上方更小：截断到下方可用空间（最小 48px）
             menuHeight = Math.max(48, belowSpace);
         }
+        // 兆底：不超出面板顶部
         if (y < panelMinY) {
             y = panelMinY;
         }
@@ -1138,6 +1262,7 @@ public class ResourceTerminalScreen extends Screen {
         List<PopupOptionHitbox> hitboxes = new ArrayList<>();
         for (int i = 0; i < popupOptions.size(); i++) {
             PopupOption option = popupOptions.get(i);
+            // 行坐标 = 内容区域顶部 - 滚动偏移 + 行索引 × 行高
             int rowY = popupContentRect.y() - popupScrollPx + i * POPUP_ROW_HEIGHT;
             if (rowY + POPUP_ROW_HEIGHT <= popupContentRect.y() || rowY >= popupContentRect.bottom()) {
                 continue;
@@ -1184,6 +1309,11 @@ public class ResourceTerminalScreen extends Screen {
         setGroupInputVisible(false);
     }
 
+    /**
+     * 提交分组输入。
+     * CREATE 模式：创建新分组并将待分组物品分配进去；
+     * RENAME 模式：仅重命名目标分组。
+     */
     private void submitGroupInput() {
         if (groupInputMode == GroupInputMode.NONE || groupNameEdit == null) {
             return;
@@ -1221,6 +1351,265 @@ public class ResourceTerminalScreen extends Screen {
         groupInputCancelButton.render(gfx, mouseX, mouseY, partialTick);
     }
 
+    private void renderStorageDetailDialog(GuiGraphics gfx, int mouseX, int mouseY) {
+        if (viewModel == null || viewModel.storageDetail() == null || layoutState == null) {
+            closeStorageDetailDialog();
+            return;
+        }
+        gfx.pose().pushPose();
+        gfx.pose().translate(0.0f, 0.0f, 320.0f);
+
+        OverviewViewModel.StorageDetail detail = viewModel.storageDetail();
+        UiRect panel = layoutState.panel();
+        int dialogWidth = Math.min(460, panel.width() - 26);
+        int dialogHeight = Math.min(238, panel.height() - 26);
+        int dialogX = panel.x() + (panel.width() - dialogWidth) / 2;
+        int dialogY = panel.y() + (panel.height() - dialogHeight) / 2;
+        storageDetailDialogRect = new UiRect(dialogX, dialogY, dialogWidth, dialogHeight);
+
+        gfx.fill(panel.x(), panel.y(), panel.right(), panel.bottom(), 0xAA04070E);
+        RenderUtils.fillPanel(gfx, storageDetailDialogRect, UiThemeTokens.PANEL_BG, UiThemeTokens.SECTION_BORDER);
+
+        int closeSize = 16;
+        int closeX = storageDetailDialogRect.right() - closeSize - 8;
+        int closeY = storageDetailDialogRect.y() + 8;
+        storageDetailDialogCloseHitbox = new UiRect(closeX, closeY, closeSize, closeSize);
+        RenderUtils.fillPanel(gfx, storageDetailDialogCloseHitbox, 0x4016253C, UiThemeTokens.DIVIDER);
+        gfx.drawString(font, "X", closeX + 5, closeY + 4, UiThemeTokens.TEXT_MUTED);
+
+        int titleColor = switch (viewModel.kpis().stream()
+                .filter(kpi -> kpi.type() == OverviewViewModel.KpiType.STORAGE)
+                .findFirst()
+                .map(OverviewViewModel.KpiMetric::status)
+                .orElse(OverviewViewModel.Status.NEUTRAL)) {
+            case POSITIVE -> UiThemeTokens.EMERALD;
+            case WARNING -> UiThemeTokens.AMBER;
+            case NEGATIVE -> UiThemeTokens.ROSE;
+            case NEUTRAL -> UiThemeTokens.TEXT;
+        };
+
+        int textX = storageDetailDialogRect.x() + 12;
+        int y = storageDetailDialogRect.y() + 10;
+        List<DialogTooltipHitbox> tooltipHitboxes = new ArrayList<>();
+        gfx.drawString(
+                font,
+                Component.translatable("screen.resourceobserver.overview.storage.detail.title"),
+                textX,
+                y,
+                UiThemeTokens.TITLE
+        );
+        y += 12;
+        String hint = detail.hintText() == null || detail.hintText().isBlank()
+                ? Component.translatable("screen.resourceobserver.overview.kpi.storage.normal").getString()
+                : detail.hintText();
+        gfx.drawString(font, hint, textX, y, titleColor);
+        y += 14;
+
+        gfx.drawString(
+                font,
+                Component.translatable("screen.resourceobserver.overview.storage.detail.section.disk"),
+                textX,
+                y,
+                UiThemeTokens.TEXT
+        );
+        y += 11;
+        int rowTextWidth = dialogWidth - 24;
+        y = drawStorageChannelRow(gfx, detail.diskItem(), textX, y, rowTextWidth, tooltipHitboxes);
+        y = drawStorageChannelRow(gfx, detail.diskFluid(), textX, y, rowTextWidth, tooltipHitboxes);
+        y += 4;
+
+        gfx.drawString(
+                font,
+                Component.translatable("screen.resourceobserver.overview.storage.detail.section.external"),
+                textX,
+                y,
+                UiThemeTokens.TEXT
+        );
+        y += 11;
+        y = drawStorageChannelRow(gfx, detail.externalItem(), textX, y, rowTextWidth, tooltipHitboxes);
+        y = drawStorageChannelRow(gfx, detail.externalFluid(), textX, y, rowTextWidth, tooltipHitboxes);
+
+        y += 8;
+        String reliableLine = Component.translatable(
+                "screen.resourceobserver.overview.storage.detail.reliability",
+                boolLabel(detail.diskReliable()),
+                boolLabel(detail.externalReliable())
+        ).getString();
+        gfx.drawString(font, RenderUtils.ellipsis(font, reliableLine, dialogWidth - 24), textX, y, UiThemeTokens.TEXT_MUTED);
+        storageDetailTooltipHitboxes = List.copyOf(tooltipHitboxes);
+        gfx.pose().popPose();
+        List<Component> tooltipLines = findStorageDetailTooltip(mouseX, mouseY);
+        if (!tooltipLines.isEmpty()) {
+            gfx.renderTooltip(font, tooltipLines, Optional.empty(), mouseX, mouseY);
+        }
+    }
+
+    private int drawStorageChannelRow(
+            GuiGraphics gfx,
+            OverviewViewModel.StorageChannel channel,
+            int x,
+            int y,
+            int maxTextWidth,
+            List<DialogTooltipHitbox> tooltipHitboxes
+    ) {
+        if (channel == null) {
+            return y + 20;
+        }
+        gfx.drawString(font, channel.label(), x, y, UiThemeTokens.TEXT_MUTED);
+        y += 9;
+        String usage = channel.usageText() == null || channel.usageText().isBlank() ? "N/A" : channel.usageText();
+        String usageDisplay = RenderUtils.ellipsis(font, usage, maxTextWidth);
+        gfx.drawString(font, usageDisplay, x, y, UiThemeTokens.TITLE);
+        if (channel.usageDetailText() != null && !channel.usageDetailText().isBlank()) {
+            int usageHitboxWidth = Math.max(1, Math.min(maxTextWidth, font.width(usageDisplay)));
+            tooltipHitboxes.add(new DialogTooltipHitbox(
+                    new UiRect(x, y, usageHitboxWidth, 9),
+                    List.of(Component.literal(channel.label()), Component.literal(channel.usageDetailText()))
+            ));
+        }
+        y += 9;
+        String types = channel.typesText() == null || channel.typesText().isBlank() ? "N/A" : channel.typesText();
+        String typesDisplay = RenderUtils.ellipsis(font, types, maxTextWidth);
+        gfx.drawString(font, typesDisplay, x, y, UiThemeTokens.TEXT_MUTED);
+        if (channel.typesDetailText() != null && !channel.typesDetailText().isBlank()) {
+            int typesHitboxWidth = Math.max(1, Math.min(maxTextWidth, font.width(typesDisplay)));
+            tooltipHitboxes.add(new DialogTooltipHitbox(
+                    new UiRect(x, y, typesHitboxWidth, 9),
+                    List.of(Component.literal(channel.label()), Component.literal(channel.typesDetailText()))
+            ));
+        }
+        return y + 10;
+    }
+
+    private List<Component> findStorageDetailTooltip(int mouseX, int mouseY) {
+        if (!storageDetailDialogOpen || storageDetailTooltipHitboxes.isEmpty()) {
+            return List.of();
+        }
+        for (DialogTooltipHitbox hitbox : storageDetailTooltipHitboxes) {
+            if (hitbox.rect().contains(mouseX, mouseY)) {
+                return hitbox.lines();
+            }
+        }
+        return List.of();
+    }
+
+    private String boolLabel(boolean value) {
+        return Component.translatable(
+                value ? "message.resourceobserver.debug.bool.true" : "message.resourceobserver.debug.bool.false"
+        ).getString();
+    }
+
+    private void renderChartHoverTooltip(GuiGraphics gfx, int mouseX, int mouseY) {
+        if (chartPlotHitbox == null || chartHoverPoints == null || chartHoverPoints.isEmpty()) {
+            return;
+        }
+        if (!chartPlotHitbox.contains(mouseX, mouseY)) {
+            return;
+        }
+        ChartRenderer.ChartHoverPoint hoverPoint = findNearestChartHoverPoint(mouseX, mouseY);
+        if (hoverPoint == null) {
+            return;
+        }
+        List<Component> lines = List.of(
+                chartSeriesLabel(hoverPoint.seriesType()),
+                Component.literal("Value: " + formatExactMetric(hoverPoint.value()) + " (" + formatCompactMetric(hoverPoint.value()) + ")"),
+                Component.literal("Time: " + formatChartAge(hoverPoint.slotIndex()))
+        );
+        gfx.renderTooltip(font, lines, Optional.empty(), mouseX, mouseY);
+    }
+
+    private ChartRenderer.ChartHoverPoint findNearestChartHoverPoint(int mouseX, int mouseY) {
+        double thresholdSqr = CHART_HOVER_RADIUS_PX * CHART_HOVER_RADIUS_PX;
+        ChartRenderer.ChartHoverPoint nearest = null;
+        double nearestSqr = thresholdSqr;
+        for (ChartRenderer.ChartHoverPoint point : chartHoverPoints) {
+            double px = chartPlotHitbox.x() + point.x();
+            double py = chartPlotHitbox.y() + point.y();
+            double dx = mouseX - px;
+            double dy = mouseY - py;
+            double distSqr = dx * dx + dy * dy;
+            if (distSqr <= nearestSqr) {
+                nearestSqr = distSqr;
+                nearest = point;
+            }
+        }
+        return nearest;
+    }
+
+    private Component chartSeriesLabel(ChartRenderer.ChartSeriesType seriesType) {
+        return switch (seriesType) {
+            case PRODUCTION -> Component.translatable("screen.resourceobserver.overview.chart.legend.production");
+            case CONSUMPTION -> Component.translatable("screen.resourceobserver.overview.chart.legend.consumption");
+            case NET -> Component.translatable("screen.resourceobserver.overview.chart.legend.net");
+            case STOCK -> Component.translatable("screen.resourceobserver.overview.chart.legend.stock");
+        };
+    }
+
+    private String formatChartAge(int slotIndex) {
+        int bucketCount = Math.max(1, chartWindow.bucketCount());
+        int clampedSlot = Math.max(0, Math.min(bucketCount - 1, slotIndex));
+        long ageTicks = (long) (bucketCount - 1 - clampedSlot) * Math.max(1L, chartWindow.bucketTicks());
+        long ageSeconds = Math.max(0L, ageTicks / 20L);
+        return formatAgeCompact(ageSeconds) + " ago  (slot " + clampedSlot + "/" + (bucketCount - 1) + ")";
+    }
+
+    private String formatAgeCompact(long totalSeconds) {
+        if (totalSeconds <= 0L) {
+            return "0s";
+        }
+        if (totalSeconds < 60L) {
+            return totalSeconds + "s";
+        }
+        long totalMinutes = totalSeconds / 60L;
+        if (totalMinutes < 60L) {
+            return totalMinutes + "m";
+        }
+        long totalHours = totalMinutes / 60L;
+        if (totalHours < 24L) {
+            return totalHours + "h";
+        }
+        long totalDays = totalHours / 24L;
+        return totalDays + "d";
+    }
+
+    private String formatExactMetric(double value) {
+        if (Math.abs(value - Math.rint(value)) < 1.0E-6) {
+            return String.format(Locale.ROOT, "%,d", (long) Math.rint(value));
+        }
+        return trimTrailingZeros(String.format(Locale.ROOT, "%,.2f", value));
+    }
+
+    private String formatCompactMetric(double value) {
+        double abs = Math.abs(value);
+        if (abs >= 1_000_000_000.0) {
+            return trimTrailingZeros(String.format(Locale.ROOT, "%.1fB", value / 1_000_000_000.0));
+        }
+        if (abs >= 1_000_000.0) {
+            return trimTrailingZeros(String.format(Locale.ROOT, "%.1fM", value / 1_000_000.0));
+        }
+        if (abs >= 1_000.0) {
+            return trimTrailingZeros(String.format(Locale.ROOT, "%.1fK", value / 1_000.0));
+        }
+        return formatExactMetric(value);
+    }
+
+    private String trimTrailingZeros(String value) {
+        if (value == null || value.isEmpty()) {
+            return "0";
+        }
+        if (!value.contains(".")) {
+            return value;
+        }
+        int end = value.length();
+        while (end > 0 && value.charAt(end - 1) == '0') {
+            end--;
+        }
+        if (end > 0 && value.charAt(end - 1) == '.') {
+            end--;
+        }
+        return end <= 0 ? "0" : value.substring(0, end);
+    }
+
     private void clampPageScroll() {
         if (layoutState == null || viewModel == null) {
             pageScrollPx = 0;
@@ -1244,6 +1633,7 @@ public class ResourceTerminalScreen extends Screen {
         setPageScrollFromThumbTop(targetThumbTop - pageScrollTrackHitbox.y());
     }
 
+    /** 将滑块位置反算为滚动值（ratio = thumbTop / travel → scrollPx = ratio × maxScroll） */
     private void setPageScrollFromThumbTop(int thumbTopRelative) {
         if (pageScrollTrackHitbox == null || pageScrollThumbHitbox == null || maxPageScrollPx <= 0) {
             pageScrollPx = 0;
@@ -1361,5 +1751,8 @@ public class ResourceTerminalScreen extends Screen {
 
     /** 弹出菜单选项热区 */
     private record PopupOptionHitbox(UiRect rect, int optionIndex) {
+    }
+
+    private record DialogTooltipHitbox(UiRect rect, List<Component> lines) {
     }
 }

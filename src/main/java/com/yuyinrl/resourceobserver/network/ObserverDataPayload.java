@@ -74,6 +74,10 @@ public record ObserverDataPayload(
     ) {
     }
 
+    /**
+     * 条目类型枚举 —— 区分物品（ITEM）和流体（FLUID）。
+     * 使用整型 ID 进行网络序列化，解码时通过 fromId 映射回枚举值。
+     */
     public enum EntryType {
         ITEM(0),
         FLUID(1);
@@ -96,6 +100,11 @@ public record ObserverDataPayload(
         }
     }
 
+    /**
+     * 存储单元容量指标 —— AE2 存储单元的物品/流体详细容量数据。
+     * 分别记录物品通道和流体通道的已用/总量字节、类型数、单位数。
+     * scope 表示统计范围，reliable 标识数据是否可信，available 标识存储单元是否可用。
+     */
     public record CellCapacityMetrics(
             long itemUsedBytes,
             long itemTotalBytes,
@@ -109,10 +118,17 @@ public record ObserverDataPayload(
             long fluidTotalTypes,
             long fluidUsedUnits,
             long fluidMaxUnits,
+            long externalItemUsedUnits,
+            long externalItemTotalUnits,
+            long externalFluidUsedUnits,
+            long externalFluidTotalUnits,
             String scope,
             boolean reliable,
-            boolean available
+            boolean available,
+            boolean externalReliable,
+            boolean externalAvailable
     ) {
+        /** 返回一个“不可用”的空指标实例，用于网络离线或无存储单元时的安全默认值 */
         public static CellCapacityMetrics unavailable() {
             return new CellCapacityMetrics(
                     0L,
@@ -127,7 +143,13 @@ public record ObserverDataPayload(
                     0L,
                     0L,
                     0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
                     "AE2_CELLS_ONLY",
+                    false,
+                    false,
                     false,
                     false
             );
@@ -308,6 +330,7 @@ public record ObserverDataPayload(
                     }
                 }
 
+                /** 截断 UTF 字符串至指定最大长度，防止超长调试信息导致数据包溢出 */
                 private static String clampUtf(String text, int maxLength) {
                     if (text == null || text.isBlank()) {
                         return "";
@@ -318,6 +341,7 @@ public record ObserverDataPayload(
                     return text.substring(0, maxLength);
                 }
 
+                /** 反序列化存储单元容量指标（12 个 long + 1 个字符串 + 2 个布尔值） */
                 private static CellCapacityMetrics readCellCapacityMetrics(FriendlyByteBuf buf) {
                     return new CellCapacityMetrics(
                             buf.readLong(),
@@ -332,12 +356,19 @@ public record ObserverDataPayload(
                             buf.readLong(),
                             buf.readLong(),
                             buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
                             buf.readUtf(64),
+                            buf.readBoolean(),
+                            buf.readBoolean(),
                             buf.readBoolean(),
                             buf.readBoolean()
                     );
                 }
 
+                /** 序列化存储单元容量指标，null 时写入不可用默认值以保证字段完整性 */
                 private static void writeCellCapacityMetrics(FriendlyByteBuf buf, CellCapacityMetrics metrics) {
                     CellCapacityMetrics safeMetrics = metrics == null ? CellCapacityMetrics.unavailable() : metrics;
                     buf.writeLong(safeMetrics.itemUsedBytes());
@@ -352,9 +383,15 @@ public record ObserverDataPayload(
                     buf.writeLong(safeMetrics.fluidTotalTypes());
                     buf.writeLong(safeMetrics.fluidUsedUnits());
                     buf.writeLong(safeMetrics.fluidMaxUnits());
+                    buf.writeLong(safeMetrics.externalItemUsedUnits());
+                    buf.writeLong(safeMetrics.externalItemTotalUnits());
+                    buf.writeLong(safeMetrics.externalFluidUsedUnits());
+                    buf.writeLong(safeMetrics.externalFluidTotalUnits());
                     buf.writeUtf(safeMetrics.scope(), 64);
                     buf.writeBoolean(safeMetrics.reliable());
                     buf.writeBoolean(safeMetrics.available());
+                    buf.writeBoolean(safeMetrics.externalReliable());
+                    buf.writeBoolean(safeMetrics.externalAvailable());
                 }
 
                 /** 反序列化物品增量列表 */

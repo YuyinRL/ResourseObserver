@@ -32,6 +32,9 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.Items;
+import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 import net.neoforged.neoforge.items.IItemHandler;
@@ -39,6 +42,7 @@ import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -77,6 +81,9 @@ public class ObserverBlockEntity extends BlockEntity {
     private static final int SAMPLE_INTERVAL = 10;
     private static final String AE2_CAPACITY_SCOPE_CELLS_ONLY = "AE2_CELLS_ONLY";
     private static final String FLUID_KEY_PREFIX = "fluid:";
+    private static final int DEFAULT_ITEM_PROBE_COUNT = 1;
+    private static final int MAX_ITEM_PROBE_CANDIDATES = 6;
+    private static final int MIN_ITEM_PROBE_BUDGET = 96;
 
     /** 当前所有网络绑定列表 */
     private final List<BoundEntry> bindings = new ArrayList<>();
@@ -119,9 +126,15 @@ public class ObserverBlockEntity extends BlockEntity {
             long fluidTotalTypes,
             long fluidUsedUnits,
             long fluidMaxUnits,
+            long externalItemUsedUnits,
+            long externalItemTotalUnits,
+            long externalFluidUsedUnits,
+            long externalFluidTotalUnits,
             String scope,
             boolean reliable,
-            boolean available
+            boolean available,
+            boolean externalReliable,
+            boolean externalAvailable
     ) {
         public static Ae2CellCapacityMetrics unavailable() {
             return new Ae2CellCapacityMetrics(
@@ -137,7 +150,13 @@ public class ObserverBlockEntity extends BlockEntity {
                     0L,
                     0L,
                     0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
                     AE2_CAPACITY_SCOPE_CELLS_ONLY,
+                    false,
+                    false,
                     false,
                     false
             );
@@ -490,6 +509,31 @@ public class ObserverBlockEntity extends BlockEntity {
     ) {
     }
 
+    private record ExternalCapacityReadResult(
+            long itemUsedUnits,
+            long itemTotalUnits,
+            long fluidUsedUnits,
+            long fluidTotalUnits,
+            boolean reliable,
+            boolean available,
+            String debugSuffix
+    ) {
+        private static ExternalCapacityReadResult empty() {
+            return new ExternalCapacityReadResult(
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    true,
+                    false,
+                    ";capacity_external_available=false;capacity_external_reliable=true"
+                            + ";capacity_external_providers_total=0"
+                            + ";capacity_external_storage_bus_total=0"
+                            + ";capacity_external_storage_bus_readable=0"
+            );
+        }
+    }
+
     private boolean isSameAe2Grid(String leftNetworkId, String rightNetworkId) {
         IGrid leftGrid = resolveAe2GridForNetwork(leftNetworkId);
         if (leftGrid == null) {
@@ -499,12 +543,21 @@ public class ObserverBlockEntity extends BlockEntity {
         return rightGrid != null && leftGrid == rightGrid;
     }
 
+    /**
+     * 解析目标方块所在的 AE2 网络 Grid。
+     * <p>
+     * AE2 节点具有方向性，需遍历所有 6 个面方向（上/下/东/西/南/北）
+     * 尝试获取有效的 GridNode。找到第一个非 null 节点后停止遍历。
+     * getGrid() 可能在网络处于无效/拆卸状态时抛出 IllegalStateException，
+     * 此时安全返回 null。
+     */
     private @Nullable IGrid resolveAe2GridAt(BlockPos targetPos) {
         IInWorldGridNodeHost host = level.getCapability(AECapabilities.IN_WORLD_GRID_NODE_HOST, targetPos, null);
         if (host == null) {
             return null;
         }
 
+        // 遍历 6 个面方向查找可用 GridNode（AE2 连接具有方向性）
         IGridNode node = null;
         for (Direction dir : Direction.values()) {
             node = host.getGridNode(dir);
@@ -519,6 +572,7 @@ public class ObserverBlockEntity extends BlockEntity {
         try {
             return node.getGrid();
         } catch (IllegalStateException ex) {
+            // 网络处于无效状态（如正在拆卸），安全返回 null
             return null;
         }
     }
@@ -538,12 +592,14 @@ public class ObserverBlockEntity extends BlockEntity {
             );
         }
 
+        // 使用 AE2 的缓存库存快照（非实时查询），性能更优且避免并发问题
         IStorageService storageService = grid.getStorageService();
         KeyCounter cachedInventory = storageService.getCachedInventory();
         Map<String, Long> snapshot = new HashMap<>();
         int itemTypeCount = 0;
         int fluidTypeCount = 0;
         for (AEKey key : cachedInventory.keySet()) {
+            // entryId 规则：物品直接使用注册 ID，流体加 "fluid:" 前缀以区分命名空间
             String entryId = toEntryId(key);
             if (entryId == null) {
                 continue;
@@ -557,6 +613,7 @@ public class ObserverBlockEntity extends BlockEntity {
             } else {
                 itemTypeCount++;
             }
+            // 使用 merge 聚合同一 entryId 的数量（同一物品可能来自多个存储源）
             snapshot.merge(entryId, amount, Long::sum);
         }
         Ae2CapacityReadResult capacityReadResult = readAe2CellCapacityMetrics(grid);
@@ -593,6 +650,16 @@ public class ObserverBlockEntity extends BlockEntity {
         return !isFluidEntryId(entryId);
     }
 
+    /**
+     * 读取 AE2 网络中所有存储单元（Cell）的容量指标。
+     * <p>
+     * 处理流程（7 层嵌套条件链）：
+     * 设备遍历 → 通电检查 → 插槽遍历 → Cell 为空判断 → 反射解析 Cell 类并获取访问器
+     * → 通道推断（ITEM/FLUID） → 读取指标并累加到对应通道的总和。
+     * <p>
+     * 使用 saturatingAdd 防止 long 溢出到负数。20+ 个计数器用于构建调试诊断信息。
+     * 任何反射读取失败都会标记 reliable=false 而非直接抛异常，保证容量探针的鲁棒性。
+     */
     private Ae2CapacityReadResult readAe2CellCapacityMetrics(IGrid grid) {
         long itemUsedBytes = 0L;
         long itemTotalBytes = 0L;
@@ -650,12 +717,15 @@ public class ObserverBlockEntity extends BlockEntity {
             if (powered) {
                 poweredDeviceCount++;
             }
+            // 内层循环：遍历该设备的每个 Cell 插槽
             for (int slot = 0; slot < machine.getCellCount(); slot++) {
+                // 探测 Cell 状态（部分第三方 Cell 可能抑出异常）
                 if (!probeCellStatus(machine, slot)) {
                     statusProbeFailedCount++;
                 }
                 StorageCell cell = machine.getOriginalCellInventory(slot);
                 if (cell == null) {
+                    // 区分通电/断电状态下的空插槽，用于诊断空插槽是因断电还是真正无 Cell
                     if (powered) {
                         nullCellCount++;
                     } else {
@@ -664,6 +734,7 @@ public class ObserverBlockEntity extends BlockEntity {
                     continue;
                 }
                 cellCount++;
+                // 反射解析 Cell 类的访问器（带缓存，失败标记为不可靠）
                 Class<?> cellClass = cell.getClass();
                 CellMetricsAccessors accessors = resolveCellMetricsAccessors(cellClass);
                 if (accessors == null) {
@@ -678,6 +749,7 @@ public class ObserverBlockEntity extends BlockEntity {
                 if (slotProbe.keyTypeId() != null) {
                     incrementCount(slotCellKeyTypes, slotProbe.keyTypeId());
                 }
+                // 先尝试从 Cell 物品类型推断通道，推断失败再用访问器智能检测
                 CellChannel channel = slotProbe.channel();
                 if (channel == null) {
                     slotCellChannelUnknown++;
@@ -724,6 +796,7 @@ public class ObserverBlockEntity extends BlockEntity {
             }
         }
 
+        ExternalCapacityReadResult externalCapacity = readAe2ExternalCapacityMetrics(grid);
         Ae2CellCapacityMetrics metrics = new Ae2CellCapacityMetrics(
                 itemUsedBytes,
                 itemTotalBytes,
@@ -737,9 +810,15 @@ public class ObserverBlockEntity extends BlockEntity {
                 fluidTotalTypes,
                 fluidUsedUnits,
                 fluidMaxUnits,
+                externalCapacity.itemUsedUnits(),
+                externalCapacity.itemTotalUnits(),
+                externalCapacity.fluidUsedUnits(),
+                externalCapacity.fluidTotalUnits(),
                 AE2_CAPACITY_SCOPE_CELLS_ONLY,
-                reliable,
-                cellCount > 0
+                reliable && externalCapacity.reliable(),
+                cellCount > 0,
+                externalCapacity.reliable(),
+                externalCapacity.available()
         );
         String debugSuffix = ";capacity_cells_total=" + cellCount
                 + ";capacity_cells_readable=" + readableCellCount
@@ -767,7 +846,8 @@ public class ObserverBlockEntity extends BlockEntity {
                 + ";capacity_slot_channel_fluid=" + slotCellChannelFluid
                 + ";capacity_slot_channel_unknown=" + slotCellChannelUnknown
                 + ";capacity_cells_missing_methods=" + summarizeFailureClasses(missingMethodCells)
-                + ";capacity_cells_invocation_failed=" + summarizeFailureClasses(invocationFailedCells);
+                + ";capacity_cells_invocation_failed=" + summarizeFailureClasses(invocationFailedCells)
+                + externalCapacity.debugSuffix();
         return new Ae2CapacityReadResult(metrics, debugSuffix);
     }
 
@@ -781,7 +861,21 @@ public class ObserverBlockEntity extends BlockEntity {
     ) {
     }
 
+    /**
+     * 从 AE2 网络中收集所有存储容器（箱子/驱动器）。
+     * <p>
+     * 采用 4 路 API 扫描策略确保不遗漏设备（AE2 生态中第三方附加模组
+     * 可能在不同层级暴露 IChestOrDrive 接口）：
+     * 1. 直接查询 IChestOrDrive 类型的 machines
+     * 2. 查询 IStorageProvider 并过滤出 IChestOrDrive 实例
+     * 3. 遍历所有 GridNode，检查其 owner 是否为 IChestOrDrive
+     * 4. 遍历所有 GridNode，检查其 IStorageProvider 服务
+     * <p>
+     * 使用 IdentityHashMap 去重（基于对象引用而非 equals），因为同一设备
+     * 实例可能通过多条 API 路径被发现。各计数器用于运维诊断调试信息。
+     */
     private static CapacityMachineCollection collectCapacityMachines(IGrid grid) {
+        // IdentityHashMap：按对象引用去重，避免 equals/hashCode 不一致导致重复计数
         Set<IChestOrDrive> result = Collections.newSetFromMap(new IdentityHashMap<>());
         int fromChestOrDriveCount = 0;
         int fromStorageProviderCount = 0;
@@ -789,10 +883,12 @@ public class ObserverBlockEntity extends BlockEntity {
         int fromNodeStorageServiceCount = 0;
         int nodesScanned = 0;
 
+        // 路径 1: 直接按类型查询
         for (IChestOrDrive machine : grid.getMachines(IChestOrDrive.class)) {
             fromChestOrDriveCount++;
             result.add(machine);
         }
+        // 路径 2: 通过 IStorageProvider 间接查找
         for (IStorageProvider provider : grid.getMachines(IStorageProvider.class)) {
             if (provider instanceof IChestOrDrive chestOrDrive) {
                 fromStorageProviderCount++;
@@ -800,6 +896,7 @@ public class ObserverBlockEntity extends BlockEntity {
             }
         }
 
+        // 路径 3 & 4: 遍历所有网络节点，检查 owner 和 service
         for (IGridNode node : grid.getNodes()) {
             nodesScanned++;
             Object owner = node.getOwner();
@@ -824,6 +921,441 @@ public class ObserverBlockEntity extends BlockEntity {
         );
     }
 
+    private record StorageProviderCollection(
+            Set<IStorageProvider> providers,
+            int fromMachinesCount,
+            int fromNodeOwnerCount,
+            int fromNodeStorageServiceCount,
+            int nodesScanned
+    ) {
+    }
+
+    private static StorageProviderCollection collectStorageProviders(IGrid grid) {
+        Set<IStorageProvider> providers = Collections.newSetFromMap(new IdentityHashMap<>());
+        int fromMachinesCount = 0;
+        int fromNodeOwnerCount = 0;
+        int fromNodeStorageServiceCount = 0;
+        int nodesScanned = 0;
+
+        for (IStorageProvider provider : grid.getMachines(IStorageProvider.class)) {
+            if (provider == null) {
+                continue;
+            }
+            fromMachinesCount++;
+            providers.add(provider);
+        }
+
+        for (IGridNode node : grid.getNodes()) {
+            nodesScanned++;
+            Object owner = node.getOwner();
+            if (owner instanceof IStorageProvider provider) {
+                fromNodeOwnerCount++;
+                providers.add(provider);
+            }
+            IStorageProvider service = node.getService(IStorageProvider.class);
+            if (service != null) {
+                fromNodeStorageServiceCount++;
+                providers.add(service);
+            }
+        }
+
+        return new StorageProviderCollection(
+                providers,
+                fromMachinesCount,
+                fromNodeOwnerCount,
+                fromNodeStorageServiceCount,
+                nodesScanned
+        );
+    }
+
+    private ExternalCapacityReadResult readAe2ExternalCapacityMetrics(IGrid grid) {
+        StorageProviderCollection providerCollection = collectStorageProviders(grid);
+        if (providerCollection.providers().isEmpty()) {
+            return ExternalCapacityReadResult.empty();
+        }
+
+        Set<IItemHandler> itemHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+        Set<IFluidHandler> fluidHandlers = Collections.newSetFromMap(new IdentityHashMap<>());
+        int storageBusProviderCount = 0;
+        int readableStorageBusProviderCount = 0;
+        int unreadableStorageBusProviderCount = 0;
+        boolean reliable = true;
+        Map<String, Integer> storageBusProviderClasses = new HashMap<>();
+        Map<String, Integer> unreadableProviderClasses = new HashMap<>();
+
+        for (IStorageProvider provider : providerCollection.providers()) {
+            if (!isStorageBusProvider(provider)) {
+                continue;
+            }
+            storageBusProviderCount++;
+            incrementCount(storageBusProviderClasses, provider.getClass().getName());
+
+            Object internalStorage = extractStorageBusInternalStorage(provider);
+            if (internalStorage == null) {
+                reliable = false;
+                unreadableStorageBusProviderCount++;
+                incrementCount(unreadableProviderClasses, provider.getClass().getName());
+                continue;
+            }
+
+            boolean providerReadable = false;
+            for (Object storageNode : extractStorageBranches(internalStorage)) {
+                IItemHandler itemHandler = unwrapItemHandler(storageNode);
+                if (itemHandler != null) {
+                    itemHandlers.add(itemHandler);
+                    providerReadable = true;
+                }
+                IFluidHandler fluidHandler = unwrapFluidHandler(storageNode);
+                if (fluidHandler != null) {
+                    fluidHandlers.add(fluidHandler);
+                    providerReadable = true;
+                }
+            }
+
+            if (providerReadable) {
+                readableStorageBusProviderCount++;
+            } else {
+                reliable = false;
+                unreadableStorageBusProviderCount++;
+                incrementCount(unreadableProviderClasses, provider.getClass().getName());
+            }
+        }
+
+        long externalItemUsedUnits = 0L;
+        long externalItemTotalUnits = 0L;
+        long externalItemProbeBudgetTotal = 0L;
+        long externalItemProbeCalls = 0L;
+        for (IItemHandler handler : itemHandlers) {
+            int slotCount;
+            try {
+                slotCount = Math.max(0, handler.getSlots());
+            } catch (RuntimeException ex) {
+                reliable = false;
+                continue;
+            }
+            int initialProbeBudget = Math.max(MIN_ITEM_PROBE_BUDGET, slotCount * 3);
+            int[] probeBudget = new int[]{initialProbeBudget};
+            List<ItemStack> probeCandidates = collectItemProbeCandidates(handler, slotCount);
+            for (int slot = 0; slot < slotCount; slot++) {
+                try {
+                    ItemStack stackInSlot = handler.getStackInSlot(slot);
+                    ItemSlotCapacityEstimate slotCapacity = estimateItemSlotCapacity(
+                            handler,
+                            slot,
+                            stackInSlot,
+                            probeCandidates,
+                            probeBudget
+                    );
+                    externalItemUsedUnits = saturatingAdd(
+                            externalItemUsedUnits,
+                            Math.max(0, stackInSlot.getCount())
+                    );
+                    externalItemTotalUnits = saturatingAdd(
+                            externalItemTotalUnits,
+                            Math.max(0L, slotCapacity.totalUnits())
+                    );
+                    if (!slotCapacity.reliable()) {
+                        reliable = false;
+                    }
+                } catch (RuntimeException ex) {
+                    reliable = false;
+                }
+            }
+            externalItemProbeBudgetTotal = saturatingAdd(externalItemProbeBudgetTotal, initialProbeBudget);
+            externalItemProbeCalls = saturatingAdd(
+                    externalItemProbeCalls,
+                    Math.max(0L, (long) initialProbeBudget - probeBudget[0])
+            );
+        }
+
+        long externalFluidUsedUnits = 0L;
+        long externalFluidTotalUnits = 0L;
+        for (IFluidHandler handler : fluidHandlers) {
+            int tankCount;
+            try {
+                tankCount = Math.max(0, handler.getTanks());
+            } catch (RuntimeException ex) {
+                reliable = false;
+                continue;
+            }
+            for (int tank = 0; tank < tankCount; tank++) {
+                try {
+                    externalFluidUsedUnits = saturatingAdd(
+                            externalFluidUsedUnits,
+                            Math.max(0, handler.getFluidInTank(tank).getAmount())
+                    );
+                    externalFluidTotalUnits = saturatingAdd(
+                            externalFluidTotalUnits,
+                            Math.max(0, handler.getTankCapacity(tank))
+                    );
+                } catch (RuntimeException ex) {
+                    reliable = false;
+                }
+            }
+        }
+
+        boolean available = readableStorageBusProviderCount > 0;
+        String debugSuffix = ";capacity_external_available=" + available
+                + ";capacity_external_reliable=" + reliable
+                + ";capacity_external_item_used=" + externalItemUsedUnits
+                + ";capacity_external_item_total=" + externalItemTotalUnits
+                + ";capacity_external_fluid_used=" + externalFluidUsedUnits
+                + ";capacity_external_fluid_total=" + externalFluidTotalUnits
+                + ";capacity_external_providers_total=" + providerCollection.providers().size()
+                + ";capacity_external_providers_from_machines=" + providerCollection.fromMachinesCount()
+                + ";capacity_external_providers_from_node_owner=" + providerCollection.fromNodeOwnerCount()
+                + ";capacity_external_providers_from_node_service=" + providerCollection.fromNodeStorageServiceCount()
+                + ";capacity_external_nodes_scanned=" + providerCollection.nodesScanned()
+                + ";capacity_external_storage_bus_total=" + storageBusProviderCount
+                + ";capacity_external_storage_bus_readable=" + readableStorageBusProviderCount
+                + ";capacity_external_storage_bus_unreadable=" + unreadableStorageBusProviderCount
+                + ";capacity_external_item_handler_sources=" + itemHandlers.size()
+                + ";capacity_external_fluid_handler_sources=" + fluidHandlers.size()
+                + ";capacity_external_item_probe_budget=" + externalItemProbeBudgetTotal
+                + ";capacity_external_item_probe_calls=" + externalItemProbeCalls
+                + ";capacity_external_storage_bus_classes=" + summarizeFailureClasses(storageBusProviderClasses)
+                + ";capacity_external_unreadable_classes=" + summarizeFailureClasses(unreadableProviderClasses);
+        return new ExternalCapacityReadResult(
+                externalItemUsedUnits,
+                externalItemTotalUnits,
+                externalFluidUsedUnits,
+                externalFluidTotalUnits,
+                reliable,
+                available,
+                debugSuffix
+        );
+    }
+
+    private static boolean isStorageBusProvider(IStorageProvider provider) {
+        if (provider == null) {
+            return false;
+        }
+        String className = provider.getClass().getName().toLowerCase(Locale.ROOT);
+        return className.contains("storagebus");
+    }
+
+    private static @Nullable Object extractStorageBusInternalStorage(IStorageProvider provider) {
+        Object internal = invokeOptionalNoArgMethod(provider, "getInternalHandler");
+        if (internal != null) {
+            return internal;
+        }
+        internal = invokeOptionalNoArgMethod(provider, "getInventory");
+        if (internal != null) {
+            return internal;
+        }
+        return readOptionalFieldValue(provider, "handler");
+    }
+
+    private static List<Object> extractStorageBranches(Object storageRoot) {
+        List<Object> branches = new ArrayList<>();
+        if (storageRoot == null) {
+            return branches;
+        }
+        Map<?, ?> map = null;
+        Object mapCandidate = invokeOptionalNoArgMethod(storageRoot, "getStorages");
+        if (mapCandidate instanceof Map<?, ?> storages) {
+            map = storages;
+        } else {
+            Object fallbackCandidate = readOptionalFieldValue(storageRoot, "storages");
+            if (fallbackCandidate instanceof Map<?, ?> storages) {
+                map = storages;
+            }
+        }
+        if (map != null) {
+            for (Object value : map.values()) {
+                if (value != null) {
+                    branches.add(value);
+                }
+            }
+        }
+        if (branches.isEmpty()) {
+            branches.add(storageRoot);
+        }
+        return branches;
+    }
+
+    private static @Nullable IItemHandler unwrapItemHandler(@Nullable Object candidate) {
+        if (candidate == null) {
+            return null;
+        }
+        Object delegateChain = unwrapDelegateChain(candidate, IItemHandler.class);
+        if (delegateChain instanceof IItemHandler itemHandler) {
+            return itemHandler;
+        }
+        IItemHandler fieldMatch = readFieldByType(candidate, IItemHandler.class);
+        if (fieldMatch == null) {
+            return null;
+        }
+        Object fieldChain = unwrapDelegateChain(fieldMatch, IItemHandler.class);
+        return fieldChain instanceof IItemHandler itemHandler ? itemHandler : fieldMatch;
+    }
+
+    private static @Nullable IFluidHandler unwrapFluidHandler(@Nullable Object candidate) {
+        if (candidate == null) {
+            return null;
+        }
+        Object delegateChain = unwrapDelegateChain(candidate, IFluidHandler.class);
+        if (delegateChain instanceof IFluidHandler fluidHandler) {
+            return fluidHandler;
+        }
+        IFluidHandler fieldMatch = readFieldByType(candidate, IFluidHandler.class);
+        if (fieldMatch == null) {
+            return null;
+        }
+        Object fieldChain = unwrapDelegateChain(fieldMatch, IFluidHandler.class);
+        return fieldChain instanceof IFluidHandler fluidHandler ? fluidHandler : fieldMatch;
+    }
+
+    private static @Nullable Object readLikelyDelegate(Object target) {
+        Object value = readOptionalFieldValue(target, "handler");
+        if (value != null) {
+            return value;
+        }
+        value = readOptionalFieldValue(target, "delegate");
+        if (value != null) {
+            return value;
+        }
+        value = invokeOptionalNoArgMethod(target, "getHandler");
+        if (value != null) {
+            return value;
+        }
+        return invokeOptionalNoArgMethod(target, "getDelegate");
+    }
+
+    private static @Nullable Object unwrapDelegateChain(@Nullable Object candidate, Class<?> expectedType) {
+        if (candidate == null || expectedType == null) {
+            return null;
+        }
+        Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<>());
+        Object current = candidate;
+        Object resolved = expectedType.isInstance(current) ? current : null;
+        while (current != null && visited.add(current)) {
+            Object delegate = readLikelyDelegate(current);
+            if (delegate == null) {
+                break;
+            }
+            if (expectedType.isInstance(delegate)) {
+                resolved = delegate;
+            }
+            current = delegate;
+        }
+        return resolved;
+    }
+
+    private record ItemSlotCapacityEstimate(long totalUnits, boolean reliable) {
+    }
+
+    private record SimulatedInsertProbe(long insertedUnits, boolean reliable) {
+    }
+
+    private static List<ItemStack> collectItemProbeCandidates(IItemHandler handler, int slotCount) {
+        List<ItemStack> candidates = new ArrayList<>(MAX_ITEM_PROBE_CANDIDATES);
+        for (int slot = 0; slot < slotCount; slot++) {
+            if (candidates.size() >= MAX_ITEM_PROBE_CANDIDATES) {
+                break;
+            }
+            try {
+                ItemStack stack = handler.getStackInSlot(slot);
+                if (stack.isEmpty()) {
+                    continue;
+                }
+                ItemStack probe = stack.copy();
+                probe.setCount(DEFAULT_ITEM_PROBE_COUNT);
+                candidates.add(probe);
+            } catch (RuntimeException ignored) {
+                // Skip problematic slots and continue probing other slots.
+            }
+        }
+        if (candidates.isEmpty()) {
+            candidates.add(new ItemStack(Items.COBBLESTONE, DEFAULT_ITEM_PROBE_COUNT));
+            candidates.add(new ItemStack(Items.REDSTONE, DEFAULT_ITEM_PROBE_COUNT));
+            candidates.add(new ItemStack(Items.DIRT, DEFAULT_ITEM_PROBE_COUNT));
+        }
+        return candidates;
+    }
+
+    private static ItemSlotCapacityEstimate estimateItemSlotCapacity(
+            IItemHandler handler,
+            int slot,
+            ItemStack stackInSlot,
+            List<ItemStack> probeCandidates,
+            int[] probeBudget
+    ) {
+        int rawSlotLimit;
+        try {
+            rawSlotLimit = Math.max(0, handler.getSlotLimit(slot));
+        } catch (RuntimeException ex) {
+            return new ItemSlotCapacityEstimate(Math.max(0, stackInSlot.getCount()), false);
+        }
+
+        long usedUnits = Math.max(0, stackInSlot.getCount());
+        long baselineTotal = Math.max(usedUnits, rawSlotLimit);
+
+        if (!stackInSlot.isEmpty()) {
+            int requestCount = computeItemProbeRequestCount(rawSlotLimit, stackInSlot.getCount());
+            SimulatedInsertProbe probe = probeSimulatedInsert(handler, slot, stackInSlot, requestCount, probeBudget);
+            if (probe.reliable()) {
+                return new ItemSlotCapacityEstimate(
+                        saturatingAdd(usedUnits, probe.insertedUnits()),
+                        true
+                );
+            }
+            return new ItemSlotCapacityEstimate(baselineTotal, false);
+        }
+
+        if (probeCandidates != null) {
+            for (ItemStack candidate : probeCandidates) {
+                if (candidate == null || candidate.isEmpty()) {
+                    continue;
+                }
+                int requestCount = computeItemProbeRequestCount(rawSlotLimit, 0);
+                SimulatedInsertProbe probe = probeSimulatedInsert(handler, slot, candidate, requestCount, probeBudget);
+                if (probe.reliable() && probe.insertedUnits() > 0L) {
+                    return new ItemSlotCapacityEstimate(probe.insertedUnits(), true);
+                }
+            }
+        }
+
+        return new ItemSlotCapacityEstimate(baselineTotal, false);
+    }
+
+    private static int computeItemProbeRequestCount(int rawSlotLimit, int currentAmount) {
+        long baseline = Math.max(Math.max((long) rawSlotLimit, (long) currentAmount), 64L);
+        if (baseline > Integer.MAX_VALUE) {
+            return Integer.MAX_VALUE;
+        }
+        return (int) Math.max(1L, baseline);
+    }
+
+    private static SimulatedInsertProbe probeSimulatedInsert(
+            IItemHandler handler,
+            int slot,
+            ItemStack prototype,
+            int requestCount,
+            int[] probeBudget
+    ) {
+        if (prototype == null || prototype.isEmpty() || requestCount <= 0) {
+            return new SimulatedInsertProbe(0L, false);
+        }
+        if (probeBudget == null || probeBudget.length == 0) {
+            return new SimulatedInsertProbe(0L, false);
+        }
+        if (probeBudget[0] <= 0) {
+            return new SimulatedInsertProbe(0L, false);
+        }
+        probeBudget[0]--;
+        try {
+            ItemStack probeStack = prototype.copy();
+            probeStack.setCount(requestCount);
+            ItemStack remainder = handler.insertItem(slot, probeStack, true);
+            int remaining = remainder.isEmpty() ? 0 : Math.max(0, remainder.getCount());
+            long inserted = Math.max(0L, (long) requestCount - remaining);
+            return new SimulatedInsertProbe(inserted, true);
+        } catch (RuntimeException ex) {
+            return new SimulatedInsertProbe(0L, false);
+        }
+    }
+
     private record SlotCellProbe(
             @Nullable CellChannel channel,
             @Nullable String itemId,
@@ -831,6 +1363,17 @@ public class ObserverBlockEntity extends BlockEntity {
     ) {
     }
 
+    /**
+     * 从 Cell 插槽的物品类型推断存储通道（ITEM/FLUID）。
+     * <p>
+     * 推断策略（按优先级）：
+     * 1. 如果是 IBasicCellItem，先尝试从 AEKeyType 推断
+     * 2. AEKeyType 推断失败则回退到物品注册 ID 字符串匹配
+     * 3. 非 IBasicCellItem 直接用物品 ID 匹配
+     * 4. 任何异常被安全吁掉，返回全 null（由上层用 accessors.detectChannel() 处理）
+     *
+     * @return (channel, itemId, keyTypeId) 元组，itemId 和 keyTypeId 用于诊断统计
+     */
     private static SlotCellProbe detectChannelFromCellItem(IChestOrDrive machine, int slot) {
         try {
             Item cellItem = machine.getCellItem(slot);
@@ -935,6 +1478,13 @@ public class ObserverBlockEntity extends BlockEntity {
         throw new ReflectiveOperationException("Method did not return a numeric value: " + method.getName());
     }
 
+    /**
+     * 通过反射在 Cell 类及其父类中查找指定名称的方法。
+     * <p>
+     * 先尝试 getMethod()（仅查找 public 方法），失败后向上遍历继承链
+     * 使用 getDeclaredMethod()（包含 private/protected），并尝试 setAccessible(true)
+     * 突破访问限制。setAccessible 失败时保留原方法，依赖运行时实际可访问性。
+     */
     private static Method findCellMetricMethod(Class<?> cellClass, String name) throws ReflectiveOperationException {
         try {
             return cellClass.getMethod(name);
@@ -946,7 +1496,7 @@ public class ObserverBlockEntity extends BlockEntity {
                     try {
                         method.setAccessible(true);
                     } catch (RuntimeException ignoredSetAccessibleFailure) {
-                        // Keep method as-is; invocation might still work if it is effectively accessible.
+                        // 保持方法原样；如果实际可访问，调用可能仍然正常。
                     }
                     return method;
                 } catch (NoSuchMethodException innerIgnored) {
@@ -965,6 +1515,11 @@ public class ObserverBlockEntity extends BlockEntity {
         }
     }
 
+    /**
+     * 通过字符串表示（类名 + toString）模糊匹配通道类型。
+     * 作为 AEKeyType 精确匹配失败后的回退方案，通过检查字符串中是否包含
+     * "fluid" 或 "item" 关键字来推断。这对第三方附加模组的自定义 Cell 类型尤为重要。
+     */
     private static @Nullable CellChannel parseChannelFromObject(@Nullable Object channelObject) {
         if (channelObject == null) {
             return null;
@@ -980,6 +1535,11 @@ public class ObserverBlockEntity extends BlockEntity {
         return null;
     }
 
+    /**
+     * 通过 AEKeyType 实例精确匹配通道类型（最高优先级推断方式）。
+     * 先尝试对象引用比对（AEKeyType.items() / fluids()），
+     * 失败后回退到 ID 字符串和 toString 的模糊匹配。
+     */
     private static @Nullable CellChannel parseChannelFromKeyType(@Nullable Object keyTypeObject) {
         if (keyTypeObject == null) {
             return null;
@@ -1009,6 +1569,7 @@ public class ObserverBlockEntity extends BlockEntity {
         return null;
     }
 
+    /** 通过物品注册 ID 字符串匹配通道（最低优先级回退方案） */
     private static @Nullable CellChannel parseChannelFromItemId(@Nullable String itemId) {
         if (itemId == null || itemId.isBlank()) {
             return null;
@@ -1023,6 +1584,7 @@ public class ObserverBlockEntity extends BlockEntity {
         return null;
     }
 
+    /** 饱和加法：防止 long 溢出到负数，溢出时返回 Long.MAX_VALUE */
     private static long saturatingAdd(long left, long right) {
         if (right <= 0L) {
             return left;
@@ -1053,6 +1615,16 @@ public class ObserverBlockEntity extends BlockEntity {
             @Nullable ChannelMetricsAccessors itemMetricsAccessors,
             @Nullable ChannelMetricsAccessors fluidMetricsAccessors
     ) {
+        /**
+         * 为给定 Cell 类创建反射访问器，批量发现 7 个反射目标：
+         * - 强制方法：getTotalBytes, getUsedBytes（必须存在，否则抛异常）
+         * - 可选方法：getChannel, getKeyType（用于通道推断）
+         * - 可选字段：keyType（getKeyType 不存在时的回退）
+         * - 条件访问器：ITEM 和 FLUID 通道各尝试创建一次
+         * <p>
+         * 若 ITEM 和 FLUID 通道的访问器都创建失败，表示该 Cell 类
+         * 完全不可读，抛出异常并由上层缓存到 CELL_METRICS_UNSUPPORTED。
+         */
         private static CellMetricsAccessors create(Class<?> cellClass) throws ReflectiveOperationException {
             Method totalBytesMethod = findCellMetricMethod(cellClass, "getTotalBytes");
             Method usedBytesMethod = findCellMetricMethod(cellClass, "getUsedBytes");
@@ -1077,6 +1649,13 @@ public class ObserverBlockEntity extends BlockEntity {
             );
         }
 
+        /**
+         * 智能推断 Cell 的存储通道（回退策略）：
+         * 1. 优先通过 keyType 字段/方法推断
+         * 2. 回退到 getChannel() 方法的返回值推断
+         * 3. 最终回退：若只有一个通道的访问器存在，直接用该通道
+         * 4. 默认返回 ITEM
+         */
         private CellChannel detectChannel(Object cell) {
             CellChannel keyTypeChannel = parseChannelFromKeyType(readKeyType(cell));
             if (keyTypeChannel != null) {
@@ -1089,7 +1668,7 @@ public class ObserverBlockEntity extends BlockEntity {
                         return parsed;
                     }
                 } catch (ReflectiveOperationException ignored) {
-                    // Fall through to method-availability based inference.
+                    // 降级到基于方法可用性的推断。
                 }
             }
             if (itemMetricsAccessors != null && fluidMetricsAccessors == null) {
@@ -1101,6 +1680,14 @@ public class ObserverBlockEntity extends BlockEntity {
             return CellChannel.ITEM;
         }
 
+        /**
+         * 读取单个 Cell 的容量指标（三层回退策略）：
+         * 1. 优先使用 preferredChannel 对应的访问器读取
+         * 2. 若首选访问器为 null，回退到备用通道（ITEM↔FLUID 互切）
+         * 3. 若备用通道访问器存在，比较两个通道的 signal 值（totalTypes + maxUnits），
+         *    若主通道 signal=0 且备用通道 signal>0，则切换到备用通道。
+         *    备用通道读取异常时静默保留主通道数据。
+         */
         private ReflectedCellMetrics read(Object cell, CellChannel preferredChannel) throws ReflectiveOperationException {
             long totalBytes = Math.max(0L, invokeLong(totalBytesMethod, cell));
             long usedBytes = Math.max(0L, invokeLong(usedBytesMethod, cell));
@@ -1127,7 +1714,7 @@ public class ObserverBlockEntity extends BlockEntity {
                         resolvedChannel = alternate.channel();
                     }
                 } catch (ReflectiveOperationException ignored) {
-                    // Keep primary channel when alternate read path fails.
+                    // 备用读取路径失败时保留主通道数据。
                 }
             }
             return new ReflectedCellMetrics(
@@ -1150,7 +1737,7 @@ public class ObserverBlockEntity extends BlockEntity {
                 try {
                     return keyTypeMethod.invoke(cell);
                 } catch (ReflectiveOperationException ignored) {
-                    // Try field fallback below.
+                    // 尝试下方的字段回退。
                 }
             }
             if (keyTypeField != null) {
@@ -1221,12 +1808,105 @@ public class ObserverBlockEntity extends BlockEntity {
                 try {
                     field.setAccessible(true);
                 } catch (RuntimeException ignoredSetAccessibleFailure) {
-                    // Keep field as-is; direct read might still be possible.
+                    // 保持字段原样；直接读取可能仍然可行。
                 }
                 return field;
             } catch (NoSuchFieldException ignored) {
                 current = current.getSuperclass();
             }
+        }
+        return null;
+    }
+
+    private static @Nullable Method findOptionalNoArgMethod(Class<?> type, String methodName) {
+        try {
+            return type.getMethod(methodName);
+        } catch (NoSuchMethodException ignored) {
+            Class<?> current = type;
+            while (current != null) {
+                try {
+                    Method method = current.getDeclaredMethod(methodName);
+                    try {
+                        method.setAccessible(true);
+                    } catch (RuntimeException ignoredSetAccessibleFailure) {
+                        // Keep the method as-is and let invoke handle accessibility.
+                    }
+                    return method;
+                } catch (NoSuchMethodException innerIgnored) {
+                    current = current.getSuperclass();
+                }
+            }
+            return null;
+        }
+    }
+
+    private static @Nullable Object invokeOptionalNoArgMethod(Object target, String methodName) {
+        if (target == null || methodName == null || methodName.isBlank()) {
+            return null;
+        }
+        Method method = findOptionalNoArgMethod(target.getClass(), methodName);
+        if (method == null) {
+            return null;
+        }
+        try {
+            return method.invoke(target);
+        } catch (ReflectiveOperationException | RuntimeException ignored) {
+            return null;
+        }
+    }
+
+    private static @Nullable Object readOptionalFieldValue(Object target, String fieldName) {
+        if (target == null || fieldName == null || fieldName.isBlank()) {
+            return null;
+        }
+        Class<?> current = target.getClass();
+        while (current != null) {
+            try {
+                Field field = current.getDeclaredField(fieldName);
+                try {
+                    field.setAccessible(true);
+                } catch (RuntimeException ignoredSetAccessibleFailure) {
+                    // Fall through and try direct field access.
+                }
+                return field.get(target);
+            } catch (NoSuchFieldException ignored) {
+                current = current.getSuperclass();
+            } catch (IllegalAccessException | RuntimeException ignored) {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    private static <T> @Nullable T readFieldByType(Object target, Class<T> expectedType) {
+        if (target == null || expectedType == null) {
+            return null;
+        }
+        Class<?> current = target.getClass();
+        while (current != null) {
+            Field[] fields = current.getDeclaredFields();
+            for (Field field : fields) {
+                if (Modifier.isStatic(field.getModifiers())) {
+                    continue;
+                }
+                if (!expectedType.isAssignableFrom(field.getType())) {
+                    continue;
+                }
+                try {
+                    field.setAccessible(true);
+                } catch (RuntimeException ignoredSetAccessibleFailure) {
+                    // Fall through and try direct field access.
+                }
+                try {
+                    Object value = field.get(target);
+                    if (expectedType.isInstance(value)) {
+                        return expectedType.cast(value);
+                    }
+                } catch (IllegalAccessException | RuntimeException ignored) {
+                    // Continue scanning other fields.
+                }
+            }
+            current = current.getSuperclass();
         }
         return null;
     }
@@ -1246,6 +1926,7 @@ public class ObserverBlockEntity extends BlockEntity {
                 deltas.put(entry.getKey(), delta);
             }
         }
+        // 反向扫描：检查上次存在但本次消失的物品（完全消耗），记录为负增量
         for (Map.Entry<String, Long> entry : previous.entrySet()) {
             if (!current.containsKey(entry.getKey()) && entry.getValue() != 0) {
                 deltas.put(entry.getKey(), -entry.getValue());
@@ -1373,6 +2054,15 @@ public class ObserverBlockEntity extends BlockEntity {
                         boolComponent(metrics.reliable()),
                         boolComponent(metrics.available())
                 ));
+                lines.add(Component.translatable(
+                        "message.resourceobserver.debug.external",
+                        metrics.externalItemUsedUnits(),
+                        metrics.externalItemTotalUnits(),
+                        metrics.externalFluidUsedUnits(),
+                        metrics.externalFluidTotalUnits(),
+                        boolComponent(metrics.externalReliable()),
+                        boolComponent(metrics.externalAvailable())
+                ));
             }
             appendFormattedProbeLines(lines, getDebugInfoFor(entry.networkId()));
         }
@@ -1425,6 +2115,21 @@ public class ObserverBlockEntity extends BlockEntity {
                         probeField(fields, "capacity_cells_null"),
                         probeField(fields, "capacity_cells_null_unpowered"),
                         probeField(fields, "capacity_cell_status_probe_failed")
+                )
+        );
+        addWrappedDebugLine(
+                lines,
+                "        ",
+                Component.translatable(
+                        "message.resourceobserver.debug.probe_external",
+                        probeField(fields, "capacity_external_storage_bus_total"),
+                        probeField(fields, "capacity_external_storage_bus_readable"),
+                        probeField(fields, "capacity_external_item_used"),
+                        probeField(fields, "capacity_external_item_total"),
+                        probeField(fields, "capacity_external_fluid_used"),
+                        probeField(fields, "capacity_external_fluid_total"),
+                        probeField(fields, "capacity_external_reliable"),
+                        probeField(fields, "capacity_external_available")
                 )
         );
         addWrappedDebugLine(

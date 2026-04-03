@@ -71,15 +71,18 @@ public class ObserverBlock extends BaseEntityBlock {
             BlockEntity blockEntity = level.getBlockEntity(pos);
             if (blockEntity instanceof ObserverBlockEntity observer) {
                 if (player.isShiftKeyDown()) {
+                    // Shift+右键：检查玩家是否启用了调试模式，未启用则静默忽略
                     boolean debugEnabled = PlayerUiPrefsSavedData.get(serverPlayer.serverLevel())
                             .isObserverDebugEnabled(serverPlayer.getUUID());
                     if (!debugEnabled) {
                         return InteractionResult.sidedSuccess(level.isClientSide);
                     }
+                    // 调试模式已启用：逐行发送详细状态信息
                     for (var line : observer.createDebugStatusMessages()) {
                         serverPlayer.sendSystemMessage(line);
                     }
                 } else {
+                    // 普通右键：发送简要绑定状态摘要
                     serverPlayer.sendSystemMessage(observer.createStatusMessage());
                 }
             }
