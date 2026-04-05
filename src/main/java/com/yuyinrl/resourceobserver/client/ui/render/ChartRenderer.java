@@ -58,6 +58,7 @@ public final class ChartRenderer {
     // ========== 布局常量 ==========
     private static final int BUTTON_GAP = 4;     // 按钮间距
     private static final int WINDOW_W = 68;      // 时间窗口按钮宽度
+    private static final int DATA_TYPE_W = 60;   // 数据类型切换按钮宽度（物品/电量）
     private static final int PAGE_W = 76;        // 页面切换按钮宽度
     private static final int MODE_W = 56;        // 线条模式按钮宽度
     private static final int SMOOTH_W = 62;      // 平滑模式按钮宽度
@@ -100,6 +101,8 @@ public final class ChartRenderer {
      * @param lineMode         线条显示模式（全部/生产/消耗/净流量）
      * @param chartPage        页面类型（吞吐量/库存）
      * @param smoothingMode    数据平滑模式
+     * @param chartDataType    数据类型（物品/电量）
+     * @param hasEnergySeries  是否存在电量数据系列（控制切换按钮是否可用）
      * @param cache            渲染缓存（避免逐帧重新计算）
      * @return 渲染结果，包含各按钮热区
      */
@@ -113,6 +116,8 @@ public final class ChartRenderer {
             LineMode lineMode,
             ChartPage chartPage,
             SmoothingMode smoothingMode,
+            ChartDataType chartDataType,
+            boolean hasEnergySeries,
             ChartRenderCache cache
     ) {
         RenderUtils.fillPanel(gfx, area, UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER);
@@ -132,15 +137,21 @@ public final class ChartRenderer {
         gfx.drawString(font, subtitle, content.x(), content.y() + 11, UiThemeTokens.TEXT_MUTED);
 
         int right = content.right();
-        int rowW = WINDOW_W + BUTTON_GAP + PAGE_W + BUTTON_GAP + MODE_W + BUTTON_GAP + SMOOTH_W;
+        int rowW = WINDOW_W + BUTTON_GAP + DATA_TYPE_W + BUTTON_GAP + PAGE_W + BUTTON_GAP + MODE_W + BUTTON_GAP + SMOOTH_W;
         int x0 = right - rowW;
         int by = content.y();
         UiRect windowToggle = new UiRect(x0, by, WINDOW_W, 14);
-        UiRect pageToggle = new UiRect(windowToggle.right() + BUTTON_GAP, by, PAGE_W, 14);
+        UiRect dataTypeToggle = new UiRect(windowToggle.right() + BUTTON_GAP, by, DATA_TYPE_W, 14);
+        UiRect pageToggle = new UiRect(dataTypeToggle.right() + BUTTON_GAP, by, PAGE_W, 14);
         UiRect modeButton = new UiRect(pageToggle.right() + BUTTON_GAP, by, MODE_W, 14);
         UiRect smoothButton = new UiRect(modeButton.right() + BUTTON_GAP, by, SMOOTH_W, 14);
 
         drawHeaderButton(gfx, font, windowToggle, Component.translatable(chartWindow.translationKey()).getString(), true, true);
+        // 数据类型切换按钮（物品/电量）
+        String dataTypeLabel = chartDataType == ChartDataType.ENERGY
+                ? Component.translatable("screen.resourceobserver.overview.chart.data.energy").getString()
+                : Component.translatable("screen.resourceobserver.overview.chart.data.items").getString();
+        drawHeaderButton(gfx, font, dataTypeToggle, dataTypeLabel, true, true);
         drawHeaderButton(
                 gfx, font, pageToggle,
                 chartPage == ChartPage.THROUGHPUT
@@ -201,7 +212,7 @@ public final class ChartRenderer {
         }
         drawLegend(gfx, font, plot, chartPage, lineMode);
 
-        return new RenderResult(windowToggle, pageToggle, modeButton, smoothButton, resetButton, lineModeEnabled, plot, hoverPoints);
+        return new RenderResult(windowToggle, dataTypeToggle, pageToggle, modeButton, smoothButton, resetButton, lineModeEnabled, plot, hoverPoints);
     }
 
     private static void drawLegend(GuiGraphics gfx, Font font, UiRect plot, ChartPage page, LineMode mode) {
@@ -1896,6 +1907,20 @@ public final class ChartRenderer {
     }
 
     /**
+     * 图表数据类型枚举。
+     * - ITEMS：物品吞吐/库存数据（AE2 网络）
+     * - ENERGY：电量吞吐/储量数据（Flux 能量网络）
+     */
+    public enum ChartDataType {
+        ITEMS,
+        ENERGY;
+
+        public ChartDataType next() {
+            return this == ITEMS ? ENERGY : ITEMS;
+        }
+    }
+
+    /**
      * 图表页面类型枚举。
      * - THROUGHPUT：吞吐量视图（生产/消耗/净流量）
      * - STOCK：库存视图（库存量变化）
@@ -1977,6 +2002,7 @@ public final class ChartRenderer {
 
     public record RenderResult(
             UiRect windowToggle,
+            UiRect dataTypeToggle,
             UiRect pageToggle,
             UiRect lineModeButton,
             UiRect smoothingButton,

@@ -15,6 +15,7 @@ import appeng.api.storage.IStorageProvider;
 import appeng.api.storage.cells.StorageCell;
 import appeng.api.storage.cells.IBasicCellItem;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
+import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
@@ -38,6 +39,7 @@ import net.neoforged.neoforge.fluids.capability.IFluidHandler;
 import net.neoforged.neoforge.capabilities.Capabilities;
 import net.neoforged.neoforge.energy.IEnergyStorage;
 import net.neoforged.neoforge.items.IItemHandler;
+import com.yuyinrl.resourceobserver.world.block.ObserverBlock;
 import org.jetbrains.annotations.Nullable;
 
 import java.lang.reflect.Field;
@@ -79,6 +81,8 @@ public class ObserverBlockEntity extends BlockEntity {
 
     /** 采样间隔（单位：游戏 tick），10 tick = 0.5 秒 */
     private static final int SAMPLE_INTERVAL = 10;
+    /** 双缓冲滑动窗口的每个子窗口采样数（12 秒），两个子窗口合计覆盖 12–24 秒的历史数据 */
+    private static final int RATE_WINDOW_SAMPLES = 24;
     private static final String AE2_CAPACITY_SCOPE_CELLS_ONLY = "AE2_CELLS_ONLY";
     private static final String FLUID_KEY_PREFIX = "fluid:";
     private static final int DEFAULT_ITEM_PROBE_COUNT = 1;
@@ -91,8 +95,30 @@ public class ObserverBlockEntity extends BlockEntity {
     private final Map<String, BindingStats> statsMap = new HashMap<>();
     /** AE2 网络中每种物品的当前数量快照（networkId -> {itemId -> amount}） */
     private final Map<String, Map<String, Long>> ae2ItemAmounts = new HashMap<>();
-    /** AE2 网络中每种物品的数量变化量（networkId -> {itemId -> delta}） */
+    /** AE2 网络中每种物品的数量变化量（networkId -> {itemId -> delta}），瞬时值（每采样间隔） */
     private final Map<String, Map<String, Long>> ae2ItemDeltas = new HashMap<>();
+    /**
+     * AE2 网络中每种物品的平滑净速率（networkId -> {itemId -> ratePerMin}），单位：每分钟。
+     * 由双缓冲滑动窗口计算得出，正值=净生产，负值=净消耗。
+     */
+    private final Map<String, Map<String, Long>> ae2ItemRatesPerMin = new HashMap<>();
+    /** AE2 网络中每种物品的平滑生产速率（networkId -> {itemId -> prodRatePerMin}），单位：每分钟，≥0 */
+    private final Map<String, Map<String, Long>> ae2ItemProdRatesPerMin = new HashMap<>();
+    /** AE2 网络中每种物品的平滑消耗速率（networkId -> {itemId -> consRatePerMin}），单位：每分钟，≥0 */
+    private final Map<String, Map<String, Long>> ae2ItemConsRatesPerMin = new HashMap<>();
+    // ── 双缓冲滑动窗口字段 ────────────────────────────────────────────────────────
+    /** 当前窗口内每物品累计消耗量 */
+    private final Map<String, Map<String, Long>> ae2ItemConsCurrent  = new HashMap<>();
+    /** 当前窗口内每物品累计生产量 */
+    private final Map<String, Map<String, Long>> ae2ItemProdCurrent  = new HashMap<>();
+    /** 上一完整窗口的每物品累计消耗量 */
+    private final Map<String, Map<String, Long>> ae2ItemConsPrev     = new HashMap<>();
+    /** 上一完整窗口的每物品累计生产量 */
+    private final Map<String, Map<String, Long>> ae2ItemProdPrev     = new HashMap<>();
+    /** 当前窗口已累积的采样数（networkId -> count） */
+    private final Map<String, Integer> ae2ItemWindowSampleCount      = new HashMap<>();
+    /** 上一完整窗口的采样数（networkId -> count） */
+    private final Map<String, Integer> ae2ItemPrevWindowSampleCount  = new HashMap<>();
     /** AE2 网络容量指标（networkId -> metrics） */
     private final Map<String, Ae2CellCapacityMetrics> ae2CellCapacityMetrics = new HashMap<>();
     /** 调试信息映射，记录每个网络的采样状态 */
@@ -103,6 +129,9 @@ public class ObserverBlockEntity extends BlockEntity {
     private static final Set<Class<?>> CELL_METRICS_UNSUPPORTED = new HashSet<>();
     /** 上次采样的游戏时间，用于控制采样间隔 */
     private long lastSampleTick = -1;
+
+    /** Flux Networks 采样结果缓存（networkId -> FluxSampleResult） */
+    private final Map<String, FluxNetworksIntegration.FluxSampleResult> fluxSampleResults = new HashMap<>();
 
     /**
      * 网络绑定条目 —— 记录一个已绑定的资源网络的基本信息。
@@ -298,6 +327,7 @@ public class ObserverBlockEntity extends BlockEntity {
         }
         bindings.add(new BoundEntry(networkType, networkId, targetBlockId.toString()));
         setChanged();
+        syncConnectedState();
         return true;
     }
 
@@ -307,10 +337,30 @@ public class ObserverBlockEntity extends BlockEntity {
         statsMap.clear();
         ae2ItemAmounts.clear();
         ae2ItemDeltas.clear();
+        ae2ItemRatesPerMin.clear();
+        ae2ItemConsCurrent.clear();
+        ae2ItemProdCurrent.clear();
+        ae2ItemConsPrev.clear();
+        ae2ItemProdPrev.clear();
+        ae2ItemWindowSampleCount.clear();
+        ae2ItemPrevWindowSampleCount.clear();
         ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
         capacityWarnSignatureMap.clear();
+        fluxSampleResults.clear();
         setChanged();
+        syncConnectedState();
+    }
+
+    /** 同步方块的 CONNECTED 状态与当前绑定状态一致 */
+    private void syncConnectedState() {
+        if (level != null && !level.isClientSide) {
+            boolean connected = !bindings.isEmpty();
+            BlockState current = getBlockState();
+            if (current.getValue(ObserverBlock.CONNECTED) != connected) {
+                level.setBlock(worldPosition, current.setValue(ObserverBlock.CONNECTED, connected), 3);
+            }
+        }
     }
 
     /** 判断观察者是否已绑定至少一个网络 */
@@ -347,12 +397,49 @@ public class ObserverBlockEntity extends BlockEntity {
         return Collections.unmodifiableMap(data);
     }
 
+    /**
+     * 返回指定 AE2 网络中每种物品的平滑每分钟速率（EMA 处理后，单位：物品/分钟）。
+     * 正值表示净增（生产），负值表示净减（消耗）。
+     * 相比瞬时 delta，此数据在采样间隔内无活动时不会归零，适合用于 UI 消耗速率展示。
+     */
+    public Map<String, Long> getAe2ItemRatesPerMinFor(String networkId) {
+        Map<String, Long> data = ae2ItemRatesPerMin.get(networkId);
+        return data == null ? Map.of() : Collections.unmodifiableMap(data);
+    }
+
+    /**
+     * 返回指定 AE2 网络中每种物品的平滑生产速率（单位：物品/分钟，≥0）。
+     */
+    public Map<String, Long> getAe2ItemProdRatesPerMinFor(String networkId) {
+        Map<String, Long> data = ae2ItemProdRatesPerMin.get(networkId);
+        return data == null ? Map.of() : Collections.unmodifiableMap(data);
+    }
+
+    /**
+     * 返回指定 AE2 网络中每种物品的平滑消耗速率（单位：物品/分钟，≥0）。
+     */
+    public Map<String, Long> getAe2ItemConsRatesPerMinFor(String networkId) {
+        Map<String, Long> data = ae2ItemConsRatesPerMin.get(networkId);
+        return data == null ? Map.of() : Collections.unmodifiableMap(data);
+    }
+
     public String getDebugInfoFor(String networkId) {
         return debugInfoMap.getOrDefault(networkId, "no debug data yet");
     }
 
     public Ae2CellCapacityMetrics getAe2CellCapacityMetricsFor(String networkId) {
         return ae2CellCapacityMetrics.getOrDefault(networkId, Ae2CellCapacityMetrics.unavailable());
+    }
+
+    /**
+     * 获取指定网络 ID 的 Flux Networks 采样结果。
+     *
+     * @param networkId 网络标识
+     * @return Flux 采样结果，如果不存在或非 Flux 网络则返回 null
+     */
+    @Nullable
+    public FluxNetworksIntegration.FluxSampleResult getFluxSampleResultFor(String networkId) {
+        return fluxSampleResults.get(networkId);
     }
 
     public @Nullable IGrid resolveAe2GridForNetwork(String networkId) {
@@ -402,10 +489,73 @@ public class ObserverBlockEntity extends BlockEntity {
                 itemDeltaSnapshot = getAe2ItemDeltasFor(binding.networkId());
                 itemAmountSnapshot = getAe2ItemAmountsFor(binding.networkId());
             } else if ("FLUX_ENERGY".equals(binding.networkType())) {
-                newStats = sampleEnergy(targetPos, oldStats);
+                // 优先使用 Flux Networks 原生 API 获取丰富的网络数据
+                if (FluxNetworksIntegration.isAvailable()) {
+                    BlockEntity targetBe = level.getBlockEntity(targetPos);
+                    FluxNetworksIntegration.FluxSampleResult fluxResult = FluxNetworksIntegration.readFluxNetwork(targetBe);
+                    if (fluxResult != null) {
+                        fluxSampleResults.put(binding.networkId(), fluxResult);
+                        // 使用 Flux API 的真实每 tick 输入/输出作为生产/消耗增量
+                        long inputPerTick = fluxResult.energyInput();
+                        long outputPerTick = fluxResult.energyOutput();
+                        // 容量使用 totalMaxEnergyStorage（储能方块的真实最大容量），
+                        // 回退到 totalBuffer（非储能设备缓冲合计）+ totalEnergy（储能设备当前值）
+                        long capacity = fluxResult.totalMaxEnergyStorage();
+                        if (capacity <= 0L) {
+                            capacity = fluxResult.totalBuffer() + fluxResult.totalEnergy();
+                        }
+                        newStats = oldStats.withDelta(
+                                fluxResult.totalEnergy(),
+                                capacity,
+                                inputPerTick,
+                                outputPerTick
+                        );
+                        // 构建能量指标的增量/数量快照（供 HistoryRecorder 使用）
+                        itemDeltaSnapshot = Map.of(
+                                "flux.input_per_tick", inputPerTick,
+                                "flux.output_per_tick", outputPerTick
+                        );
+                        itemAmountSnapshot = Map.ofEntries(
+                                Map.entry("flux.input_per_tick", inputPerTick),
+                                Map.entry("flux.output_per_tick", outputPerTick),
+                                Map.entry("flux.energy_stored", fluxResult.totalEnergy()),
+                                Map.entry("flux.total_buffer", fluxResult.totalBuffer()),
+                                Map.entry("flux.max_energy_storage", fluxResult.totalMaxEnergyStorage()),
+                                Map.entry("flux.plug_count", (long) fluxResult.plugCount()),
+                                Map.entry("flux.point_count", (long) fluxResult.pointCount()),
+                                Map.entry("flux.storage_count", (long) fluxResult.storageCount()),
+                                Map.entry("flux.controller_count", (long) fluxResult.controllerCount())
+                        );
+                        debugInfoMap.put(binding.networkId(),
+                                "channel=flux.api;status=ok;target=" + targetPos.toShortString()
+                                        + ";network=" + fluxResult.networkName()
+                                        + ";id=" + fluxResult.networkId()
+                                        + ";input=" + inputPerTick
+                                        + ";output=" + outputPerTick
+                                        + ";stored=" + fluxResult.totalEnergy()
+                                        + ";buffer=" + fluxResult.totalBuffer()
+                                        + ";maxCapacity=" + fluxResult.totalMaxEnergyStorage()
+                                        + ";plugs=" + fluxResult.plugCount()
+                                        + ";points=" + fluxResult.pointCount()
+                                        + ";storages=" + fluxResult.storageCount()
+                                        + ";controllers=" + fluxResult.controllerCount()
+                                        + ";devices=" + fluxResult.devices().size());
+                    } else {
+                        // Flux API 返回 null，回退到基础 IEnergyStorage
+                        fluxSampleResults.remove(binding.networkId());
+                        newStats = sampleEnergy(targetPos, oldStats);
+                        debugInfoMap.put(binding.networkId(),
+                                "channel=flux.api;status=fallback_to_energy;target=" + targetPos.toShortString());
+                    }
+                } else {
+                    // Flux Networks 未加载，使用通用 IEnergyStorage
+                    fluxSampleResults.remove(binding.networkId());
+                    newStats = sampleEnergy(targetPos, oldStats);
+                    debugInfoMap.put(binding.networkId(),
+                            "channel=neoforge.energy;target=" + targetPos.toShortString());
+                }
                 ae2CellCapacityMetrics.remove(binding.networkId());
                 capacityWarnSignatureMap.remove(binding.networkId());
-                debugInfoMap.put(binding.networkId(), "channel=neoforge.energy;target=" + targetPos.toShortString());
             } else {
                 continue; // 不支持的网络类型，跳过
             }
@@ -445,6 +595,60 @@ public class ObserverBlockEntity extends BlockEntity {
         Map<String, Long> deltas = computeDeltas(previous, snapshot);
         ae2ItemAmounts.put(networkId, snapshot);
         ae2ItemDeltas.put(networkId, deltas);
+
+        // ── 双缓冲滑动窗口速率计算 ───────────────────────────────────────────────
+        // 仅在有上次快照时才累积（跳过初始化采样，避免"物品凭空出现"的假正增量污染数据）
+        if (!previous.isEmpty()) {
+            Map<String, Long> curCons = ae2ItemConsCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
+            Map<String, Long> curProd = ae2ItemProdCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
+            for (Map.Entry<String, Long> entry : deltas.entrySet()) {
+                if (!isItemEntryId(entry.getKey())) continue;
+                long d = entry.getValue();
+                if (d < 0) curCons.merge(entry.getKey(), -d, Long::sum);
+                else if (d > 0) curProd.merge(entry.getKey(), d, Long::sum);
+            }
+            int curSamples = ae2ItemWindowSampleCount.merge(networkId, 1, Integer::sum);
+
+            // 合并当前窗口 + 上一完整窗口，计算组合平均速率（覆盖 12–24 秒历史）
+            Map<String, Long> prevCons    = ae2ItemConsPrev.getOrDefault(networkId, Map.of());
+            Map<String, Long> prevProd    = ae2ItemProdPrev.getOrDefault(networkId, Map.of());
+            int prevSamples = ae2ItemPrevWindowSampleCount.getOrDefault(networkId, 0);
+            int totalSamples = Math.max(1, curSamples + prevSamples);
+            final long toPerMin = 20L * 60L / SAMPLE_INTERVAL;  // = 120
+
+            Map<String, Long> rates = new HashMap<>();
+            Map<String, Long> prodRates = new HashMap<>();
+            Map<String, Long> consRates = new HashMap<>();
+            java.util.Set<String> allItems = new java.util.HashSet<>(curCons.keySet());
+            allItems.addAll(curProd.keySet());
+            allItems.addAll(prevCons.keySet());
+            allItems.addAll(prevProd.keySet());
+            for (String itemId : allItems) {
+                long consumed = curCons.getOrDefault(itemId, 0L) + prevCons.getOrDefault(itemId, 0L);
+                long produced = curProd.getOrDefault(itemId, 0L) + prevProd.getOrDefault(itemId, 0L);
+                // 正值=净生产，负值=净消耗（单位：每分钟）
+                long netRatePerMin = (produced - consumed) * toPerMin / totalSamples;
+                if (netRatePerMin != 0) rates.put(itemId, netRatePerMin);
+                // 分别计算生产和消耗速率（单位：每分钟，≥0）
+                long prodRatePerMin = produced * toPerMin / totalSamples;
+                long consRatePerMin = consumed * toPerMin / totalSamples;
+                if (prodRatePerMin > 0) prodRates.put(itemId, prodRatePerMin);
+                if (consRatePerMin > 0) consRates.put(itemId, consRatePerMin);
+            }
+            ae2ItemRatesPerMin.put(networkId, rates);
+            ae2ItemProdRatesPerMin.put(networkId, prodRates);
+            ae2ItemConsRatesPerMin.put(networkId, consRates);
+
+            // 当前窗口满后滚动：将当前窗口升格为"上一窗口"，重置当前窗口
+            if (curSamples >= RATE_WINDOW_SAMPLES) {
+                ae2ItemConsPrev.put(networkId, new HashMap<>(curCons));
+                ae2ItemProdPrev.put(networkId, new HashMap<>(curProd));
+                ae2ItemPrevWindowSampleCount.put(networkId, curSamples);
+                curCons.clear();
+                curProd.clear();
+                ae2ItemWindowSampleCount.put(networkId, 0);
+            }
+        }
 
         long totalAmount = 0;
         long itemTypeCount = 0;
@@ -1972,7 +2176,11 @@ public class ObserverBlockEntity extends BlockEntity {
         }
         if (energy == null) return oldStats;
 
-        return oldStats.withSample(energy.getEnergyStored(), energy.getMaxEnergyStored());
+        // IEnergyStorage 接口返回 int，超过 Integer.MAX_VALUE (~2.1B) 时会溢出为负数。
+        // 使用 Integer.toUnsignedLong() 将 32-bit 无符号整数正确转换为 long，支持最大 ~4.29B FE。
+        long stored = Integer.toUnsignedLong(energy.getEnergyStored());
+        long capacity = Integer.toUnsignedLong(energy.getMaxEnergyStored());
+        return oldStats.withSample(stored, capacity);
     }
 
     /**
@@ -2261,9 +2469,17 @@ public class ObserverBlockEntity extends BlockEntity {
         statsMap.clear();
         ae2ItemAmounts.clear();
         ae2ItemDeltas.clear();
+        ae2ItemRatesPerMin.clear();
+        ae2ItemConsCurrent.clear();
+        ae2ItemProdCurrent.clear();
+        ae2ItemConsPrev.clear();
+        ae2ItemProdPrev.clear();
+        ae2ItemWindowSampleCount.clear();
+        ae2ItemPrevWindowSampleCount.clear();
         ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
         capacityWarnSignatureMap.clear();
+        fluxSampleResults.clear();
         if (tag.contains(TAG_BINDINGS, Tag.TAG_LIST)) {
             ListTag listTag = tag.getList(TAG_BINDINGS, Tag.TAG_COMPOUND);
             for (int i = 0; i < listTag.size(); i++) {

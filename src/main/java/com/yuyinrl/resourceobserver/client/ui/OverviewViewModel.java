@@ -18,7 +18,8 @@ import java.util.List;
  * @param kpis              四个 KPI 指标卡数据
  * @param chartWindow       当前图表时间窗口
  * @param chartScopeItemId  图表单物品作用域 ID
- * @param chartSeries       图表数据点列表
+ * @param chartSeries       图表数据点列表（物品数据）
+ * @param energyChartSeries 电量图表数据点列表（FLUX_ENERGY 数据）
  * @param uiState           UI 状态（筛选、排序、分组设置）
  * @param watchlistItems    关注列表物品数据
  * @param tableGroups       表格分组（每组含行列表）
@@ -31,16 +32,18 @@ public record OverviewViewModel(
         ChartWindow chartWindow,
         String chartScopeItemId,
         List<FlowPoint> chartSeries,
+        List<FlowPoint> energyChartSeries,
         UiState uiState,
         List<WatchlistItem> watchlistItems,
         List<TableGroup> tableGroups,
+        List<KpiDetail> kpiDetails,
         StorageDetail storageDetail
 ) {
     public enum KpiType {
         PRODUCTION,
         CONSUMPTION,
         STORAGE,
-        EFFICIENCY
+        BALANCE
     }
 
     /**
@@ -58,6 +61,37 @@ public record OverviewViewModel(
             String trend,
             Status status,
             String iconSprite
+    ) {
+    }
+
+    public KpiDetail kpiDetailFor(KpiType type) {
+        if (type == null || kpiDetails == null || kpiDetails.isEmpty()) {
+            return null;
+        }
+        for (KpiDetail detail : kpiDetails) {
+            if (detail.type() == type) {
+                return detail;
+            }
+        }
+        return null;
+    }
+
+    public record KpiDetail(
+            KpiType type,
+            String title,
+            String hintText,
+            Status status,
+            KpiDetailChannel itemChannel,
+            KpiDetailChannel fluidChannel
+    ) {
+    }
+
+    public record KpiDetailChannel(
+            String label,
+            String recentText,
+            String previousText,
+            String trendText,
+            boolean available
     ) {
     }
 

@@ -46,6 +46,10 @@ public class ObserverHistorySavedData extends SavedData {
     private static final String TAG_PRODUCED = "produced";
     private static final String TAG_CONSUMED = "consumed";
     private static final String TAG_STOCK = "stock";
+    private static final String TAG_ITEM_PRODUCED = "item_produced";
+    private static final String TAG_ITEM_CONSUMED = "item_consumed";
+    private static final String TAG_FLUID_PRODUCED = "fluid_produced";
+    private static final String TAG_FLUID_CONSUMED = "fluid_consumed";
     private static final String TAG_ITEMS = "items";
     private static final String TAG_ITEM_ID = "item_id";
     /** 物品系列数量超过此阈值时触发清理过期数据 */
@@ -117,6 +121,17 @@ public class ObserverHistorySavedData extends SavedData {
             result.add(new ObserverDataPayload.ChartPoint(i, p, c, p - c, stock[i], hasFlow[i], hasStock[i]));
         }
         return result;
+    }
+
+    public ObserverDataPayload.KpiWindowStats queryWindowStats(String key, ChartWindow window) {
+        if (key == null || key.isBlank()) {
+            return ObserverDataPayload.KpiWindowStats.unavailable();
+        }
+        NetworkHistory history = histories.get(key);
+        if (history == null) {
+            return ObserverDataPayload.KpiWindowStats.unavailable();
+        }
+        return history.queryWindowStats(window);
     }
 
     /** NBT 保存 —— 序列化所有网络历史数据 */
@@ -197,6 +212,14 @@ public class ObserverHistorySavedData extends SavedData {
             buffer.accumulate(scopeItemId, produced, consumed, stock, hasFlow, hasStock);
         }
 
+        private ObserverDataPayload.KpiWindowStats queryWindowStats(ChartWindow window) {
+            WindowBuffer buffer = windows.get(window);
+            if (buffer == null) {
+                return ObserverDataPayload.KpiWindowStats.unavailable();
+            }
+            return buffer.queryWindowStats();
+        }
+
         /** NBT 保存 —— 序列化所有时间窗口的缓冲区 */
         private CompoundTag save() {
             CompoundTag tag = new CompoundTag();
@@ -246,6 +269,10 @@ public class ObserverHistorySavedData extends SavedData {
         private final long[] consumed;
         /** 每个槽位的最新库存快照 */
         private final long[] stock;
+        private final long[] itemProduced;
+        private final long[] itemConsumed;
+        private final long[] fluidProduced;
+        private final long[] fluidConsumed;
         /** 每种物品的独立数据系列 */
         private final Map<String, ItemSeries> itemSeries = new HashMap<>();
 
@@ -256,6 +283,10 @@ public class ObserverHistorySavedData extends SavedData {
             this.produced = new long[size];
             this.consumed = new long[size];
             this.stock = new long[size];
+            this.itemProduced = new long[size];
+            this.itemConsumed = new long[size];
+            this.fluidProduced = new long[size];
+            this.fluidConsumed = new long[size];
         }
 
         /**
@@ -287,11 +318,47 @@ public class ObserverHistorySavedData extends SavedData {
                 produced[slot] = 0L;
                 consumed[slot] = 0L;
                 stock[slot] = 0L;
+                itemProduced[slot] = 0L;
+                itemConsumed[slot] = 0L;
+                fluidProduced[slot] = 0L;
+                fluidConsumed[slot] = 0L;
             }
             // 累加聚合数据
             produced[slot] += Math.max(0L, producedDelta);
             consumed[slot] += Math.max(0L, consumedDelta);
             stock[slot] = Math.max(0L, currentStock);
+
+            long itemProducedDelta = 0L;
+            long itemConsumedDelta = 0L;
+            long fluidProducedDelta = 0L;
+            long fluidConsumedDelta = 0L;
+            if (itemDeltas != null && !itemDeltas.isEmpty()) {
+                for (Map.Entry<String, Long> deltaEntry : itemDeltas.entrySet()) {
+                    long delta = deltaEntry.getValue() == null ? 0L : deltaEntry.getValue();
+                    if (delta == 0L) {
+                        continue;
+                    }
+                    boolean fluid = isFluidItemId(deltaEntry.getKey());
+                    if (delta > 0L) {
+                        if (fluid) {
+                            fluidProducedDelta = saturatingAdd(fluidProducedDelta, delta);
+                        } else {
+                            itemProducedDelta = saturatingAdd(itemProducedDelta, delta);
+                        }
+                    } else {
+                        long consumedDeltaAbs = delta == Long.MIN_VALUE ? Long.MAX_VALUE : -delta;
+                        if (fluid) {
+                            fluidConsumedDelta = saturatingAdd(fluidConsumedDelta, consumedDeltaAbs);
+                        } else {
+                            itemConsumedDelta = saturatingAdd(itemConsumedDelta, consumedDeltaAbs);
+                        }
+                    }
+                }
+            }
+            itemProduced[slot] = saturatingAdd(itemProduced[slot], itemProducedDelta);
+            itemConsumed[slot] = saturatingAdd(itemConsumed[slot], itemConsumedDelta);
+            fluidProduced[slot] = saturatingAdd(fluidProduced[slot], fluidProducedDelta);
+            fluidConsumed[slot] = saturatingAdd(fluidConsumed[slot], fluidConsumedDelta);
 
             // 记录每种物品的独立数据（来自 itemCurrentAmounts 的物品）
             if (itemCurrentAmounts != null && !itemCurrentAmounts.isEmpty()) {
@@ -392,6 +459,71 @@ public class ObserverHistorySavedData extends SavedData {
         }
 
         /** NBT 保存 */
+        private ObserverDataPayload.KpiWindowStats queryWindowStats() {
+            if (latestBucket == Long.MIN_VALUE) {
+                return ObserverDataPayload.KpiWindowStats.unavailable();
+            }
+            int span = Math.max(1, size / 4);
+            long recentStartBucket = latestBucket - span + 1L;
+            long previousStartBucket = recentStartBucket - span;
+
+            long itemProducedRecent = 0L;
+            long itemConsumedRecent = 0L;
+            long itemProducedPrevious = 0L;
+            long itemConsumedPrevious = 0L;
+            long fluidProducedRecent = 0L;
+            long fluidConsumedRecent = 0L;
+            long fluidProducedPrevious = 0L;
+            long fluidConsumedPrevious = 0L;
+            int recentBucketCount = 0;
+            int previousBucketCount = 0;
+
+            for (int i = 0; i < span; i++) {
+                long bucket = recentStartBucket + i;
+                if (!hasBucket(bucket)) {
+                    continue;
+                }
+                int slot = slotIndex(bucket, size);
+                itemProducedRecent = saturatingAdd(itemProducedRecent, itemProduced[slot]);
+                itemConsumedRecent = saturatingAdd(itemConsumedRecent, itemConsumed[slot]);
+                fluidProducedRecent = saturatingAdd(fluidProducedRecent, fluidProduced[slot]);
+                fluidConsumedRecent = saturatingAdd(fluidConsumedRecent, fluidConsumed[slot]);
+                recentBucketCount++;
+            }
+            for (int i = 0; i < span; i++) {
+                long bucket = previousStartBucket + i;
+                if (!hasBucket(bucket)) {
+                    continue;
+                }
+                int slot = slotIndex(bucket, size);
+                itemProducedPrevious = saturatingAdd(itemProducedPrevious, itemProduced[slot]);
+                itemConsumedPrevious = saturatingAdd(itemConsumedPrevious, itemConsumed[slot]);
+                fluidProducedPrevious = saturatingAdd(fluidProducedPrevious, fluidProduced[slot]);
+                fluidConsumedPrevious = saturatingAdd(fluidConsumedPrevious, fluidConsumed[slot]);
+                previousBucketCount++;
+            }
+
+            boolean trendAvailable = recentBucketCount == span && previousBucketCount == span;
+            return new ObserverDataPayload.KpiWindowStats(
+                    itemProducedRecent,
+                    itemConsumedRecent,
+                    itemProducedPrevious,
+                    itemConsumedPrevious,
+                    fluidProducedRecent,
+                    fluidConsumedRecent,
+                    fluidProducedPrevious,
+                    fluidConsumedPrevious,
+                    recentBucketCount,
+                    previousBucketCount,
+                    trendAvailable
+            );
+        }
+
+        private boolean hasBucket(long bucket) {
+            int slot = slotIndex(bucket, size);
+            return slotBuckets[slot] == bucket;
+        }
+
         private CompoundTag save() {
             CompoundTag tag = new CompoundTag();
             tag.putLong(TAG_LATEST_BUCKET, latestBucket);
@@ -399,6 +531,10 @@ public class ObserverHistorySavedData extends SavedData {
             tag.putLongArray(TAG_PRODUCED, produced);
             tag.putLongArray(TAG_CONSUMED, consumed);
             tag.putLongArray(TAG_STOCK, stock);
+            tag.putLongArray(TAG_ITEM_PRODUCED, itemProduced);
+            tag.putLongArray(TAG_ITEM_CONSUMED, itemConsumed);
+            tag.putLongArray(TAG_FLUID_PRODUCED, fluidProduced);
+            tag.putLongArray(TAG_FLUID_CONSUMED, fluidConsumed);
 
             ListTag items = new ListTag();
             for (Map.Entry<String, ItemSeries> entry : itemSeries.entrySet()) {
@@ -418,6 +554,10 @@ public class ObserverHistorySavedData extends SavedData {
             copyInto(tag.getLongArray(TAG_PRODUCED), buffer.produced);
             copyInto(tag.getLongArray(TAG_CONSUMED), buffer.consumed);
             copyInto(tag.getLongArray(TAG_STOCK), buffer.stock);
+            copyInto(tag.getLongArray(TAG_ITEM_PRODUCED), buffer.itemProduced);
+            copyInto(tag.getLongArray(TAG_ITEM_CONSUMED), buffer.itemConsumed);
+            copyInto(tag.getLongArray(TAG_FLUID_PRODUCED), buffer.fluidProduced);
+            copyInto(tag.getLongArray(TAG_FLUID_CONSUMED), buffer.fluidConsumed);
 
             if (tag.contains(TAG_ITEMS, Tag.TAG_LIST)) {
                 ListTag list = tag.getList(TAG_ITEMS, Tag.TAG_COMPOUND);
@@ -541,5 +681,19 @@ public class ObserverHistorySavedData extends SavedData {
     private static void copyInto(long[] from, long[] to) {
         int copy = Math.min(from.length, to.length);
         System.arraycopy(from, 0, to, 0, copy);
+    }
+
+    private static boolean isFluidItemId(String itemId) {
+        return itemId != null && itemId.startsWith("fluid:");
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 }

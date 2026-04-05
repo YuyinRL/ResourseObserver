@@ -2,6 +2,11 @@ package com.yuyinrl.resourceobserver.client.screen;
 
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModelMapper;
+import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModel;
+import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModelMapper;
+import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModel;
+import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModelMapper;
+import com.yuyinrl.resourceobserver.client.ui.TerminalPage;
 import com.yuyinrl.resourceobserver.client.ui.UiLayoutSpec;
 import com.yuyinrl.resourceobserver.client.ui.UiLayoutState;
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
@@ -9,7 +14,17 @@ import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.HeaderRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.KpiRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.PowerDebugPanelRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.PowerDeviceListRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.PowerGridChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.PowerKpiRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.PowerLoadChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.PowerOverloadAlertRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.RenderUtils;
+import com.yuyinrl.resourceobserver.client.ui.render.StorageItemListRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.StorageKpiRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.StorageNodeListRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.StorageUsageSummaryRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.TableRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.WatchlistRenderer;
 import com.yuyinrl.resourceobserver.network.ChartScope;
@@ -31,6 +46,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
 import org.lwjgl.glfw.GLFW;
 
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -114,15 +130,46 @@ public class ResourceTerminalScreen extends Screen {
     private ObserverDataPayload payload;           // 当前服务端数据
     private OverviewViewModel viewModel;           // 当前视图模型
     private final UiLayoutSpec layoutSpec = UiLayoutSpec.defaultOverview();
+    private final UiLayoutSpec storageLayoutSpec = UiLayoutSpec.defaultStorageNetwork();
     private UiLayoutState layoutState;             // 当前布局状态
     private SizeMode sizeMode = SizeMode.MEDIUM;   // 当前尺寸模式
     private final ChartRenderer.ChartRenderCache chartRenderCache = new ChartRenderer.ChartRenderCache();
+
+    // ========== 页面导航状态 ==========
+    private TerminalPage activePage = TerminalPage.OVERVIEW;
+    private UiRect tabOverviewHitbox;
+    private UiRect tabStorageHitbox;
+
+    // ========== 存储网络页面状态 ==========
+    private StorageNetworkViewModel storageViewModel;
+    private String storageSelectedNodeId;
+    private boolean storageAlertFilterActive;
+    private List<StorageNodeListRenderer.NodeHitbox> storageNodeHitboxes = List.of();
+    private List<StorageItemListRenderer.ItemRowHitbox> storageItemRowHitboxes = List.of();
+    private UiRect storageAlertFilterButtonHitbox;
+    private int storagePageScrollPx;
+    private int storageMaxPageScrollPx;
+
+    // ========== 电力网络页面状态 ==========
+    private final UiLayoutSpec powerLayoutSpec = UiLayoutSpec.defaultPowerNetwork();
+    private PowerNetworkViewModel powerViewModel;
+    private UiRect tabPowerHitbox;
+    private List<PowerDeviceListRenderer.DeviceRowHitbox> powerDeviceRowHitboxes = List.of();
+    private int powerPageScrollPx;
+    private int powerMaxPageScrollPx;
+    /** 选中的 Debug 面板设备类型（"plug"/"point"），null=未选中 */
+    private String debugSelectedDeviceType;
+    /** 选中的 Debug 面板设备在列表中的索引，-1=未选中 */
+    private int debugSelectedDeviceIndex = -1;
+    /** Debug 面板中可点击的设备行热区 */
+    private List<PowerDebugPanelRenderer.DeviceRowHitbox> debugDeviceRowHitboxes = List.of();
 
     // ========== 图表状态 ==========
     private ChartWindow chartWindow = ChartWindow.DAY_24H_5M;
     private ChartRenderer.LineMode chartLineMode = ChartRenderer.LineMode.ALL;
     private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
     private ChartRenderer.SmoothingMode smoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
+    private ChartRenderer.ChartDataType chartDataType = ChartRenderer.ChartDataType.ITEMS;
 
     // ========== 交互状态 ==========
     private int refreshCounter;                          // 刷新计数器
@@ -137,6 +184,7 @@ public class ResourceTerminalScreen extends Screen {
     // ========== 热区引用（每帧渲染后更新） ==========
     private UiRect resetButtonHitbox;
     private UiRect chartPageToggleHitbox;
+    private UiRect chartDataTypeButtonHitbox;
     private UiRect chartSmoothingButtonHitbox;
     private UiRect chartWindowButtonHitbox;
     private UiRect chartLineModeButtonHitbox;
@@ -191,11 +239,14 @@ public class ResourceTerminalScreen extends Screen {
     private UiRect storageDetailDialogRect;
     private UiRect storageDetailDialogCloseHitbox;
     private List<DialogTooltipHitbox> storageDetailTooltipHitboxes = List.of();
+    private OverviewViewModel.KpiType kpiDetailDialogType;
+    private UiRect kpiDetailDialogRect;
+    private UiRect kpiDetailDialogCloseHitbox;
 
     // ========== Widget 引用 ==========
     private Button closeButton;
     private Button sizeModeButton;
-    private long storageKpiPressedUntilMs;
+    private final Map<OverviewViewModel.KpiType, Long> kpiPressedUntilMs = new EnumMap<>(OverviewViewModel.KpiType.class);
     private long groupButtonPressedUntilMs;
     private long statusButtonPressedUntilMs;
     private long resetButtonPressedUntilMs;
@@ -266,6 +317,10 @@ public class ResourceTerminalScreen extends Screen {
                 closeStorageDetailDialog();
                 return true;
             }
+            if (kpiDetailDialogType != null) {
+                closeKpiDetailDialog();
+                return true;
+            }
             if (groupInputMode != GroupInputMode.NONE) {
                 closeGroupInput();
                 return true;
@@ -274,6 +329,14 @@ public class ResourceTerminalScreen extends Screen {
                 closePopupMenu();
                 return true;
             }
+        }
+        if (keyCode == GLFW.GLFW_KEY_E
+                && groupInputMode == GroupInputMode.NONE
+                && popupMenuType == PopupMenuType.NONE
+                && !storageDetailDialogOpen
+                && kpiDetailDialogType == null) {
+            this.onClose();
+            return true;
         }
         return super.keyPressed(keyCode, scanCode, modifiers);
     }
@@ -285,6 +348,24 @@ public class ResourceTerminalScreen extends Screen {
      */
     @Override
     public boolean mouseClicked(double mouseX, double mouseY, int button) {
+        if (kpiDetailDialogType != null) {
+            if (button != 0) {
+                return true;
+            }
+            if (kpiDetailDialogRect == null) {
+                closeKpiDetailDialog();
+                return true;
+            }
+            if (kpiDetailDialogCloseHitbox != null && kpiDetailDialogCloseHitbox.contains(mouseX, mouseY)) {
+                closeKpiDetailDialog();
+                return true;
+            }
+            if (!kpiDetailDialogRect.contains(mouseX, mouseY)) {
+                closeKpiDetailDialog();
+                return true;
+            }
+            return true;
+        }
         if (storageDetailDialogOpen) {
             if (button != 0) {
                 return true;
@@ -317,6 +398,21 @@ public class ResourceTerminalScreen extends Screen {
             return true;
         }
 
+        // ===== 标签页切换 =====
+        if (button == 0 && handleTabClick(mouseX, mouseY)) {
+            return true;
+        }
+
+        // ===== 存储网络页面交互 =====
+        if (activePage == TerminalPage.STORAGE_NETWORK) {
+            return handleStorageNetworkClick(mouseX, mouseY, button);
+        }
+
+        // ===== 电力网络页面交互 =====
+        if (activePage == TerminalPage.POWER_NETWORK) {
+            return handlePowerNetworkClick(mouseX, mouseY, button);
+        }
+
         // ===== 优先级 3：页面滚动条拖拽/点击 =====
         if (pageScrollThumbHitbox != null && pageScrollThumbHitbox.contains(mouseX, mouseY)) {
             pageScrollDragging = true;
@@ -333,6 +429,12 @@ public class ResourceTerminalScreen extends Screen {
                 return true;
             }
             // ===== 优先级 4：图表控制按钮组 =====
+            if (button == 0 && chartDataTypeButtonHitbox != null && chartDataTypeButtonHitbox.contains(mouseX, mouseY)) {
+                chartDataType = chartDataType.next();
+                ChartRenderer.invalidateAllCaches();
+                return true;
+            }
+
             if (button == 0 && chartPageToggleHitbox != null && chartPageToggleHitbox.contains(mouseX, mouseY)) {
                 chartPage = chartPage.next();
                 return true;
@@ -475,7 +577,7 @@ public class ResourceTerminalScreen extends Screen {
 
     @Override
     public boolean mouseDragged(double mouseX, double mouseY, int button, double dragX, double dragY) {
-        if (storageDetailDialogOpen) {
+        if (storageDetailDialogOpen || kpiDetailDialogType != null) {
             return true;
         }
         if (popupScrollDragging && popupScrollTrackHitbox != null && popupScrollThumbHitbox != null) {
@@ -491,7 +593,7 @@ public class ResourceTerminalScreen extends Screen {
 
     @Override
     public boolean mouseScrolled(double mouseX, double mouseY, double scrollX, double scrollY) {
-        if (storageDetailDialogOpen) {
+        if (storageDetailDialogOpen || kpiDetailDialogType != null) {
             return true;
         }
         if (popupMenuType != PopupMenuType.NONE && popupMenuRect != null && popupMenuRect.contains(mouseX, mouseY)) {
@@ -501,7 +603,13 @@ public class ResourceTerminalScreen extends Screen {
         }
         if (layoutState != null && layoutState.scrollViewport().contains(mouseX, mouseY)) {
             int delta = scrollY > 0 ? -PAGE_SCROLL_STEP : (scrollY < 0 ? PAGE_SCROLL_STEP : 0);
-            pageScrollPx = Math.max(0, Math.min(maxPageScrollPx, pageScrollPx + delta));
+            if (activePage == TerminalPage.STORAGE_NETWORK) {
+                storagePageScrollPx = Math.max(0, Math.min(storageMaxPageScrollPx, storagePageScrollPx + delta));
+            } else if (activePage == TerminalPage.POWER_NETWORK) {
+                powerPageScrollPx = Math.max(0, Math.min(powerMaxPageScrollPx, powerPageScrollPx + delta));
+            } else {
+                pageScrollPx = Math.max(0, Math.min(maxPageScrollPx, pageScrollPx + delta));
+            }
             return true;
         }
         return super.mouseScrolled(mouseX, mouseY, scrollX, scrollY);
@@ -509,7 +617,7 @@ public class ResourceTerminalScreen extends Screen {
 
     /**
      * 主渲染方法 —— 按层次绘制终端界面。
-     * 绘制顺序：面板背景 → 标题栏 → 可滚动内容（Header/KPI/Chart/Watchlist/Table）
+     * 绘制顺序：面板背景 → 标题栏（含标签页）→ 可滚动内容
      *           → 页面滚动条 → 尺寸/关闭按钮 → 弹出菜单或分组输入面板
      */
     @Override
@@ -520,16 +628,94 @@ public class ResourceTerminalScreen extends Screen {
         }
 
         // 当模态弹窗（KPI 详情 / 分组输入）打开时，抑制面板背景的鼠标悬停反馈
-        boolean modalOpen = storageDetailDialogOpen || groupInputMode != GroupInputMode.NONE;
+        boolean modalOpen = storageDetailDialogOpen || kpiDetailDialogType != null || groupInputMode != GroupInputMode.NONE;
         int bgMouseX = modalOpen ? Integer.MIN_VALUE : mouseX;
         int bgMouseY = modalOpen ? Integer.MIN_VALUE : mouseY;
 
         RenderUtils.fillPanel(gfx, layoutState.panel(), UiThemeTokens.PANEL_BG, UiThemeTokens.PANEL_BORDER);
         RenderUtils.fillPanel(gfx, layoutState.fixedChrome(), UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER);
 
+        // ===== 标签页渲染 =====
+        renderTabs(gfx, font, bgMouseX, bgMouseY);
+
+        if (activePage == TerminalPage.STORAGE_NETWORK) {
+            renderStorageNetworkPage(gfx, font, bgMouseX, bgMouseY, partialTick);
+        } else if (activePage == TerminalPage.POWER_NETWORK) {
+            renderPowerNetworkPage(gfx, font, bgMouseX, bgMouseY, partialTick);
+        } else {
+            renderOverviewPage(gfx, font, bgMouseX, bgMouseY, partialTick, mouseX, mouseY);
+        }
+
+        renderPageScrollbar(gfx);
+
+        sizeModeButton.render(gfx, bgMouseX, bgMouseY, partialTick);
+        closeButton.render(gfx, bgMouseX, bgMouseY, partialTick);
+
+        if (activePage == TerminalPage.OVERVIEW) {
+            if (groupInputMode != GroupInputMode.NONE) {
+                renderGroupInputOverlay(gfx, mouseX, mouseY, partialTick);
+            } else if (storageDetailDialogOpen) {
+                renderStorageDetailDialog(gfx, mouseX, mouseY);
+            } else if (kpiDetailDialogType != null) {
+                renderKpiDetailDialog(gfx, mouseX, mouseY);
+            } else {
+                renderPopupMenu(gfx, mouseX, mouseY);
+            }
+            if (groupInputMode == GroupInputMode.NONE
+                    && !storageDetailDialogOpen
+                    && kpiDetailDialogType == null
+                    && popupMenuType == PopupMenuType.NONE) {
+                renderChartHoverTooltip(gfx, mouseX, mouseY);
+            }
+        }
+    }
+
+    /** 渲染标签页栏 */
+    private void renderTabs(GuiGraphics gfx, net.minecraft.client.gui.Font font, int mouseX, int mouseY) {
+        UiRect chrome = layoutState.fixedChrome();
+        int tabW = 80;
+        int tabH = Math.min(16, chrome.height() - 4);
+        int tabY = chrome.y() + 4;
+        int tabX = chrome.x() + 8;
+
+        // Overview 标签
+        tabOverviewHitbox = new UiRect(tabX, tabY, tabW, tabH);
+        boolean overviewActive = activePage == TerminalPage.OVERVIEW;
+        boolean overviewHovered = tabOverviewHitbox.contains(mouseX, mouseY);
+        int overviewBg = overviewActive ? UiThemeTokens.TAB_ACTIVE : (overviewHovered ? 0xAA21456A : UiThemeTokens.TAB_INACTIVE);
+        gfx.fill(tabOverviewHitbox.x(), tabOverviewHitbox.y(), tabOverviewHitbox.right(), tabOverviewHitbox.bottom(), overviewBg);
+        RenderUtils.drawBorder(gfx, tabOverviewHitbox, UiThemeTokens.DIVIDER);
+        String overviewLabel = Component.translatable("screen.resourceobserver.storage.tab.overview").getString();
+        gfx.drawString(font, RenderUtils.ellipsis(font, overviewLabel, tabW - 8), tabX + 4, tabY + 4, overviewActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+
+        // Storage Network 标签
+        int tab2X = tabX + tabW + 4;
+        tabStorageHitbox = new UiRect(tab2X, tabY, tabW, tabH);
+        boolean storageActive = activePage == TerminalPage.STORAGE_NETWORK;
+        boolean storageHovered = tabStorageHitbox.contains(mouseX, mouseY);
+        int storageBg = storageActive ? UiThemeTokens.TAB_ACTIVE : (storageHovered ? 0xAA21456A : UiThemeTokens.TAB_INACTIVE);
+        gfx.fill(tabStorageHitbox.x(), tabStorageHitbox.y(), tabStorageHitbox.right(), tabStorageHitbox.bottom(), storageBg);
+        RenderUtils.drawBorder(gfx, tabStorageHitbox, UiThemeTokens.DIVIDER);
+        String storageLabel = Component.translatable("screen.resourceobserver.storage.tab.storage_network").getString();
+        gfx.drawString(font, RenderUtils.ellipsis(font, storageLabel, tabW - 8), tab2X + 4, tabY + 4, storageActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+
+        // Power Network 标签
+        int tab3X = tab2X + tabW + 4;
+        tabPowerHitbox = new UiRect(tab3X, tabY, tabW, tabH);
+        boolean powerActive = activePage == TerminalPage.POWER_NETWORK;
+        boolean powerHovered = tabPowerHitbox.contains(mouseX, mouseY);
+        int powerBg = powerActive ? UiThemeTokens.TAB_ACTIVE : (powerHovered ? 0xAA21456A : UiThemeTokens.TAB_INACTIVE);
+        gfx.fill(tabPowerHitbox.x(), tabPowerHitbox.y(), tabPowerHitbox.right(), tabPowerHitbox.bottom(), powerBg);
+        RenderUtils.drawBorder(gfx, tabPowerHitbox, UiThemeTokens.DIVIDER);
+        String powerLabel = Component.translatable("screen.resourceobserver.storage.tab.power_network").getString();
+        gfx.drawString(font, RenderUtils.ellipsis(font, powerLabel, tabW - 8), tab3X + 4, tabY + 4, powerActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+    }
+
+    /** 渲染总览页面内容 */
+    private void renderOverviewPage(GuiGraphics gfx, net.minecraft.client.gui.Font font, int bgMouseX, int bgMouseY, float partialTick, int mouseX, int mouseY) {
+        boolean modalOpen = storageDetailDialogOpen || kpiDetailDialogType != null || groupInputMode != GroupInputMode.NONE;
+
         ContentLayout content = computeContentLayout(pageScrollPx);
-        // 内容布局双重计算防护：先计算布局→确定最大滚动范围→ clamp 滚动值
-        // 若 clamp 修正了滚动值（窗口缩小导致内容变短），则重新计算布局
         maxPageScrollPx = Math.max(0, content.totalHeight() - layoutState.scrollViewport().height());
         int clampedScroll = Math.max(0, Math.min(pageScrollPx, maxPageScrollPx));
         if (clampedScroll != pageScrollPx) {
@@ -537,38 +723,37 @@ public class ResourceTerminalScreen extends Screen {
             content = computeContentLayout(pageScrollPx);
         }
 
-        // 开启 scissor 裁剪，限制内容绘制在滚动视口内
         UiRect viewport = layoutState.scrollViewport();
         gfx.enableScissor(viewport.x(), viewport.y(), viewport.right(), viewport.bottom());
 
         HeaderRenderer.render(gfx, font, content.headerArea(), payload.observerPos(), payload.isBound());
-        KpiRenderer.InteractionState kpiInteractionState = new KpiRenderer.InteractionState(
-                Set.of(OverviewViewModel.KpiType.STORAGE),
-                isStorageKpiPressed() ? Set.of(OverviewViewModel.KpiType.STORAGE) : Set.of()
-        );
+        KpiRenderer.InteractionState kpiInteractionState = modalOpen
+                ? KpiRenderer.InteractionState.none()
+                : new KpiRenderer.InteractionState(
+                        Set.of(
+                                OverviewViewModel.KpiType.PRODUCTION,
+                                OverviewViewModel.KpiType.CONSUMPTION,
+                                OverviewViewModel.KpiType.STORAGE,
+                                OverviewViewModel.KpiType.BALANCE
+                        ),
+                        pressedKpiTypes()
+                );
         KpiRenderer.RenderResult kpiResult = KpiRenderer.render(
-                gfx,
-                font,
-                content.kpiArea(),
-                viewModel.kpis(),
-                kpiInteractionState,
-                bgMouseX,
-                bgMouseY
+                gfx, font, content.kpiArea(), viewModel.kpis(), kpiInteractionState, bgMouseX, bgMouseY
         );
         kpiHitboxes = kpiResult.kpiHitboxes();
         ChartRenderer.RenderResult chartResult = ChartRenderer.render(
-                gfx,
-                font,
-                content.chartArea(),
-                viewModel.chartSeries(),
-                selectedItemDisplayName(),
-                chartWindow,
-                chartLineMode,
-                chartPage,
-                smoothingMode,
+                gfx, font, content.chartArea(),
+                chartDataType == ChartRenderer.ChartDataType.ENERGY
+                        ? viewModel.energyChartSeries()
+                        : viewModel.chartSeries(),
+                selectedItemDisplayName(), chartWindow, chartLineMode, chartPage, smoothingMode,
+                chartDataType,
+                viewModel.energyChartSeries() != null && !viewModel.energyChartSeries().isEmpty(),
                 chartRenderCache
         );
         chartWindowButtonHitbox = chartResult.windowToggle();
+        chartDataTypeButtonHitbox = chartResult.dataTypeToggle();
         chartPageToggleHitbox = chartResult.pageToggle();
         chartLineModeButtonHitbox = chartResult.lineModeButton();
         chartSmoothingButtonHitbox = chartResult.smoothingButton();
@@ -578,11 +763,7 @@ public class ResourceTerminalScreen extends Screen {
 
         if (content.watchlistVisible()) {
             WatchlistRenderer.RenderResult watchResult = WatchlistRenderer.render(
-                    gfx,
-                    font,
-                    content.watchlistArea(),
-                    viewModel.watchlistItems(),
-                    selectedItemId
+                    gfx, font, content.watchlistArea(), viewModel.watchlistItems(), selectedItemId
             );
             watchlistHitboxes = watchResult.itemHitboxes();
             watchlistRemoveHitboxes = watchResult.removeHitboxes();
@@ -592,16 +773,9 @@ public class ResourceTerminalScreen extends Screen {
         }
 
         TableRenderer.RenderResult tableResult = TableRenderer.render(
-                gfx,
-                font,
-                content.tableArea(),
-                viewModel.tableGroups(),
-                groupExpandedState,
-                selectedItemId,
-                Set.copyOf(selectedItemIds),
-                viewModel.uiState(),
-                bgMouseX,
-                bgMouseY,
+                gfx, font, content.tableArea(), viewModel.tableGroups(), groupExpandedState,
+                selectedItemId, Set.copyOf(selectedItemIds), viewModel.uiState(),
+                bgMouseX, bgMouseY,
                 new TableRenderer.FilterPressState(
                         isFilterPressed(groupButtonPressedUntilMs),
                         isFilterPressed(statusButtonPressedUntilMs),
@@ -616,22 +790,234 @@ public class ResourceTerminalScreen extends Screen {
         statusButtonHitbox = tableResult.statusButtonHitbox();
         resetFiltersHitbox = tableResult.resetHitbox();
         gfx.disableScissor();
+    }
 
-        renderPageScrollbar(gfx);
-
-        sizeModeButton.render(gfx, bgMouseX, bgMouseY, partialTick);
-        closeButton.render(gfx, bgMouseX, bgMouseY, partialTick);
-
-        if (groupInputMode != GroupInputMode.NONE) {
-            renderGroupInputOverlay(gfx, mouseX, mouseY, partialTick);
-        } else if (storageDetailDialogOpen) {
-            renderStorageDetailDialog(gfx, mouseX, mouseY);
-        } else {
-            renderPopupMenu(gfx, mouseX, mouseY);
+    /** 渲染存储网络页面内容（12列网格：左4列 + 右8列） */
+    private void renderStorageNetworkPage(GuiGraphics gfx, net.minecraft.client.gui.Font font, int bgMouseX, int bgMouseY, float partialTick) {
+        if (storageViewModel == null) {
+            rebuildStorageViewModel();
         }
-        if (groupInputMode == GroupInputMode.NONE && !storageDetailDialogOpen && popupMenuType == PopupMenuType.NONE) {
-            renderChartHoverTooltip(gfx, mouseX, mouseY);
+
+        StorageContentLayout storageContent = computeStorageContentLayout(storagePageScrollPx);
+        storageMaxPageScrollPx = Math.max(0, storageContent.totalHeight() - layoutState.scrollViewport().height());
+        int clampedScroll = Math.max(0, Math.min(storagePageScrollPx, storageMaxPageScrollPx));
+        if (clampedScroll != storagePageScrollPx) {
+            storagePageScrollPx = clampedScroll;
+            storageContent = computeStorageContentLayout(storagePageScrollPx);
         }
+
+        UiRect viewport = layoutState.scrollViewport();
+        gfx.enableScissor(viewport.x(), viewport.y(), viewport.right(), viewport.bottom());
+
+        // Header（复用 Overview 的 Header）
+        HeaderRenderer.render(gfx, font, storageContent.headerArea(), payload.observerPos(), payload.isBound());
+
+        // Left panel: 节点列表 + 使用率摘要（环形图）
+        StorageNodeListRenderer.RenderResult nodeResult = StorageNodeListRenderer.render(
+                gfx, font, storageContent.nodeListArea(), storageViewModel.nodes(),
+                storageSelectedNodeId, bgMouseX, bgMouseY
+        );
+        storageNodeHitboxes = nodeResult.nodeHitboxes();
+
+        StorageUsageSummaryRenderer.render(gfx, font, storageContent.usageSummaryArea(),
+                storageViewModel.usageSegments(), storageViewModel.totalUsedRatio());
+
+        // Right panel: 全局库存健康表格
+        StorageItemListRenderer.RenderResult itemResult = StorageItemListRenderer.render(
+                gfx, font, storageContent.itemListArea(), storageViewModel.items(),
+                storageAlertFilterActive, bgMouseX, bgMouseY, storageViewModel.criticalItemCount()
+        );
+        storageItemRowHitboxes = itemResult.rowHitboxes();
+        storageAlertFilterButtonHitbox = itemResult.alertFilterButton();
+
+
+        gfx.disableScissor();
+    }
+
+    /** 计算存储网络页面各区段在可滚动内容中的布局位置（12列网格：左4 + 右8） */
+    private StorageContentLayout computeStorageContentLayout(int scrollPx) {
+        UiRect viewport = layoutState.scrollViewport();
+        int contentX = viewport.x();
+        int contentY = viewport.y() - scrollPx;
+        int contentW = Math.max(120, viewport.width() - layoutState.scrollbarWidth() - 4);
+        int gap = layoutState.sectionGap();
+
+        UiRect headerArea = new UiRect(contentX, contentY, contentW, layoutState.headerHeight());
+        int y = headerArea.bottom() + gap;
+
+        // 12-column grid: left 4 cols (33%), right 8 cols (67%)
+        int leftW = Math.max(80, (int) (contentW * 0.33f));
+        int rightW = Math.max(80, contentW - leftW - gap);
+        int leftX = contentX;
+        int rightX = contentX + leftW + gap;
+
+        // Left panel: node list + usage summary (donut)
+        int nodeListH = StorageNodeListRenderer.measureHeight(storageViewModel != null ? storageViewModel.nodes() : List.of());
+        UiRect nodeListArea = new UiRect(leftX, y, leftW, nodeListH);
+
+        int usageH = StorageUsageSummaryRenderer.sectionHeight();
+        UiRect usageSummaryArea = new UiRect(leftX, nodeListArea.bottom() + gap, leftW, usageH);
+
+        // Right panel: inventory health table
+        int itemListH = StorageItemListRenderer.measureHeight(storageViewModel != null ? storageViewModel.items() : List.of());
+        int rightPanelH = Math.max(itemListH, nodeListH + gap + usageH);
+        UiRect itemListArea = new UiRect(rightX, y, rightW, rightPanelH);
+
+        int totalHeight = Math.max(usageSummaryArea.bottom(), itemListArea.bottom()) - contentY;
+
+        return new StorageContentLayout(headerArea, nodeListArea, itemListArea, usageSummaryArea, totalHeight);
+    }
+
+    /**
+     * 存储网络页面可滚动内容布局（12列网格）。
+     */
+    private record StorageContentLayout(
+            UiRect headerArea,
+            UiRect nodeListArea,
+            UiRect itemListArea,
+            UiRect usageSummaryArea,
+            int totalHeight
+    ) {
+    }
+
+    /** 渲染电力网络页面内容 */
+    private void renderPowerNetworkPage(GuiGraphics gfx, net.minecraft.client.gui.Font font, int bgMouseX, int bgMouseY, float partialTick) {
+        if (powerViewModel == null) {
+            rebuildPowerViewModel();
+        }
+
+        PowerContentLayout powerContent = computePowerContentLayout(powerPageScrollPx);
+        powerMaxPageScrollPx = Math.max(0, powerContent.totalHeight() - layoutState.scrollViewport().height());
+        int clampedScroll = Math.max(0, Math.min(powerPageScrollPx, powerMaxPageScrollPx));
+        if (clampedScroll != powerPageScrollPx) {
+            powerPageScrollPx = clampedScroll;
+            powerContent = computePowerContentLayout(powerPageScrollPx);
+        }
+
+        UiRect viewport = layoutState.scrollViewport();
+        gfx.enableScissor(viewport.x(), viewport.y(), viewport.right(), viewport.bottom());
+
+        // Header
+        HeaderRenderer.render(gfx, font, powerContent.headerArea(), payload.observerPos(), payload.isBound());
+
+        // Left panel: Load distribution donut + Overload Risk card
+        PowerLoadChartRenderer.render(gfx, font, powerContent.loadChartArea(),
+                powerViewModel.loadSegments(), powerViewModel.totalDemandFEt());
+
+        PowerOverloadAlertRenderer.render(gfx, font, powerContent.alertArea(),
+                powerViewModel.overloadInfo());
+
+        // Left panel (continued): Debug panel
+        PowerDebugPanelRenderer.RenderResult debugResult = PowerDebugPanelRenderer.render(
+                gfx, font, powerContent.debugPanelArea(),
+                powerViewModel.debugSnapshot(),
+                debugSelectedDeviceType, debugSelectedDeviceIndex,
+                bgMouseX, bgMouseY);
+        debugDeviceRowHitboxes = debugResult.deviceRowHitboxes();
+
+        // Right panel: Grid Load chart + Production Line Consumption table
+        PowerGridChartRenderer.render(gfx, font, powerContent.gridChartArea(),
+                powerViewModel.totalInputPerTick(), powerViewModel.totalOutputPerTick());
+
+        PowerDeviceListRenderer.RenderResult deviceResult = PowerDeviceListRenderer.render(
+                gfx, font, powerContent.deviceListArea(), powerViewModel.devices(), bgMouseX, bgMouseY
+        );
+        powerDeviceRowHitboxes = deviceResult.rowHitboxes();
+
+        gfx.disableScissor();
+    }
+
+    /** 处理电力网络页面的鼠标点击 */
+    private boolean handlePowerNetworkClick(double mouseX, double mouseY, int button) {
+        if (button != 0) {
+            return super.mouseClicked(mouseX, mouseY, button);
+        }
+        // 滚动条
+        if (pageScrollThumbHitbox != null && pageScrollThumbHitbox.contains(mouseX, mouseY)) {
+            pageScrollDragging = true;
+            pageScrollDragOffset = (int) mouseY - pageScrollThumbHitbox.y();
+            return true;
+        }
+        if (pageScrollTrackHitbox != null && pageScrollTrackHitbox.contains(mouseX, mouseY)) {
+            jumpPageScrollTo((int) mouseY);
+            return true;
+        }
+        // Debug 面板设备行点击（选中/取消选中接口以查看外部容器）
+        for (PowerDebugPanelRenderer.DeviceRowHitbox hitbox : debugDeviceRowHitboxes) {
+            if (hitbox.rect().contains(mouseX, mouseY)) {
+                if (hitbox.deviceType().equals(debugSelectedDeviceType) && hitbox.index() == debugSelectedDeviceIndex) {
+                    // 再次点击已选中行 → 取消选中
+                    debugSelectedDeviceType = null;
+                    debugSelectedDeviceIndex = -1;
+                } else {
+                    debugSelectedDeviceType = hitbox.deviceType();
+                    debugSelectedDeviceIndex = hitbox.index();
+                }
+                return true;
+            }
+        }
+        return super.mouseClicked(mouseX, mouseY, button);
+    }
+
+    /** 计算电力网络页面各区段在可滚动内容中的布局位置（12列网格：左4 + 右8） */
+    private PowerContentLayout computePowerContentLayout(int scrollPx) {
+        UiRect viewport = layoutState.scrollViewport();
+        int contentX = viewport.x();
+        int contentY = viewport.y() - scrollPx;
+        int contentW = Math.max(120, viewport.width() - layoutState.scrollbarWidth() - 4);
+        int gap = layoutState.sectionGap();
+
+        UiRect headerArea = new UiRect(contentX, contentY, contentW, layoutState.headerHeight());
+        int y = headerArea.bottom() + gap;
+
+        // 12-column grid: left 4 cols (33%), right 8 cols (67%)
+        int leftW = Math.max(80, (int) (contentW * 0.33f));
+        int rightW = Math.max(80, contentW - leftW - gap);
+        int leftX = contentX;
+        int rightX = contentX + leftW + gap;
+
+        // Left panel: load donut + overload risk card
+        int loadChartH = PowerLoadChartRenderer.sectionHeight();
+        UiRect loadChartArea = new UiRect(leftX, y, leftW, loadChartH);
+
+        int alertH = PowerOverloadAlertRenderer.cardHeight();
+        UiRect alertArea = new UiRect(leftX, loadChartArea.bottom() + gap, leftW, alertH);
+
+        // Left panel (continued): debug panel below overload risk card
+        PowerNetworkViewModel.DebugSnapshot dbgSnap = powerViewModel != null
+                ? powerViewModel.debugSnapshot() : PowerNetworkViewModel.DebugSnapshot.empty();
+        int debugPanelH = PowerDebugPanelRenderer.measureHeight(dbgSnap, debugSelectedDeviceType, debugSelectedDeviceIndex);
+        UiRect debugPanelArea = new UiRect(leftX, alertArea.bottom() + gap, leftW, debugPanelH);
+
+        // Right panel: grid chart + device list
+        int gridChartH = PowerGridChartRenderer.sectionHeight();
+        UiRect gridChartArea = new UiRect(rightX, y, rightW, gridChartH);
+
+        int deviceListH = PowerDeviceListRenderer.measureHeight(powerViewModel != null ? powerViewModel.devices() : List.of());
+        UiRect deviceListArea = new UiRect(rightX, gridChartArea.bottom() + gap, rightW, deviceListH);
+
+        int totalHeight = Math.max(debugPanelArea.bottom(), deviceListArea.bottom()) - contentY;
+
+        return new PowerContentLayout(headerArea, loadChartArea, alertArea, debugPanelArea, gridChartArea, deviceListArea, totalHeight);
+    }
+
+    /**
+     * 电力网络页面可滚动内容布局（12列网格）。
+     */
+    private record PowerContentLayout(
+            UiRect headerArea,
+            UiRect loadChartArea,
+            UiRect alertArea,
+            UiRect debugPanelArea,
+            UiRect gridChartArea,
+            UiRect deviceListArea,
+            int totalHeight
+    ) {
+    }
+
+    /** 重建电力网络页面的 ViewModel */
+    private void rebuildPowerViewModel() {
+        powerViewModel = PowerNetworkViewModelMapper.fromPayload(payload);
     }
 
     @Override
@@ -643,6 +1029,75 @@ public class ResourceTerminalScreen extends Screen {
     public void removed() {
         super.removed();
         chartRenderCache.clear();
+    }
+
+    /** 处理标签页点击 */
+    private boolean handleTabClick(double mouseX, double mouseY) {
+        if (tabOverviewHitbox != null && tabOverviewHitbox.contains(mouseX, mouseY)) {
+            if (activePage != TerminalPage.OVERVIEW) {
+                activePage = TerminalPage.OVERVIEW;
+                closePopupMenu();
+            }
+            return true;
+        }
+        if (tabStorageHitbox != null && tabStorageHitbox.contains(mouseX, mouseY)) {
+            if (activePage != TerminalPage.STORAGE_NETWORK) {
+                activePage = TerminalPage.STORAGE_NETWORK;
+                closePopupMenu();
+                closeStorageDetailDialog();
+                closeKpiDetailDialog();
+                closeGroupInput();
+                rebuildStorageViewModel();
+            }
+            return true;
+        }
+        if (tabPowerHitbox != null && tabPowerHitbox.contains(mouseX, mouseY)) {
+            if (activePage != TerminalPage.POWER_NETWORK) {
+                activePage = TerminalPage.POWER_NETWORK;
+                closePopupMenu();
+                closeStorageDetailDialog();
+                closeKpiDetailDialog();
+                closeGroupInput();
+                rebuildPowerViewModel();
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /** 处理存储网络页面的鼠标点击 */
+    private boolean handleStorageNetworkClick(double mouseX, double mouseY, int button) {
+        if (button != 0) {
+            return super.mouseClicked(mouseX, mouseY, button);
+        }
+        // 滚动条
+        if (pageScrollThumbHitbox != null && pageScrollThumbHitbox.contains(mouseX, mouseY)) {
+            pageScrollDragging = true;
+            pageScrollDragOffset = (int) mouseY - pageScrollThumbHitbox.y();
+            return true;
+        }
+        if (pageScrollTrackHitbox != null && pageScrollTrackHitbox.contains(mouseX, mouseY)) {
+            jumpPageScrollTo((int) mouseY);
+            return true;
+        }
+
+        // 警报筛选按钮
+        if (storageAlertFilterButtonHitbox != null && storageAlertFilterButtonHitbox.contains(mouseX, mouseY)) {
+            storageAlertFilterActive = !storageAlertFilterActive;
+            rebuildStorageViewModel();
+            return true;
+        }
+
+        // 节点选择
+        for (StorageNodeListRenderer.NodeHitbox hitbox : storageNodeHitboxes) {
+            if (hitbox.rect().contains(mouseX, mouseY)) {
+                storageSelectedNodeId = hitbox.nodeId(); // null = All Nodes
+                rebuildStorageViewModel();
+                return true;
+            }
+        }
+
+        return super.mouseClicked(mouseX, mouseY, button);
     }
 
     /** 重建布局并重新初始化所有 Widget */
@@ -716,13 +1171,22 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
-    /** 从 Payload 重建 OverviewViewModel */
+    /** 从 Payload 重建 OverviewViewModel 和 StorageNetworkViewModel */
     private void rebuildViewModel() {
         viewModel = OverviewViewModelMapper.fromPayload(payload);
         for (OverviewViewModel.TableGroup group : viewModel.tableGroups()) {
             groupExpandedState.putIfAbsent(group.key(), true);
         }
         clampSelectedRowsToCurrentData();
+        rebuildStorageViewModel();
+        rebuildPowerViewModel();
+    }
+
+    /** 重建存储网络页面的 ViewModel */
+    private void rebuildStorageViewModel() {
+        storageViewModel = StorageNetworkViewModelMapper.fromPayload(
+                payload, storageSelectedNodeId, storageAlertFilterActive
+        );
     }
 
     /** 清理无效的选中状态（数据更新后可能有物品消失） */
@@ -785,16 +1249,30 @@ public class ResourceTerminalScreen extends Screen {
         pageScrollTrackHitbox = new UiRect(trackX, trackY, trackW, trackH);
         gfx.fill(pageScrollTrackHitbox.x(), pageScrollTrackHitbox.y(), pageScrollTrackHitbox.right(), pageScrollTrackHitbox.bottom(), 0x55334455);
 
-        if (maxPageScrollPx <= 0) {
+        // 根据当前页面选择对应的滚动值
+        int currentScrollPx;
+        int currentMaxScrollPx;
+        if (activePage == TerminalPage.STORAGE_NETWORK) {
+            currentScrollPx = storagePageScrollPx;
+            currentMaxScrollPx = storageMaxPageScrollPx;
+        } else if (activePage == TerminalPage.POWER_NETWORK) {
+            currentScrollPx = powerPageScrollPx;
+            currentMaxScrollPx = powerMaxPageScrollPx;
+        } else {
+            currentScrollPx = pageScrollPx;
+            currentMaxScrollPx = maxPageScrollPx;
+        }
+
+        if (currentMaxScrollPx <= 0) {
             pageScrollThumbHitbox = null;
             return;
         }
         // 滑块高度 = 视口占总内容的比例 × 轨道高度（最小 18px）
-        int thumbH = Math.max(18, Math.round((viewport.height() / (float) (viewport.height() + maxPageScrollPx)) * trackH));
+        int thumbH = Math.max(18, Math.round((viewport.height() / (float) (viewport.height() + currentMaxScrollPx)) * trackH));
         // 可用行程 = 轨道高度 - 滑块高度
         int travel = Math.max(1, trackH - thumbH);
         // 滑块位置 = 滚动进度 × 行程
-        int thumbY = trackY + Math.round((pageScrollPx / (float) maxPageScrollPx) * travel);
+        int thumbY = trackY + Math.round((currentScrollPx / (float) currentMaxScrollPx) * travel);
         pageScrollThumbHitbox = new UiRect(trackX, thumbY, trackW, thumbH);
         gfx.fill(pageScrollThumbHitbox.x(), pageScrollThumbHitbox.y(), pageScrollThumbHitbox.right(), pageScrollThumbHitbox.bottom(), UiThemeTokens.CYAN);
     }
@@ -869,18 +1347,51 @@ public class ResourceTerminalScreen extends Screen {
             if (!hitbox.rect().contains(mouseX, mouseY)) {
                 continue;
             }
+            markKpiPressed(hitbox.type());
             if (hitbox.type() == OverviewViewModel.KpiType.STORAGE) {
-                storageKpiPressedUntilMs = Util.getMillis() + 140L;
                 openStorageDetailDialog();
                 return true;
             }
-            return false;
+            if (hitbox.type() == OverviewViewModel.KpiType.PRODUCTION
+                    || hitbox.type() == OverviewViewModel.KpiType.CONSUMPTION
+                    || hitbox.type() == OverviewViewModel.KpiType.BALANCE) {
+                openKpiDetailDialog(hitbox.type());
+                return true;
+            }
+            return true;
         }
         return false;
     }
 
-    private boolean isStorageKpiPressed() {
-        return Util.getMillis() < storageKpiPressedUntilMs;
+    private void markKpiPressed(OverviewViewModel.KpiType type) {
+        if (type == null) {
+            return;
+        }
+        kpiPressedUntilMs.put(type, Util.getMillis() + 140L);
+    }
+
+    private Set<OverviewViewModel.KpiType> pressedKpiTypes() {
+        if (kpiPressedUntilMs.isEmpty()) {
+            return Set.of();
+        }
+        long now = Util.getMillis();
+        List<OverviewViewModel.KpiType> active = new ArrayList<>();
+        List<OverviewViewModel.KpiType> expired = new ArrayList<>();
+        for (Map.Entry<OverviewViewModel.KpiType, Long> entry : kpiPressedUntilMs.entrySet()) {
+            long until = entry.getValue() == null ? 0L : entry.getValue();
+            if (until > now) {
+                active.add(entry.getKey());
+            } else {
+                expired.add(entry.getKey());
+            }
+        }
+        for (OverviewViewModel.KpiType type : expired) {
+            kpiPressedUntilMs.remove(type);
+        }
+        if (active.isEmpty()) {
+            return Set.of();
+        }
+        return Set.copyOf(active);
     }
 
     private void openStorageDetailDialog() {
@@ -888,6 +1399,7 @@ public class ResourceTerminalScreen extends Screen {
             return;
         }
         closePopupMenu();
+        closeKpiDetailDialog();
         storageDetailDialogOpen = true;
     }
 
@@ -896,6 +1408,21 @@ public class ResourceTerminalScreen extends Screen {
         storageDetailDialogRect = null;
         storageDetailDialogCloseHitbox = null;
         storageDetailTooltipHitboxes = List.of();
+    }
+
+    private void openKpiDetailDialog(OverviewViewModel.KpiType type) {
+        if (type == null || viewModel == null || viewModel.kpiDetailFor(type) == null) {
+            return;
+        }
+        closePopupMenu();
+        closeStorageDetailDialog();
+        kpiDetailDialogType = type;
+    }
+
+    private void closeKpiDetailDialog() {
+        kpiDetailDialogType = null;
+        kpiDetailDialogRect = null;
+        kpiDetailDialogCloseHitbox = null;
     }
 
     /** 处理筛选按钮点击（打开对应弹出菜单） */
@@ -1351,6 +1878,82 @@ public class ResourceTerminalScreen extends Screen {
         groupInputCancelButton.render(gfx, mouseX, mouseY, partialTick);
     }
 
+    private void renderKpiDetailDialog(GuiGraphics gfx, int mouseX, int mouseY) {
+        if (viewModel == null || kpiDetailDialogType == null || layoutState == null) {
+            closeKpiDetailDialog();
+            return;
+        }
+        OverviewViewModel.KpiDetail detail = viewModel.kpiDetailFor(kpiDetailDialogType);
+        if (detail == null) {
+            closeKpiDetailDialog();
+            return;
+        }
+
+        gfx.pose().pushPose();
+        gfx.pose().translate(0.0f, 0.0f, 320.0f);
+
+        UiRect panel = layoutState.panel();
+        int dialogWidth = Math.min(430, panel.width() - 26);
+        int dialogHeight = Math.min(198, panel.height() - 26);
+        int dialogX = panel.x() + (panel.width() - dialogWidth) / 2;
+        int dialogY = panel.y() + (panel.height() - dialogHeight) / 2;
+        kpiDetailDialogRect = new UiRect(dialogX, dialogY, dialogWidth, dialogHeight);
+
+        gfx.fill(panel.x(), panel.y(), panel.right(), panel.bottom(), 0xAA04070E);
+        RenderUtils.fillPanel(gfx, kpiDetailDialogRect, UiThemeTokens.PANEL_BG, UiThemeTokens.SECTION_BORDER);
+
+        int closeSize = 16;
+        int closeX = kpiDetailDialogRect.right() - closeSize - 8;
+        int closeY = kpiDetailDialogRect.y() + 8;
+        kpiDetailDialogCloseHitbox = new UiRect(closeX, closeY, closeSize, closeSize);
+        RenderUtils.fillPanel(gfx, kpiDetailDialogCloseHitbox, 0x4016253C, UiThemeTokens.DIVIDER);
+        gfx.drawString(font, "X", closeX + 5, closeY + 4, UiThemeTokens.TEXT_MUTED);
+
+        int titleColor = switch (detail.status()) {
+            case POSITIVE -> UiThemeTokens.EMERALD;
+            case WARNING -> UiThemeTokens.AMBER;
+            case NEGATIVE -> UiThemeTokens.ROSE;
+            case NEUTRAL -> UiThemeTokens.TEXT;
+        };
+
+        int textX = kpiDetailDialogRect.x() + 12;
+        int y = kpiDetailDialogRect.y() + 10;
+        gfx.drawString(font, detail.title(), textX, y, UiThemeTokens.TITLE);
+        y += 12;
+        String hint = detail.hintText() == null || detail.hintText().isBlank()
+                ? Component.translatable("screen.resourceobserver.overview.kpi.trend.unavailable").getString()
+                : detail.hintText();
+        gfx.drawString(font, RenderUtils.ellipsis(font, hint, dialogWidth - 24), textX, y, titleColor);
+        y += 14;
+
+        int rowTextWidth = dialogWidth - 24;
+        y = drawKpiDetailChannelRow(gfx, detail.itemChannel(), textX, y, rowTextWidth);
+        y += 4;
+        drawKpiDetailChannelRow(gfx, detail.fluidChannel(), textX, y, rowTextWidth);
+
+        gfx.pose().popPose();
+    }
+
+    private int drawKpiDetailChannelRow(
+            GuiGraphics gfx,
+            OverviewViewModel.KpiDetailChannel channel,
+            int x,
+            int y,
+            int maxTextWidth
+    ) {
+        if (channel == null) {
+            return y + 16;
+        }
+        gfx.drawString(font, RenderUtils.ellipsis(font, channel.label(), maxTextWidth), x, y, UiThemeTokens.TEXT);
+        y += 10;
+        gfx.drawString(font, RenderUtils.ellipsis(font, channel.recentText(), maxTextWidth), x, y, UiThemeTokens.TITLE);
+        y += 9;
+        gfx.drawString(font, RenderUtils.ellipsis(font, channel.previousText(), maxTextWidth), x, y, UiThemeTokens.TEXT_MUTED);
+        y += 9;
+        gfx.drawString(font, RenderUtils.ellipsis(font, channel.trendText(), maxTextWidth), x, y, UiThemeTokens.TEXT_MUTED);
+        return y + 10;
+    }
+
     private void renderStorageDetailDialog(GuiGraphics gfx, int mouseX, int mouseY) {
         if (viewModel == null || viewModel.storageDetail() == null || layoutState == null) {
             closeStorageDetailDialog();
@@ -1619,10 +2222,31 @@ public class ResourceTerminalScreen extends Screen {
         ContentLayout content = computeContentLayout(0);
         maxPageScrollPx = Math.max(0, content.totalHeight() - layoutState.scrollViewport().height());
         pageScrollPx = Math.max(0, Math.min(maxPageScrollPx, pageScrollPx));
+
+        // 同步钳制存储页面滚动
+        if (storageViewModel != null) {
+            StorageContentLayout storageContent = computeStorageContentLayout(0);
+            storageMaxPageScrollPx = Math.max(0, storageContent.totalHeight() - layoutState.scrollViewport().height());
+            storagePageScrollPx = Math.max(0, Math.min(storageMaxPageScrollPx, storagePageScrollPx));
+        }
+        // 同步钳制电力页面滚动
+        if (powerViewModel != null) {
+            PowerContentLayout powerContent = computePowerContentLayout(0);
+            powerMaxPageScrollPx = Math.max(0, powerContent.totalHeight() - layoutState.scrollViewport().height());
+            powerPageScrollPx = Math.max(0, Math.min(powerMaxPageScrollPx, powerPageScrollPx));
+        }
     }
 
     private void jumpPageScrollTo(int mouseY) {
-        if (pageScrollTrackHitbox == null || pageScrollThumbHitbox == null || maxPageScrollPx <= 0) {
+        int currentMaxScrollPx;
+        if (activePage == TerminalPage.STORAGE_NETWORK) {
+            currentMaxScrollPx = storageMaxPageScrollPx;
+        } else if (activePage == TerminalPage.POWER_NETWORK) {
+            currentMaxScrollPx = powerMaxPageScrollPx;
+        } else {
+            currentMaxScrollPx = maxPageScrollPx;
+        }
+        if (pageScrollTrackHitbox == null || pageScrollThumbHitbox == null || currentMaxScrollPx <= 0) {
             return;
         }
         int targetThumbTop = mouseY - pageScrollTrackHitbox.y() - pageScrollThumbHitbox.height() / 2;
@@ -1635,18 +2259,47 @@ public class ResourceTerminalScreen extends Screen {
 
     /** 将滑块位置反算为滚动值（ratio = thumbTop / travel → scrollPx = ratio × maxScroll） */
     private void setPageScrollFromThumbTop(int thumbTopRelative) {
-        if (pageScrollTrackHitbox == null || pageScrollThumbHitbox == null || maxPageScrollPx <= 0) {
-            pageScrollPx = 0;
+        // 根据当前页面选择对应的最大滚动量
+        int currentMaxScrollPx;
+        if (activePage == TerminalPage.STORAGE_NETWORK) {
+            currentMaxScrollPx = storageMaxPageScrollPx;
+        } else if (activePage == TerminalPage.POWER_NETWORK) {
+            currentMaxScrollPx = powerMaxPageScrollPx;
+        } else {
+            currentMaxScrollPx = maxPageScrollPx;
+        }
+
+        if (pageScrollTrackHitbox == null || pageScrollThumbHitbox == null || currentMaxScrollPx <= 0) {
+            if (activePage == TerminalPage.STORAGE_NETWORK) {
+                storagePageScrollPx = 0;
+            } else if (activePage == TerminalPage.POWER_NETWORK) {
+                powerPageScrollPx = 0;
+            } else {
+                pageScrollPx = 0;
+            }
             return;
         }
         int travel = pageScrollTrackHitbox.height() - pageScrollThumbHitbox.height();
         if (travel <= 0) {
-            pageScrollPx = 0;
+            if (activePage == TerminalPage.STORAGE_NETWORK) {
+                storagePageScrollPx = 0;
+            } else if (activePage == TerminalPage.POWER_NETWORK) {
+                powerPageScrollPx = 0;
+            } else {
+                pageScrollPx = 0;
+            }
             return;
         }
         int clamped = Math.max(0, Math.min(travel, thumbTopRelative));
         float ratio = clamped / (float) travel;
-        pageScrollPx = Math.round(ratio * maxPageScrollPx);
+        int newScroll = Math.round(ratio * currentMaxScrollPx);
+        if (activePage == TerminalPage.STORAGE_NETWORK) {
+            storagePageScrollPx = newScroll;
+        } else if (activePage == TerminalPage.POWER_NETWORK) {
+            powerPageScrollPx = newScroll;
+        } else {
+            pageScrollPx = newScroll;
+        }
     }
 
     private void jumpPopupScrollTo(int mouseY) {

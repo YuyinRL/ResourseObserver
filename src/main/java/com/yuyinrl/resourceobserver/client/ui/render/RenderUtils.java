@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.ui.render;
 
+import com.mojang.blaze3d.systems.RenderSystem;
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
@@ -211,11 +212,16 @@ public final class RenderUtils {
             if (a <= 0.0f) {
                 a = 1.0f; // 如果 alpha 为 0 则默认不透明
             }
+            // 刷新缓冲区，确保后续着色器颜色变更立即生效
+            gfx.flush();
             gfx.pose().pushPose();
             gfx.pose().translate(x, y, 0);
-            gfx.setColor(r, g, b, a);
+            // 显式绑定方块纹理图集，防止纹理未绑定导致渲染异常
+            RenderSystem.setShaderTexture(0, InventoryMenu.BLOCK_ATLAS);
+            RenderSystem.setShaderColor(r, g, b, a);
             gfx.blit(0, 0, 0, size, size, sprite);
-            gfx.setColor(1.0f, 1.0f, 1.0f, 1.0f);
+            gfx.flush();
+            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
             gfx.pose().popPose();
             return true;
         } catch (Exception ignored) {

@@ -7,20 +7,27 @@ import com.yuyinrl.resourceobserver.world.item.ResourceTerminalItem;
 import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.item.context.BlockPlaceContext;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.BaseEntityBlock;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.RenderShape;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.minecraft.world.level.block.entity.BlockEntityTicker;
 import net.minecraft.world.level.block.entity.BlockEntityType;
 import net.minecraft.world.level.block.state.BlockBehaviour;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraft.world.level.block.state.StateDefinition;
+import net.minecraft.world.level.block.state.properties.BlockStateProperties;
+import net.minecraft.world.level.block.state.properties.BooleanProperty;
+import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
 
 /**
@@ -35,16 +42,33 @@ import net.minecraft.world.phys.BlockHitResult;
  * - 服务端每 tick 触发方块实体的采样逻辑
  */
 public class ObserverBlock extends BaseEntityBlock {
+    /** 方块水平朝向属性，决定正面（屏幕面）的方向 */
+    public static final DirectionProperty FACING = BlockStateProperties.HORIZONTAL_FACING;
+    /** 方块是否已连接到网络 */
+    public static final BooleanProperty CONNECTED = BooleanProperty.create("connected");
     /** 方块序列化编解码器，用于方块状态的序列化与反序列化 */
     public static final MapCodec<ObserverBlock> CODEC = simpleCodec(ObserverBlock::new);
 
     public ObserverBlock(BlockBehaviour.Properties properties) {
         super(properties);
+        this.registerDefaultState(this.stateDefinition.any()
+                .setValue(FACING, Direction.NORTH)
+                .setValue(CONNECTED, false));
     }
 
     @Override
     protected MapCodec<? extends BaseEntityBlock> codec() {
         return CODEC;
+    }
+
+    @Override
+    protected void createBlockStateDefinition(StateDefinition.Builder<Block, BlockState> builder) {
+        builder.add(FACING, CONNECTED);
+    }
+
+    @Override
+    public BlockState getStateForPlacement(BlockPlaceContext context) {
+        return this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
     }
 
     /**

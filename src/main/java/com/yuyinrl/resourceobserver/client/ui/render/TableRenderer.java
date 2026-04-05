@@ -26,13 +26,13 @@ public final class TableRenderer {
     private TableRenderer() {
     }
 
-    /** 计算表格所需总高度（62px 基础偏移（标题+筛选+表头）+ 数据行数 × 行高） */
+    /** 计算表格所需总高度（66px 基础偏移（标题+筛选+表头+底部留白）+ 数据行数 × 行高） */
     public static int measureHeight(
             List<OverviewViewModel.TableGroup> groups,
             Map<String, Boolean> expandedState
     ) {
         int rows = flatten(groups, expandedState).size();
-        return 62 + rows * ROW_HEIGHT;
+        return 66 + rows * ROW_HEIGHT;
     }
 
     public static RenderResult render(
@@ -128,7 +128,11 @@ public final class TableRenderer {
             }
 
             UiRect starRect = new UiRect(colStarX, y + 2, 8, 8);
-            gfx.drawString(font, row.starred() ? "*" : "o", starRect.x(), starRect.y() - 1, row.starred() ? UiThemeTokens.AMBER : UiThemeTokens.TEXT_MUTED);
+            if (row.starred()) {
+                gfx.blitSprite(TerminalSprites.ICON_STAR_FILLED, starRect.x(), starRect.y(), 8, 8);
+            } else {
+                gfx.blitSprite(TerminalSprites.ICON_STAR_EMPTY, starRect.x(), starRect.y(), 8, 8);
+            }
 
             RenderUtils.drawItemIconOrSprite(
                     gfx,

@@ -77,6 +77,16 @@ public final class HistoryRecorder {
         return ObserverHistorySavedData.get(level).queryAggregated(keys, window, itemScope);
     }
 
+    public static ObserverDataPayload.KpiWindowStats queryWindowStats(
+            ServerLevel level,
+            BlockPos observerPos,
+            ObserverBlockEntity.BoundEntry binding,
+            ChartWindow window
+    ) {
+        String key = historyKey(level, observerPos, binding.networkId());
+        return ObserverHistorySavedData.get(level).queryWindowStats(key, window);
+    }
+
     /** 构造历史存储键：维度ID | 观察者坐标长整型 | 网络ID */
     private static String historyKey(ServerLevel level, BlockPos observerPos, String networkId) {
         ResourceLocation dimensionId = level.dimension().location();

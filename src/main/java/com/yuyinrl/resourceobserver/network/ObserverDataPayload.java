@@ -32,7 +32,8 @@ import java.util.List;
  * @param chartWindow        当前图表时间窗口
  * @param chartScope         图表作用域（全局/单物品）
  * @param chartScopeItemId   单物品作用域时的物品 ID
- * @param chartSeries        图表数据点列表
+ * @param chartSeries        图表数据点列表（物品数据，仅聚合非 FLUX_ENERGY 绑定）
+ * @param energyChartSeries  电量图表数据点列表（仅聚合 FLUX_ENERGY 绑定）
  * @param tableGroupFilterKey 表格分组筛选键
  * @param tableSortMode      表格排序模式
  * @param tableSortDesc      是否降序排列
@@ -50,6 +51,7 @@ public record ObserverDataPayload(
         ChartScope chartScope,
         String chartScopeItemId,
         List<ChartPoint> chartSeries,
+        List<ChartPoint> energyChartSeries,
         String tableGroupFilterKey,
         TableSortMode tableSortMode,
         boolean tableSortDesc,
@@ -156,6 +158,36 @@ public record ObserverDataPayload(
         }
     }
 
+    public record KpiWindowStats(
+            long itemProducedRecent,
+            long itemConsumedRecent,
+            long itemProducedPrevious,
+            long itemConsumedPrevious,
+            long fluidProducedRecent,
+            long fluidConsumedRecent,
+            long fluidProducedPrevious,
+            long fluidConsumedPrevious,
+            int recentBucketCount,
+            int previousBucketCount,
+            boolean trendAvailable
+    ) {
+        public static KpiWindowStats unavailable() {
+            return new KpiWindowStats(
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0,
+                    0,
+                    false
+            );
+        }
+    }
+
     /**
      * 绑定条目 —— 单个网络绑定的完整数据。
      * @param networkType   网络类型（AE2_ITEMS / FLUX_ENERGY）
@@ -181,6 +213,7 @@ public record ObserverDataPayload(
             CellCapacityMetrics cellCapacityMetrics,
             long totalProduced,
             long totalConsumed,
+            KpiWindowStats kpiWindowStats,
             List<ItemDeltaEntry> itemDeltas,
             String debugInfo
     ) {
@@ -188,12 +221,14 @@ public record ObserverDataPayload(
 
     /**
      * 物品增量条目 —— 单种物品的当前数量和采样增量。
-     * @param itemId      物品注册 ID（如 "minecraft:iron_ingot"）
-     * @param displayName 可读显示名称
-     * @param groupKey    所属分组键
-     * @param iconSprite  图标精灵路径
-     * @param amount      当前库存数量
-     * @param delta       与上次采样的变化量（正=生产，负=消耗）
+     * @param itemId          物品注册 ID（如 "minecraft:iron_ingot"）
+     * @param displayName     可读显示名称
+     * @param groupKey        所属分组键
+     * @param iconSprite      图标精灵路径
+     * @param amount          当前库存数量
+     * @param delta           每分钟净变化速率（正=净生产，负=净消耗）
+     * @param productionRate  每分钟生产速率（≥0）
+     * @param consumptionRate 每分钟消耗速率（≥0）
      */
     public record ItemDeltaEntry(
             EntryType entryType,
@@ -202,7 +237,9 @@ public record ObserverDataPayload(
             String groupKey,
             String iconSprite,
             long amount,
-            long delta
+            long delta,
+            long productionRate,
+            long consumptionRate
     ) {
     }
 
@@ -248,6 +285,7 @@ public record ObserverDataPayload(
                     ChartScope chartScope = ChartScope.fromId(buf.readVarInt());
                     String chartScopeItemId = buf.readBoolean() ? buf.readUtf(256) : "";
                     List<ChartPoint> chartSeries = readChartSeries(buf);
+                    List<ChartPoint> energyChartSeries = readChartSeries(buf);
                     String tableGroupFilterKey = buf.readUtf(64);
                     TableSortMode sortMode = TableSortMode.fromId(buf.readVarInt());
                     boolean sortDesc = buf.readBoolean();
@@ -269,6 +307,7 @@ public record ObserverDataPayload(
                                 readCellCapacityMetrics(buf),
                                 buf.readLong(),
                                 buf.readLong(),
+                                readKpiWindowStats(buf),
                                 readItemDeltas(buf),
                                 buf.readUtf(MAX_DEBUG_INFO_UTF)
                         ));
@@ -281,6 +320,7 @@ public record ObserverDataPayload(
                             chartScope,
                             chartScopeItemId,
                             chartSeries,
+                            energyChartSeries,
                             tableGroupFilterKey,
                             sortMode,
                             sortDesc,
@@ -306,6 +346,7 @@ public record ObserverDataPayload(
                         buf.writeUtf(payload.chartScopeItemId, 256);
                     }
                     writeChartSeries(buf, payload.chartSeries);
+                    writeChartSeries(buf, payload.energyChartSeries);
                     buf.writeUtf(payload.tableGroupFilterKey == null ? "" : payload.tableGroupFilterKey, 64);
                     buf.writeVarInt(payload.tableSortMode.id());
                     buf.writeBoolean(payload.tableSortDesc);
@@ -325,6 +366,7 @@ public record ObserverDataPayload(
                         writeCellCapacityMetrics(buf, entry.cellCapacityMetrics());
                         buf.writeLong(entry.totalProduced);
                         buf.writeLong(entry.totalConsumed);
+                        writeKpiWindowStats(buf, entry.kpiWindowStats());
                         writeItemDeltas(buf, entry.itemDeltas());
                         buf.writeUtf(clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
                     }
@@ -394,6 +436,37 @@ public record ObserverDataPayload(
                     buf.writeBoolean(safeMetrics.externalAvailable());
                 }
 
+                private static KpiWindowStats readKpiWindowStats(FriendlyByteBuf buf) {
+                    return new KpiWindowStats(
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readLong(),
+                            buf.readVarInt(),
+                            buf.readVarInt(),
+                            buf.readBoolean()
+                    );
+                }
+
+                private static void writeKpiWindowStats(FriendlyByteBuf buf, KpiWindowStats stats) {
+                    KpiWindowStats safeStats = stats == null ? KpiWindowStats.unavailable() : stats;
+                    buf.writeLong(safeStats.itemProducedRecent());
+                    buf.writeLong(safeStats.itemConsumedRecent());
+                    buf.writeLong(safeStats.itemProducedPrevious());
+                    buf.writeLong(safeStats.itemConsumedPrevious());
+                    buf.writeLong(safeStats.fluidProducedRecent());
+                    buf.writeLong(safeStats.fluidConsumedRecent());
+                    buf.writeLong(safeStats.fluidProducedPrevious());
+                    buf.writeLong(safeStats.fluidConsumedPrevious());
+                    buf.writeVarInt(Math.max(0, safeStats.recentBucketCount()));
+                    buf.writeVarInt(Math.max(0, safeStats.previousBucketCount()));
+                    buf.writeBoolean(safeStats.trendAvailable());
+                }
+
                 /** 反序列化物品增量列表 */
                 private static List<ItemDeltaEntry> readItemDeltas(FriendlyByteBuf buf) {
                     int count = buf.readVarInt();
@@ -405,6 +478,8 @@ public record ObserverDataPayload(
                                 buf.readUtf(256),
                                 buf.readUtf(128),
                                 buf.readUtf(256),
+                                buf.readLong(),
+                                buf.readLong(),
                                 buf.readLong(),
                                 buf.readLong()
                         ));
@@ -424,6 +499,8 @@ public record ObserverDataPayload(
                         buf.writeUtf(itemDelta.iconSprite(), 256);
                         buf.writeLong(itemDelta.amount());
                         buf.writeLong(itemDelta.delta());
+                        buf.writeLong(itemDelta.productionRate());
+                        buf.writeLong(itemDelta.consumptionRate());
                     }
                 }
 

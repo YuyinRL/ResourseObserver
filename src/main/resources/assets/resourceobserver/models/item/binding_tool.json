@@ -1,6 +1,6 @@
 {
   "parent": "minecraft:item/handheld",
   "textures": {
-    "layer0": "minecraft:item/carrot_on_a_stick"
+    "layer0": "resourceobserver:item/binding_tool"
   }
 }

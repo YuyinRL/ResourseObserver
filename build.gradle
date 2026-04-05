@@ -38,6 +38,13 @@ repositories {
             includeGroup "curse.maven"
         }
     }
+    maven {
+        name "ModMaven"
+        url "https://modmaven.dev/"
+        content {
+            includeGroup "mekanism"
+        }
+    }
     // 如需额外的依赖仓库，请在此添加
     mavenCentral()
 }
@@ -122,7 +129,13 @@ dependencies {
     // AE2 API（编译期） + 完整运行时 mod（本地开发测试用）
     compileOnly "org.appliedenergistics:appliedenergistics2:19.2.17:api"
     localRuntime "org.appliedenergistics:appliedenergistics2:19.2.17"
-    // Integration runtime mods for local dev testing
+    // Mekanism API（编译期，包含所有模块 API） + 完整运行时 mod（本地开发测试用）
+    compileOnly "mekanism:Mekanism:${mekanism_version}:api"
+    localRuntime "mekanism:Mekanism:${mekanism_version}"
+    // Mekanism Generators 运行时（本地开发测试用）
+    localRuntime "mekanism:Mekanism:${mekanism_version}:generators"
+    // Flux Networks API（编译期） + 完整运行时 mod（本地开发测试用）
+    compileOnly "curse.maven:flux-networks-248020:6089446"
     localRuntime "curse.maven:flux-networks-248020:6089446"
     localRuntime "maven.modrinth:sophisticated-storage:705Gttqj"
     localRuntime "maven.modrinth:sophisticated-core:kA66Nbi1"

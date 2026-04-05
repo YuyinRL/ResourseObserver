@@ -1,6 +1,7 @@
 package com.yuyinrl.resourceobserver.world.item;
 
 import appeng.api.networking.IGrid;
+import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
@@ -205,7 +206,11 @@ public class ResourceTerminalItem extends Item {
             // AE2 网络需要构建每种物品的增量数据
             if ("AE2_ITEMS".equals(binding.networkType())) {
                 Map<String, Long> amounts = observer.getAe2ItemAmountsFor(binding.networkId());
-                Map<String, Long> deltas = observer.getAe2ItemDeltasFor(binding.networkId());
+                // 使用 EMA 平滑后的每分钟速率（而非瞬时 delta），避免合成机脉冲式采样导致大量零值
+                // ItemDeltaEntry.delta 语义已更改为"每分钟净变化速率"
+                Map<String, Long> ratesPerMin = observer.getAe2ItemRatesPerMinFor(binding.networkId());
+                Map<String, Long> prodRatesPerMin = observer.getAe2ItemProdRatesPerMinFor(binding.networkId());
+                Map<String, Long> consRatesPerMin = observer.getAe2ItemConsRatesPerMinFor(binding.networkId());
                 // 遍历当前库存中的所有物品
                 for (Map.Entry<String, Long> amountEntry : amounts.entrySet()) {
                     String itemId = amountEntry.getKey();
@@ -217,12 +222,14 @@ public class ResourceTerminalItem extends Item {
                             uiPrefs.groupKeyForItem(itemId), // 获取玩家自定义分组
                             iconSpriteForEntryType(entryType),
                             amountEntry.getValue(),
-                            deltas.getOrDefault(itemId, 0L)
+                            ratesPerMin.getOrDefault(itemId, 0L),  // 平滑每分钟净速率
+                            prodRatesPerMin.getOrDefault(itemId, 0L),  // 每分钟生产速率
+                            consRatesPerMin.getOrDefault(itemId, 0L)   // 每分钟消耗速率
                     ));
                 }
-                // 添加已消失但有增量变化的物品（当前数量为 0）
-                for (Map.Entry<String, Long> deltaEntry : deltas.entrySet()) {
-                    String itemId = deltaEntry.getKey();
+                // 添加已消失但有速率记录的物品（当前数量为 0，仍有消耗记录）
+                for (Map.Entry<String, Long> rateEntry : ratesPerMin.entrySet()) {
+                    String itemId = rateEntry.getKey();
                     if (amounts.containsKey(itemId)) {
                         continue; // 已在上面处理过
                     }
@@ -234,7 +241,9 @@ public class ResourceTerminalItem extends Item {
                             uiPrefs.groupKeyForItem(itemId),
                             iconSpriteForEntryType(entryType),
                             0L,
-                            deltaEntry.getValue()
+                            rateEntry.getValue(),
+                            prodRatesPerMin.getOrDefault(itemId, 0L),
+                            consRatesPerMin.getOrDefault(itemId, 0L)
                     ));
                 }
                 // 按物品 ID 排序保证顺序一致性
@@ -242,7 +251,108 @@ public class ResourceTerminalItem extends Item {
                         Comparator.comparing(ObserverDataPayload.ItemDeltaEntry::entryType)
                                 .thenComparing(ObserverDataPayload.ItemDeltaEntry::itemId)
                 );
+            } else if ("FLUX_ENERGY".equals(binding.networkType())) {
+                // Flux Networks 能量网络：构建能量指标和设备级 itemDeltas
+                FluxNetworksIntegration.FluxSampleResult fluxResult = observer.getFluxSampleResultFor(binding.networkId());
+                if (fluxResult != null) {
+                    // 网络级能量指标
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.input_per_tick", "Input/t",
+                            "flux_metrics", "resourceobserver:terminal/kpi_production",
+                            fluxResult.energyInput(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.output_per_tick", "Output/t",
+                            "flux_metrics", "resourceobserver:terminal/kpi_consumption",
+                            fluxResult.energyOutput(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.energy_stored", "Energy Stored",
+                            "flux_metrics", "resourceobserver:terminal/kpi_storage",
+                            fluxResult.totalEnergy(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.total_buffer", "Total Buffer",
+                            "flux_metrics", "resourceobserver:terminal/kpi_storage",
+                            fluxResult.totalBuffer(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.max_energy_storage", "Max Energy Storage",
+                            "flux_metrics", "resourceobserver:terminal/kpi_storage",
+                            fluxResult.totalMaxEnergyStorage(), 0L, 0L, 0L
+                    ));
+                    // 设备连接器数量
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.plug_count", "Plugs (Input)",
+                            "flux_connectors", "resourceobserver:terminal/kpi_production",
+                            fluxResult.plugCount(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.point_count", "Points (Output)",
+                            "flux_connectors", "resourceobserver:terminal/kpi_consumption",
+                            fluxResult.pointCount(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.storage_count", "Storage Blocks",
+                            "flux_connectors", "resourceobserver:terminal/kpi_storage",
+                            fluxResult.storageCount(), 0L, 0L, 0L
+                    ));
+                    itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                            ObserverDataPayload.EntryType.ITEM,
+                            "flux.controller_count", "Controllers",
+                            "flux_connectors", "resourceobserver:terminal/kpi_efficiency",
+                            fluxResult.controllerCount(), 0L, 0L, 0L
+                    ));
+                    // 每个设备的详细传输数据
+                    for (int devIdx = 0; devIdx < fluxResult.devices().size(); devIdx++) {
+                        FluxNetworksIntegration.FluxDeviceSnapshot device = fluxResult.devices().get(devIdx);
+                        String deviceKey = "flux.device." + devIdx + "." + device.deviceType();
+                        String deviceName = device.customName().isEmpty()
+                                ? device.deviceType().toUpperCase() + " @ " + device.posKey()
+                                : device.customName();
+                        itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                                ObserverDataPayload.EntryType.ITEM,
+                                deviceKey, deviceName,
+                                "flux_devices", "resourceobserver:terminal/kpi_consumption",
+                                Math.abs(device.transferBuffer()),
+                                device.transferChange(), 0L, 0L
+                        ));
+                        // 外部容器能量数据（仅 PLUG/POINT 有效）
+                        if (device.externalEnergyCapacity() > 0) {
+                            itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                                    ObserverDataPayload.EntryType.ITEM,
+                                    "flux.device." + devIdx + ".ext_stored",
+                                    deviceName + " [Ext]",
+                                    "flux_devices", "resourceobserver:terminal/kpi_storage",
+                                    device.externalEnergyStored(),
+                                    0L, 0L, 0L
+                            ));
+                            itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                                    ObserverDataPayload.EntryType.ITEM,
+                                    "flux.device." + devIdx + ".ext_cap",
+                                    deviceName + " [Ext Cap]",
+                                    "flux_devices", "resourceobserver:terminal/kpi_storage",
+                                    device.externalEnergyCapacity(),
+                                    0L, 0L, 0L
+                            ));
+                        }
+                    }
+                }
             }
+            ObserverDataPayload.KpiWindowStats kpiWindowStats = HistoryRecorder.queryWindowStats(
+                    level,
+                    observerPos,
+                    binding,
+                    chartWindow
+            );
             entries.add(new ObserverDataPayload.BindingEntry(
                     binding.networkType(),
                     binding.networkId(),
@@ -254,19 +364,37 @@ public class ResourceTerminalItem extends Item {
                     toCellCapacityMetrics(observer, binding),
                     stats.totalProduced(),
                     stats.totalConsumed(),
+                    kpiWindowStats,
                     itemDeltas,
                     observer.getDebugInfoFor(binding.networkId())
             ));
         }
 
-        // 查询历史图表数据点（聚合所有绑定的数据）
+        // 查询历史图表数据点（分别聚合物品绑定和电量绑定的数据）
+        List<ObserverBlockEntity.BoundEntry> itemBindings = new ArrayList<>();
+        List<ObserverBlockEntity.BoundEntry> energyBindings = new ArrayList<>();
+        for (ObserverBlockEntity.BoundEntry binding : effectiveBindings) {
+            if ("FLUX_ENERGY".equals(binding.networkType())) {
+                energyBindings.add(binding);
+            } else {
+                itemBindings.add(binding);
+            }
+        }
         List<ObserverDataPayload.ChartPoint> chartSeries = HistoryRecorder.querySeries(
                 level,
                 observerPos,
-                effectiveBindings,
+                itemBindings,
                 chartWindow,
                 chartScope,
                 scopeItemId
+        );
+        List<ObserverDataPayload.ChartPoint> energyChartSeries = HistoryRecorder.querySeries(
+                level,
+                observerPos,
+                energyBindings,
+                chartWindow,
+                chartScope,
+                null  // 电量图表不支持单物品作用域
         );
 
         // 构建分组定义列表（包含系统默认分组和玩家自定义分组）
@@ -284,6 +412,7 @@ public class ResourceTerminalItem extends Item {
                 chartScope,
                 scopeItemId == null ? "" : scopeItemId,
                 chartSeries,
+                energyChartSeries,
                 uiPrefs.groupFilterKey(),
                 uiPrefs.sortMode(),
                 uiPrefs.sortDesc(),

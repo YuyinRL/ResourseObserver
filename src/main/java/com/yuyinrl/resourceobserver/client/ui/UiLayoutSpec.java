@@ -52,6 +52,39 @@ public record UiLayoutSpec(
         );
     }
 
+    /** 返回存储网络界面的默认布局规格 */
+    public static UiLayoutSpec defaultStorageNetwork() {
+        // 存储网络页面使用相同面板尺寸，但 KPI 较矮、无图表、有节点列表（复用 chartHeight）
+        return new UiLayoutSpec(
+                980,
+                640,
+                700,
+                460,
+                1120,
+                1520,
+                new Profile(8, 24, 8, 54, 44, 72, 42, 8),
+                new Profile(10, 24, 8, 58, 48, 78, 46, 8),
+                new Profile(12, 24, 8, 62, 52, 84, 50, 8)
+        );
+    }
+
+    /** 返回电力网络界面的默认布局规格 */
+    public static UiLayoutSpec defaultPowerNetwork() {
+        // 电力网络页面：KPI 行 + 设备列表 + 负载图 + 警报列表
+        // chartHeight 复用为负载图高度，watchlistHeight 复用为警报列表高度
+        return new UiLayoutSpec(
+                980,
+                640,
+                700,
+                460,
+                1120,
+                1520,
+                new Profile(8, 24, 8, 54, 44, 86, 42, 8),
+                new Profile(10, 24, 8, 58, 48, 92, 46, 8),
+                new Profile(12, 24, 8, 62, 52, 98, 50, 8)
+        );
+    }
+
     /**
      * 布局配置文件 —— 单种尺寸模式下的具体尺寸参数。
      * @param margin         面板内边距

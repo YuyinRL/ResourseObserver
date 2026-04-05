@@ -1,0 +1,12 @@
+{
+  "parent": "minecraft:block/cube",
+  "textures": {
+    "north":    "resourceobserver:block/observer_front_err",
+    "south":    "resourceobserver:block/observer_back",
+    "east":     "resourceobserver:block/observer_left_err",
+    "west":     "resourceobserver:block/observer_right_err",
+    "up":       "resourceobserver:block/observer_top_err",
+    "down":     "resourceobserver:block/observer_bottom",
+    "particle": "resourceobserver:block/observer_back"
+  }
+}

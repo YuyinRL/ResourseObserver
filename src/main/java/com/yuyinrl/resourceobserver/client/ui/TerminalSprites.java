@@ -25,7 +25,12 @@ public final class TerminalSprites {
     // ========== 列表与表格图标 ==========
     public static final ResourceLocation WATCH_ITEM = sprite("terminal/watch_item");           // 关注列表物品图标
     public static final ResourceLocation TABLE_ITEM = sprite("terminal/table_item");           // 表格物品图标
-    public static final ResourceLocation ICON_STAR = sprite("terminal/icon_star");             // 星标/关注图标
+    public static final ResourceLocation ICON_STAR_FILLED = sprite("terminal/icon_star_filled"); // 实心星标（已收藏）
+    public static final ResourceLocation ICON_STAR_EMPTY = sprite("terminal/icon_star_empty");   // 空心星标（未收藏）
+
+    // ========== 存储网络页面图标 ==========
+    public static final ResourceLocation STORAGE_NODE = sprite("terminal/storage_node");       // 存储节点图标
+    public static final ResourceLocation ALERT_ICON = sprite("terminal/alert_icon");           // 警报图标
 
     /**
      * 解析精灵 ID 字符串为 ResourceLocation，无效时返回回退值。
