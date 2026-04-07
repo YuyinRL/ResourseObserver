@@ -257,8 +257,18 @@ public class ResourceTerminalScreen extends Screen {
      * @param payload 初始数据载荷（从服务端接收）
      */
     public ResourceTerminalScreen(ObserverDataPayload payload) {
+        this(payload, TerminalPage.OVERVIEW);
+    }
+
+    /**
+     * 构造资源终端屏幕并指定初始页面。
+     * @param payload     初始数据载荷（从服务端接收）
+     * @param initialPage 初始激活页面
+     */
+    public ResourceTerminalScreen(ObserverDataPayload payload, TerminalPage initialPage) {
         super(Component.translatable("screen.resourceobserver.terminal_title"));
         this.payload = payload;
+        this.activePage = initialPage;
         this.chartWindow = payload.chartWindow();
         syncScopeFromPayload(payload);
         refreshExternalSelectionCacheKey();

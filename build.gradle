@@ -47,6 +47,14 @@ repositories {
     }
     // 如需额外的依赖仓库，请在此添加
     mavenCentral()
+    // Modern UI Maven 仓库（可选依赖）
+    maven {
+        name "IzzelAliz"
+        url "https://maven.izzel.io/releases/"
+        content {
+            includeGroupByRegex "icyllis\\..*"
+        }
+    }
 }
 
 base {
@@ -141,6 +149,9 @@ dependencies {
     localRuntime "maven.modrinth:sophisticated-core:kA66Nbi1"
     localRuntime "maven.modrinth:functional-storage:sOE4zjiT"
     localRuntime "maven.modrinth:titanium:LmipxHTo"
+    // Modern UI（可选依赖 —— 编译期 API + 本地运行时）
+    compileOnly "maven.modrinth:modern-ui:${modernui_mc_version}"
+    localRuntime "maven.modrinth:modern-ui:${modernui_mc_version}"
 }
 
 // 将所有已声明的替换属性展开到指定资源目标中。
