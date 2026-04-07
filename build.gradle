@@ -150,8 +150,9 @@ dependencies {
     localRuntime "maven.modrinth:functional-storage:sOE4zjiT"
     localRuntime "maven.modrinth:titanium:LmipxHTo"
     // Modern UI（可选依赖 —— 编译期 API + 本地运行时）
-    compileOnly "maven.modrinth:modern-ui:${modernui_mc_version}"
-    localRuntime "maven.modrinth:modern-ui:${modernui_mc_version}"
+    // 通过 IzzelAliz Maven 仓库获取（https://maven.izzel.io/releases/）
+    compileOnly "icyllis.modernui:ModernUI-NeoForge:${modernui_mc_version}"
+    localRuntime "icyllis.modernui:ModernUI-NeoForge:${modernui_mc_version}"
 }
 
 // 将所有已声明的替换属性展开到指定资源目标中。
