@@ -328,6 +328,11 @@ public class OverviewConfigPreviewScreen extends Screen {
         return x >= hitbox.x0 - slop && x <= hitbox.x1 + slop && y >= hitbox.y0 - slop && y <= hitbox.y1 + slop;
     }
 
+    private boolean containsWithTolerance(RowHitbox hitbox, double x, double y) {
+        int slop = config.effectiveHitSlop(Minecraft.getInstance().getWindow().getGuiScale());
+        return x >= hitbox.x0 - slop && x <= hitbox.x1 + slop && y >= hitbox.y0 - slop && y <= hitbox.y1 + slop;
+    }
+
     private static void drawWave(GuiGraphics g, int x0, int x1, int y0, int y1, int color, float amplitudeScale) {
         int h = y1 - y0;
         int baseline = y0 + h / 2;
