@@ -153,143 +153,152 @@
   "screen.resourceobserver.overview.filter.status.all": "全部",
   "screen.resourceobserver.overview.filter.status.surplus": "盈余",
   "screen.resourceobserver.overview.filter.status.deficit": "亏损",
-  "screen.resourceobserver.overview.filter.status.critical": "告警"
-  ,"message.resourceobserver.debug.external": "  外部 物品(数量=%s/%s) 流体(数量=%s/%s) 可靠=%s 可用=%s"
-  ,"message.resourceobserver.debug.probe_external": "外部 存储总线(总=%s 可读=%s) 物品(数量=%s/%s) 流体(数量=%s/%s) 可靠=%s 可用=%s"
-  ,"screen.resourceobserver.overview.kpi.storage.bytes_high": "字节占用偏高"
-  ,"screen.resourceobserver.overview.kpi.storage.normal": "磁盘与外部存储已同步"
-  ,"screen.resourceobserver.overview.kpi.storage.open_detail": "点击查看详情"
-  ,"screen.resourceobserver.overview.storage.detail.title": "库存容量详情"
-  ,"screen.resourceobserver.overview.storage.detail.section.disk": "磁盘存储（AE2 单元格）"
-  ,"screen.resourceobserver.overview.storage.detail.section.external": "外部存储（Storage Bus）"
-  ,"screen.resourceobserver.overview.storage.detail.disk_item": "物品磁盘"
-  ,"screen.resourceobserver.overview.storage.detail.disk_fluid": "流体磁盘"
-  ,"screen.resourceobserver.overview.storage.detail.external_item": "外部物品"
-  ,"screen.resourceobserver.overview.storage.detail.external_fluid": "外部流体"
-  ,"screen.resourceobserver.overview.storage.detail.bytes_usage": "字节：%s / %s"
-  ,"screen.resourceobserver.overview.storage.detail.types_usage": "类型：%s / %s"
-  ,"screen.resourceobserver.overview.storage.detail.units_usage": "数量：%s / %s"
-  ,"screen.resourceobserver.overview.storage.detail.external_item_usage": "%s / %s"
-  ,"screen.resourceobserver.overview.storage.detail.external_fluid_usage": "%s B / %s B"
-  ,"screen.resourceobserver.overview.storage.detail.types_na": "类型：N/A"
-  ,"screen.resourceobserver.overview.storage.detail.reliability": "可靠性（磁盘/外部）：%s / %s"
-  ,"screen.resourceobserver.overview.section.kpi_balance": "供需平衡"
-  ,"screen.resourceobserver.overview.kpi.trend.vs_previous": "%s 对比前窗"
-  ,"screen.resourceobserver.overview.kpi.trend.delta_points": "%s 对比前窗"
-  ,"screen.resourceobserver.overview.kpi.trend.unavailable": "N/A"
-  ,"screen.resourceobserver.overview.kpi.detail.channel.item": "物品"
-  ,"screen.resourceobserver.overview.kpi.detail.channel.fluid": "流体"
-  ,"screen.resourceobserver.overview.kpi.detail.recent": "近窗：%s"
-  ,"screen.resourceobserver.overview.kpi.detail.previous": "前窗：%s"
-  ,"screen.resourceobserver.overview.kpi.detail.change": "变化：%s"
-  ,"screen.resourceobserver.overview.kpi.detail.na": "N/A"
-  ,"screen.resourceobserver.overview.kpi.balance.hint.unavailable": "历史桶不足，趋势不可用"
-  ,"screen.resourceobserver.overview.kpi.balance.hint.positive": "生产明显高于消耗"
-  ,"screen.resourceobserver.overview.kpi.balance.hint.neutral": "生产与消耗接近平衡"
-  ,"screen.resourceobserver.overview.kpi.balance.hint.warning": "消耗略高于生产"
-  ,"screen.resourceobserver.overview.kpi.balance.hint.negative": "消耗远高于生产"
-
-  ,"screen.resourceobserver.storage.tab.overview": "总览"
-  ,"screen.resourceobserver.storage.tab.storage_network": "存储"
-  ,"screen.resourceobserver.storage.section.nodes": "存储节点"
-  ,"screen.resourceobserver.storage.section.items": "物品库存"
-  ,"screen.resourceobserver.storage.section.usage": "使用率摘要"
-  ,"screen.resourceobserver.storage.kpi.total_items": "物品总量"
-  ,"screen.resourceobserver.storage.kpi.total_types": "物品种类"
-  ,"screen.resourceobserver.storage.kpi.fill_rate": "填充率"
-  ,"screen.resourceobserver.storage.node.all": "全部节点"
-  ,"screen.resourceobserver.storage.items_in_node": "%s 项"
-  ,"screen.resourceobserver.storage.items_count": "%s 项"
-  ,"screen.resourceobserver.storage.no_items": "无匹配当前筛选条件的物品。"
-  ,"screen.resourceobserver.storage.col.item": "物品"
-  ,"screen.resourceobserver.storage.col.local": "本地"
-  ,"screen.resourceobserver.storage.col.global": "全局"
-  ,"screen.resourceobserver.storage.col.delta": "变化"
-  ,"screen.resourceobserver.storage.col.alert": "警报"
-  ,"screen.resourceobserver.storage.filter.alert_only": "仅告警"
-  ,"screen.resourceobserver.storage.filter.all": "显示全部"
-  ,"screen.resourceobserver.storage.usage.raw": "原料"
-  ,"screen.resourceobserver.storage.usage.intermediate": "中间产物"
-  ,"screen.resourceobserver.storage.usage.finished": "成品"
-  ,"screen.resourceobserver.storage.usage.other": "其他"
-  ,"screen.resourceobserver.storage.usage.total_used": "总使用率"
-  ,"screen.resourceobserver.storage.section.inventory_health": "全局库存健康"
-  ,"screen.resourceobserver.storage.inventory_health.subtitle": "已连接网络中物品的实时状态"
-  ,"screen.resourceobserver.storage.filter.all_status": "全部状态"
-  ,"screen.resourceobserver.storage.filter.deficits_only": "仅显示不足"
-  ,"screen.resourceobserver.storage.legend.stable": "稳定"
-  ,"screen.resourceobserver.storage.legend.warning": "警告 (< 30秒)"
-  ,"screen.resourceobserver.storage.legend.critical": "严重"
-  ,"screen.resourceobserver.storage.col.identity": "物品标识"
-  ,"screen.resourceobserver.storage.col.stock": "全局库存"
-  ,"screen.resourceobserver.storage.col.burn_rate": "消耗速率 (/分)"
-  ,"screen.resourceobserver.storage.col.buffer": "预估缓冲"
-  ,"screen.resourceobserver.storage.below_threshold": "%s 个物品低于临界缓冲阈值"
-  ,"screen.resourceobserver.storage.recalculate": "重新计算物流路径"
-  ,"screen.resourceobserver.storage.node.status.healthy": "健康"
-  ,"screen.resourceobserver.storage.node.status.alert": "警报"
-
-  ,"screen.resourceobserver.storage.tab.power_network": "电力"
-  ,"screen.resourceobserver.power.kpi.total_input": "总输入"
-  ,"screen.resourceobserver.power.kpi.total_output": "总输出"
-  ,"screen.resourceobserver.power.kpi.stored_energy": "储能"
-  ,"screen.resourceobserver.power.section.devices": "电力设备"
-  ,"screen.resourceobserver.power.section.load_chart": "负载分布"
-  ,"screen.resourceobserver.power.section.overload": "过载预警"
-  ,"screen.resourceobserver.power.col.device": "设备"
-  ,"screen.resourceobserver.power.col.category": "类别"
-  ,"screen.resourceobserver.power.col.energy": "FE/t"
-  ,"screen.resourceobserver.power.col.capacity": "容量"
-  ,"screen.resourceobserver.power.col.status": "状态"
-  ,"screen.resourceobserver.power.category.mining": "采矿"
-  ,"screen.resourceobserver.power.category.assembly": "装配"
-  ,"screen.resourceobserver.power.category.logistics": "物流"
-  ,"screen.resourceobserver.power.category.other": "其他"
-  ,"screen.resourceobserver.power.status.normal": "正常"
-  ,"screen.resourceobserver.power.status.warning": "警告"
-  ,"screen.resourceobserver.power.status.critical": "严重"
-  ,"screen.resourceobserver.power.no_devices": "未找到电力设备。"
-  ,"screen.resourceobserver.power.no_data": "无负载数据。"
-  ,"screen.resourceobserver.power.no_alerts": "所有系统正常。"
-  ,"screen.resourceobserver.power.section.grid_load": "电网负载动态"
-  ,"screen.resourceobserver.power.grid_load.subtitle": "实时电力生产与消耗（最近24小时）"
-  ,"screen.resourceobserver.power.generation": "发电量"
-  ,"screen.resourceobserver.power.peak_load": "峰值负载"
-  ,"screen.resourceobserver.power.current_demand": "需求"
-  ,"screen.resourceobserver.power.load_chart.subtitle": "按设备类别的能源分配"
-  ,"screen.resourceobserver.power.section.line_consumption": "生产线能耗"
-  ,"screen.resourceobserver.power.line_consumption.subtitle": "按产品链分组的能源消耗"
-  ,"screen.resourceobserver.power.overload_badge": "检测到 %s 处过载"
-  ,"screen.resourceobserver.power.col.line": "生产线"
-  ,"screen.resourceobserver.power.col.assigned_item": "分配产品"
-  ,"screen.resourceobserver.power.col.devices": "设备数"
-  ,"screen.resourceobserver.power.col.consumption": "能耗"
-  ,"screen.resourceobserver.power.col.cap_util": "容量利用率"
-  ,"screen.resourceobserver.power.main_grid": "主电网：运行中"
-  ,"screen.resourceobserver.power.reserves": "储备：94.2%"
-  ,"screen.resourceobserver.power.optimize_load": "优化负载均衡器"
-  ,"screen.resourceobserver.power.overload.title": "过载风险摘要"
-  ,"screen.resourceobserver.power.overload.window_risk": "未来30分钟过载风险"
-  ,"screen.resourceobserver.power.overload.headroom": "容量余量：%s"
-  ,"screen.resourceobserver.power.overload.reserve": "储备：%s"
-  ,"screen.resourceobserver.power.overload.risk.critical": "严重 — 需要立即处理"
-  ,"screen.resourceobserver.power.overload.risk.warning": "警告 — 接近容量上限"
-  ,"screen.resourceobserver.power.overload.risk.low": "低风险 — 系统正常"
-  ,"screen.resourceobserver.power.alert.description": "%s — 预计吞吐量损失：%s"
-  ,"screen.resourceobserver.power.alert.with_loss": "%s — 吞吐量损失：%s"
-  ,"screen.resourceobserver.power.alert.generic": "%s — 容量警告"
-  ,"screen.resourceobserver.power.kpi.effective_input": "有效输入"
-  ,"screen.resourceobserver.power.kpi.effective_output": "有效输出"
-  ,"screen.resourceobserver.power.kpi.external_excluded": "外储排除速率"
-  ,"screen.resourceobserver.power.grid_load.raw_hint": "原始输入/输出 %s / %s FE/t，已排除外储 %s FE/t"
-  ,"screen.resourceobserver.power.external_console.title": "外储控制台"
-  ,"screen.resourceobserver.power.external_console.metric.input": "输入"
-  ,"screen.resourceobserver.power.external_console.metric.output": "输出"
-  ,"screen.resourceobserver.power.external_console.metric.buffer": "缓存"
-  ,"screen.resourceobserver.power.external_console.metric.selected": "已选"
-  ,"screen.resourceobserver.power.external_console.section.interfaces": "接口列表"
-  ,"screen.resourceobserver.power.external_console.empty.interfaces": "未检测到 Flux 接口。"
-  ,"screen.resourceobserver.power.external_console.section.external": "已选外储"
-  ,"screen.resourceobserver.power.external_console.empty.selected": "点击接口行以选择外储分组。"
-  ,"screen.resourceobserver.power.external_console.table.header": "设备  存储/容量  填充率  关联接口"
+  "screen.resourceobserver.overview.filter.status.critical": "告警",
+  "message.resourceobserver.debug.external": "  外部 物品(数量=%s/%s) 流体(数量=%s/%s) 可靠=%s 可用=%s",
+  "message.resourceobserver.debug.probe_external": "外部 存储总线(总=%s 可读=%s) 物品(数量=%s/%s) 流体(数量=%s/%s) 可靠=%s 可用=%s",
+  "screen.resourceobserver.overview.kpi.storage.bytes_high": "字节占用偏高",
+  "screen.resourceobserver.overview.kpi.storage.normal": "磁盘与外部存储已同步",
+  "screen.resourceobserver.overview.kpi.storage.open_detail": "点击查看详情",
+  "screen.resourceobserver.overview.storage.detail.title": "库存容量详情",
+  "screen.resourceobserver.overview.storage.detail.section.disk": "磁盘存储（AE2 单元格）",
+  "screen.resourceobserver.overview.storage.detail.section.external": "外部存储（Storage Bus）",
+  "screen.resourceobserver.overview.storage.detail.disk_item": "物品磁盘",
+  "screen.resourceobserver.overview.storage.detail.disk_fluid": "流体磁盘",
+  "screen.resourceobserver.overview.storage.detail.external_item": "外部物品",
+  "screen.resourceobserver.overview.storage.detail.external_fluid": "外部流体",
+  "screen.resourceobserver.overview.storage.detail.bytes_usage": "字节：%s / %s",
+  "screen.resourceobserver.overview.storage.detail.types_usage": "类型：%s / %s",
+  "screen.resourceobserver.overview.storage.detail.units_usage": "数量：%s / %s",
+  "screen.resourceobserver.overview.storage.detail.external_item_usage": "%s / %s",
+  "screen.resourceobserver.overview.storage.detail.external_fluid_usage": "%s B / %s B",
+  "screen.resourceobserver.overview.storage.detail.types_na": "类型：N/A",
+  "screen.resourceobserver.overview.storage.detail.reliability": "可靠性（磁盘/外部）：%s / %s",
+  "screen.resourceobserver.overview.section.kpi_balance": "供需平衡",
+  "screen.resourceobserver.overview.kpi.trend.vs_previous": "%s 对比前窗",
+  "screen.resourceobserver.overview.kpi.trend.delta_points": "%s 对比前窗",
+  "screen.resourceobserver.overview.kpi.trend.unavailable": "N/A",
+  "screen.resourceobserver.overview.kpi.detail.channel.item": "物品",
+  "screen.resourceobserver.overview.kpi.detail.channel.fluid": "流体",
+  "screen.resourceobserver.overview.kpi.detail.recent": "近窗：%s",
+  "screen.resourceobserver.overview.kpi.detail.previous": "前窗：%s",
+  "screen.resourceobserver.overview.kpi.detail.change": "变化：%s",
+  "screen.resourceobserver.overview.kpi.detail.na": "N/A",
+  "screen.resourceobserver.overview.kpi.balance.hint.unavailable": "历史桶不足，趋势不可用",
+  "screen.resourceobserver.overview.kpi.balance.hint.positive": "生产明显高于消耗",
+  "screen.resourceobserver.overview.kpi.balance.hint.neutral": "生产与消耗接近平衡",
+  "screen.resourceobserver.overview.kpi.balance.hint.warning": "消耗略高于生产",
+  "screen.resourceobserver.overview.kpi.balance.hint.negative": "消耗远高于生产",
+  "screen.resourceobserver.storage.tab.overview": "总览",
+  "screen.resourceobserver.storage.tab.storage_network": "存储",
+  "screen.resourceobserver.storage.section.nodes": "存储节点",
+  "screen.resourceobserver.storage.section.items": "物品库存",
+  "screen.resourceobserver.storage.section.usage": "使用率摘要",
+  "screen.resourceobserver.storage.kpi.total_items": "物品总量",
+  "screen.resourceobserver.storage.kpi.total_types": "物品种类",
+  "screen.resourceobserver.storage.kpi.fill_rate": "填充率",
+  "screen.resourceobserver.storage.node.all": "全部节点",
+  "screen.resourceobserver.storage.items_in_node": "%s 项",
+  "screen.resourceobserver.storage.items_count": "%s 项",
+  "screen.resourceobserver.storage.no_items": "无匹配当前筛选条件的物品。",
+  "screen.resourceobserver.storage.col.item": "物品",
+  "screen.resourceobserver.storage.col.local": "本地",
+  "screen.resourceobserver.storage.col.global": "全局",
+  "screen.resourceobserver.storage.col.delta": "变化",
+  "screen.resourceobserver.storage.col.alert": "警报",
+  "screen.resourceobserver.storage.filter.alert_only": "仅告警",
+  "screen.resourceobserver.storage.filter.all": "显示全部",
+  "screen.resourceobserver.storage.usage.raw": "原料",
+  "screen.resourceobserver.storage.usage.intermediate": "中间产物",
+  "screen.resourceobserver.storage.usage.finished": "成品",
+  "screen.resourceobserver.storage.usage.other": "其他",
+  "screen.resourceobserver.storage.usage.total_used": "总使用率",
+  "screen.resourceobserver.storage.section.inventory_health": "全局库存健康",
+  "screen.resourceobserver.storage.inventory_health.subtitle": "已连接网络中物品的实时状态",
+  "screen.resourceobserver.storage.filter.all_status": "全部状态",
+  "screen.resourceobserver.storage.filter.deficits_only": "仅显示不足",
+  "screen.resourceobserver.storage.legend.stable": "稳定",
+  "screen.resourceobserver.storage.legend.warning": "警告 (< 30秒)",
+  "screen.resourceobserver.storage.legend.critical": "严重",
+  "screen.resourceobserver.storage.col.identity": "物品标识",
+  "screen.resourceobserver.storage.col.stock": "全局库存",
+  "screen.resourceobserver.storage.col.burn_rate": "消耗速率 (/分)",
+  "screen.resourceobserver.storage.col.buffer": "预估缓冲",
+  "screen.resourceobserver.storage.below_threshold": "%s 个物品低于临界缓冲阈值",
+  "screen.resourceobserver.storage.recalculate": "重新计算物流路径",
+  "screen.resourceobserver.storage.node.status.healthy": "健康",
+  "screen.resourceobserver.storage.node.status.alert": "警报",
+  "screen.resourceobserver.storage.tab.power_network": "电力",
+  "screen.resourceobserver.power.kpi.total_input": "总输入",
+  "screen.resourceobserver.power.kpi.total_output": "总输出",
+  "screen.resourceobserver.power.kpi.stored_energy": "储能",
+  "screen.resourceobserver.power.section.devices": "电力设备",
+  "screen.resourceobserver.power.section.load_chart": "负载分布",
+  "screen.resourceobserver.power.section.overload": "过载预警",
+  "screen.resourceobserver.power.col.device": "设备",
+  "screen.resourceobserver.power.col.category": "类别",
+  "screen.resourceobserver.power.col.energy": "FE/t",
+  "screen.resourceobserver.power.col.capacity": "容量",
+  "screen.resourceobserver.power.col.status": "状态",
+  "screen.resourceobserver.power.category.mining": "采矿",
+  "screen.resourceobserver.power.category.assembly": "装配",
+  "screen.resourceobserver.power.category.logistics": "物流",
+  "screen.resourceobserver.power.category.other": "其他",
+  "screen.resourceobserver.power.status.normal": "正常",
+  "screen.resourceobserver.power.status.warning": "警告",
+  "screen.resourceobserver.power.status.critical": "严重",
+  "screen.resourceobserver.power.no_devices": "未找到电力设备。",
+  "screen.resourceobserver.power.no_data": "无负载数据。",
+  "screen.resourceobserver.power.no_alerts": "所有系统正常。",
+  "screen.resourceobserver.power.section.grid_load": "电网负载动态",
+  "screen.resourceobserver.power.grid_load.subtitle": "实时电力生产与消耗（最近24小时）",
+  "screen.resourceobserver.power.generation": "发电量",
+  "screen.resourceobserver.power.peak_load": "峰值负载",
+  "screen.resourceobserver.power.current_demand": "需求",
+  "screen.resourceobserver.power.load_chart.subtitle": "按设备类别的能源分配",
+  "screen.resourceobserver.power.section.line_consumption": "生产线能耗",
+  "screen.resourceobserver.power.line_consumption.subtitle": "按产品链分组的能源消耗",
+  "screen.resourceobserver.power.overload_badge": "检测到 %s 处过载",
+  "screen.resourceobserver.power.col.line": "生产线",
+  "screen.resourceobserver.power.col.assigned_item": "分配产品",
+  "screen.resourceobserver.power.col.devices": "设备数",
+  "screen.resourceobserver.power.col.consumption": "能耗",
+  "screen.resourceobserver.power.col.cap_util": "容量利用率",
+  "screen.resourceobserver.power.main_grid": "主电网：运行中",
+  "screen.resourceobserver.power.reserves": "储备：94.2%",
+  "screen.resourceobserver.power.optimize_load": "优化负载均衡器",
+  "screen.resourceobserver.power.overload.title": "过载风险摘要",
+  "screen.resourceobserver.power.overload.window_risk": "未来30分钟过载风险",
+  "screen.resourceobserver.power.overload.headroom": "容量余量：%s",
+  "screen.resourceobserver.power.overload.reserve": "储备：%s",
+  "screen.resourceobserver.power.overload.risk.critical": "严重 — 需要立即处理",
+  "screen.resourceobserver.power.overload.risk.warning": "警告 — 接近容量上限",
+  "screen.resourceobserver.power.overload.risk.low": "低风险 — 系统正常",
+  "screen.resourceobserver.power.alert.description": "%s — 预计吞吐量损失：%s",
+  "screen.resourceobserver.power.alert.with_loss": "%s — 吞吐量损失：%s",
+  "screen.resourceobserver.power.alert.generic": "%s — 容量警告",
+  "screen.resourceobserver.power.kpi.effective_input": "有效输入",
+  "screen.resourceobserver.power.kpi.effective_output": "有效输出",
+  "screen.resourceobserver.power.kpi.external_excluded": "外储排除速率",
+  "screen.resourceobserver.power.grid_load.raw_hint": "原始输入/输出 %s / %s FE/t，已排除外储 %s FE/t",
+  "screen.resourceobserver.power.external_console.title": "外储控制台",
+  "screen.resourceobserver.power.external_console.metric.input": "输入",
+  "screen.resourceobserver.power.external_console.metric.output": "输出",
+  "screen.resourceobserver.power.external_console.metric.buffer": "缓存",
+  "screen.resourceobserver.power.external_console.metric.selected": "已选",
+  "screen.resourceobserver.power.external_console.section.interfaces": "接口列表",
+  "screen.resourceobserver.power.external_console.empty.interfaces": "未检测到 Flux 接口。",
+  "screen.resourceobserver.power.external_console.section.external": "已选外储",
+  "screen.resourceobserver.power.external_console.empty.selected": "点击接口行以选择外储分组。",
+  "screen.resourceobserver.power.external_console.table.header": "设备  存储/容量  填充率  关联接口",
+  "key.categories.resourceobserver": "资源观察者",
+  "key.resourceobserver.open_modern_preview": "打开 ModernUI 总览预览",
+  "screen.resourceobserver.modern_preview.title": "ModernUI 总览迁移预览",
+  "screen.resourceobserver.modern_preview.hint": "先校准边框尺寸与点击热区，再推进完整页面迁移。",
+  "screen.resourceobserver.modern_preview.metrics": "画布 %sx%s | 边框 %spx | 圆角 %s | 点击扩展 %s",
+  "screen.resourceobserver.modern_preview.base_hitbox": "基础热区",
+  "screen.resourceobserver.modern_preview.extended_hitbox": "扩展热区（跨框架容错）",
+  "screen.resourceobserver.modern_preview.status.base": "光标位于基础热区",
+  "screen.resourceobserver.modern_preview.status.extended": "光标仅位于扩展热区",
+  "screen.resourceobserver.modern_preview.status.none": "光标在测试热区外",
+  "message.resourceobserver.modernui.missing": "ModernUI 预览打开失败，已回退到原版 Mock 预览。"
 }
