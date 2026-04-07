@@ -188,7 +188,6 @@
   "screen.resourceobserver.overview.filter.status.surplus": "Surplus",
   "screen.resourceobserver.overview.filter.status.deficit": "Deficit",
   "screen.resourceobserver.overview.filter.status.critical": "Critical",
-
   "screen.resourceobserver.storage.tab.overview": "Overview",
   "screen.resourceobserver.storage.tab.storage_network": "Storage",
   "screen.resourceobserver.storage.section.nodes": "STORAGE NODES",
@@ -228,7 +227,6 @@
   "screen.resourceobserver.storage.recalculate": "Recalculate Logistics Pathways",
   "screen.resourceobserver.storage.node.status.healthy": "Healthy",
   "screen.resourceobserver.storage.node.status.alert": "Alert",
-
   "screen.resourceobserver.storage.tab.power_network": "Power",
   "screen.resourceobserver.power.kpi.total_input": "TOTAL INPUT",
   "screen.resourceobserver.power.kpi.total_output": "TOTAL OUTPUT",
@@ -291,5 +289,15 @@
   "screen.resourceobserver.power.external_console.empty.interfaces": "No Flux interfaces detected.",
   "screen.resourceobserver.power.external_console.section.external": "Selected External Storage",
   "screen.resourceobserver.power.external_console.empty.selected": "Click an interface row to select external storage groups.",
-  "screen.resourceobserver.power.external_console.table.header": "Device  Stored/Cap  Fill  Links"
+  "screen.resourceobserver.power.external_console.table.header": "Device  Stored/Cap  Fill  Links",
+  "key.categories.resourceobserver": "Resource Observer",
+  "key.resourceobserver.open_modern_preview": "Open ModernUI Overview Preview",
+  "screen.resourceobserver.modern_preview.title": "ModernUI Overview Migration Preview",
+  "screen.resourceobserver.modern_preview.hint": "Focus on border scale and click-area calibration first.",
+  "screen.resourceobserver.modern_preview.metrics": "Canvas %sx%s | border %spx | radius %s | hit slop %s",
+  "screen.resourceobserver.modern_preview.base_hitbox": "Base Hitbox",
+  "screen.resourceobserver.modern_preview.extended_hitbox": "Extended hit area (for cross-framework tolerance)",
+  "screen.resourceobserver.modern_preview.status.base": "Pointer in base hitbox",
+  "screen.resourceobserver.modern_preview.status.extended": "Pointer only in extended hitbox",
+  "screen.resourceobserver.modern_preview.status.none": "Pointer outside test hitbox"
 }
