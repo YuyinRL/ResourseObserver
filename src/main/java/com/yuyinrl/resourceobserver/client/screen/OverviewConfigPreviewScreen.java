@@ -43,6 +43,7 @@ public class OverviewConfigPreviewScreen extends Screen {
     private String selectedItemId = "";
     private int tablePage = 0;
     private final Map<String, Boolean> groupExpanded = new LinkedHashMap<>();
+    private float transitionProgress;
 
     public OverviewConfigPreviewScreen(Screen parent) {
         this(parent, OverviewUiConfig.DEFAULT);
@@ -56,6 +57,14 @@ public class OverviewConfigPreviewScreen extends Screen {
         groupExpanded.put("intermediate", true);
         groupExpanded.put("finished", true);
         groupExpanded.put("common", true);
+        transitionProgress = 0.0f;
+    }
+
+
+    @Override
+    public void tick() {
+        super.tick();
+        transitionProgress = Math.min(1.0f, transitionProgress + 0.08f);
     }
 
     @Override
@@ -68,17 +77,18 @@ public class OverviewConfigPreviewScreen extends Screen {
         prevPageHitbox = null;
         nextPageHitbox = null;
 
-        graphics.fill(0, 0, width, height, BG);
+        float eased = easeOutCubic(transitionProgress);
+        int enterOffset = (int) ((1.0f - eased) * 24.0f);
+        graphics.fill(0, 0, width, height, withAlpha(BG, 0.55f + 0.45f * eased));
 
         int panelW = Math.min(config.contentWidth(), width - 28);
         int panelH = Math.min(config.contentHeight(), height - 28);
         int x0 = (width - panelW) / 2;
-        int y0 = (height - panelH) / 2;
+        int y0 = (height - panelH) / 2 + enterOffset;
         int x1 = x0 + panelW;
         int y1 = y0 + panelH;
 
-        graphics.fill(x0, y0, x1, y1, PANEL);
-        drawBorder(graphics, x0, y0, x1, y1, config.borderStroke(), BORDER);
+        drawRoundedPanel(graphics, x0, y0, x1, y1, 12, withAlpha(PANEL, eased), withAlpha(BORDER, eased));
 
         int pad = config.safeInnerPadding();
         int gap = config.sectionGap();
@@ -100,8 +110,7 @@ public class OverviewConfigPreviewScreen extends Screen {
     private int renderHeader(GuiGraphics g, int x0, int x1, int y0) {
         int h = 56;
         int y1 = y0 + h;
-        g.fill(x0, y0, x1, y1, PANEL_ALT);
-        drawBorder(g, x0, y0, x1, y1, 1, 0xFF3FA8C4);
+        drawRoundedPanel(g, x0, y0, x1, y1, 8, PANEL_ALT, 0xFF3FA8C4);
         g.drawString(font, Component.translatable("screen.resourceobserver.overview.header.title"), x0 + 10, y0 + 10, TEXT, false);
         g.drawString(font, Component.translatable("screen.resourceobserver.modern_preview.hint"), x0 + 10, y0 + 25, DIM, false);
         g.drawString(font, Component.translatable("screen.resourceobserver.overview.chart.scope.global"), x1 - 70, y0 + 10, ACCENT, false);
@@ -125,8 +134,7 @@ public class OverviewConfigPreviewScreen extends Screen {
         for (int i = 0; i < 4; i++) {
             int lx = x0 + i * (cardW + gap);
             int rx = lx + cardW;
-            g.fill(lx, y0, rx, y1, PANEL_ALT);
-            drawBorder(g, lx, y0, rx, y1, 1, 0xFF2F8AA8);
+            drawRoundedPanel(g, lx, y0, rx, y1, 6, PANEL_ALT, 0xFF2F8AA8);
             g.drawString(font, Component.translatable(titles[i]), lx + 8, y0 + 8, DIM, false);
             g.drawString(font, values[i], lx + 8, y0 + 28, colors[i], false);
         }
@@ -136,8 +144,7 @@ public class OverviewConfigPreviewScreen extends Screen {
     private int renderChart(GuiGraphics g, int x0, int x1, int y0, int mouseX, int mouseY) {
         int h = 180;
         int y1 = y0 + h;
-        g.fill(x0, y0, x1, y1, PANEL_ALT);
-        drawBorder(g, x0, y0, x1, y1, 1, 0xFF2F8AA8);
+        drawRoundedPanel(g, x0, y0, x1, y1, 8, PANEL_ALT, 0xFF2F8AA8);
 
         g.drawString(font, Component.translatable("screen.resourceobserver.overview.section.chart"), x0 + 8, y0 + 8, TEXT, false);
         String scope = selectedItemId.isBlank() ? Component.translatable("screen.resourceobserver.overview.chart.scope.global").getString() : selectedItemId;
@@ -167,8 +174,7 @@ public class OverviewConfigPreviewScreen extends Screen {
     private int renderWatchlist(GuiGraphics g, int x0, int x1, int y0, int mouseX, int mouseY) {
         int h = 88;
         int y1 = y0 + h;
-        g.fill(x0, y0, x1, y1, PANEL_ALT);
-        drawBorder(g, x0, y0, x1, y1, 1, 0xFF2F8AA8);
+        drawRoundedPanel(g, x0, y0, x1, y1, 8, PANEL_ALT, 0xFF2F8AA8);
         g.drawString(font, Component.translatable("screen.resourceobserver.overview.section.watchlist"), x0 + 8, y0 + 8, TEXT, false);
 
         String[] items = {"minecraft:iron_ingot", "minecraft:redstone", "ae2:certus_quartz_crystal", "mekanism:steel_ingot"};
@@ -191,8 +197,7 @@ public class OverviewConfigPreviewScreen extends Screen {
     }
 
     private void renderTable(GuiGraphics g, int x0, int x1, int y0, int y1, int mouseX, int mouseY) {
-        g.fill(x0, y0, x1, y1, PANEL_ALT);
-        drawBorder(g, x0, y0, x1, y1, 1, 0xFF2F8AA8);
+        drawRoundedPanel(g, x0, y0, x1, y1, 8, PANEL_ALT, 0xFF2F8AA8);
         g.drawString(font, Component.translatable("screen.resourceobserver.overview.section.table"), x0 + 8, y0 + 8, TEXT, false);
 
         int contentTop = y0 + 24;
@@ -353,6 +358,35 @@ public class OverviewConfigPreviewScreen extends Screen {
             result = result.substring(0, result.length() - 1);
         }
         return result + "…";
+    }
+
+
+    private static float easeOutCubic(float t) {
+        float clamped = Mth.clamp(t, 0.0f, 1.0f);
+        float inv = 1.0f - clamped;
+        return 1.0f - inv * inv * inv;
+    }
+
+    private static int withAlpha(int color, float alphaFactor) {
+        int baseA = (color >>> 24) & 0xFF;
+        int a = Mth.clamp((int) (baseA * Mth.clamp(alphaFactor, 0.0f, 1.0f)), 0, 255);
+        return (color & 0x00FFFFFF) | (a << 24);
+    }
+
+    private static void drawRoundedPanel(GuiGraphics g, int x0, int y0, int x1, int y1, int radius, int fillColor, int borderColor) {
+        int r = Math.max(2, radius);
+        g.fill(x0 + r, y0, x1 - r, y1, fillColor);
+        g.fill(x0, y0 + r, x0 + r, y1 - r, fillColor);
+        g.fill(x1 - r, y0 + r, x1, y1 - r, fillColor);
+
+        for (int dy = 0; dy < r; dy++) {
+            int inset = (int) Math.ceil(r - Math.sqrt((double) r * r - (double) (r - dy) * (r - dy)));
+            g.fill(x0 + inset, y0 + dy, x1 - inset, y0 + dy + 1, fillColor);
+            g.fill(x0 + inset, y1 - dy - 1, x1 - inset, y1 - dy, fillColor);
+        }
+
+        drawBorder(g, x0 + r, y0, x1 - r, y1, 1, borderColor);
+        drawBorder(g, x0, y0 + r, x1, y1 - r, 1, borderColor);
     }
 
     private static void drawBorder(GuiGraphics graphics, int x0, int y0, int x1, int y1, int thickness, int color) {
