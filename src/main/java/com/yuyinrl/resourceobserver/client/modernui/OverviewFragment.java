@@ -85,6 +85,10 @@ public class OverviewFragment extends Fragment implements ScreenCallback {
     private TableView tableView;
     private TabBarView tabBarView;
 
+    // ========== 对话框叠加层 ==========
+    private FrameLayout overlayContainer;
+    private View currentOverlay;
+
     // ========== 刷新定时器 ==========
     private final Runnable refreshRunnable = this::requestRefresh;
 
@@ -291,7 +295,23 @@ public class OverviewFragment extends Fragment implements ScreenCallback {
         // 初始数据填充
         updateViews();
 
-        return root;
+        // === 外层 FrameLayout（支持对话框叠加层） ===
+        var outerRoot = new FrameLayout(context);
+        outerRoot.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        outerRoot.addView(root);
+
+        // 对话框叠加层容器
+        overlayContainer = new FrameLayout(context);
+        overlayContainer.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        outerRoot.addView(overlayContainer);
+
+        return outerRoot;
     }
 
     @Override
@@ -412,16 +432,33 @@ public class OverviewFragment extends Fragment implements ScreenCallback {
         if (type == OverviewViewModel.KpiType.STORAGE) {
             // 打开存储详情弹窗
             if (viewModel.storageDetail() != null) {
-                var dialog = new StorageDetailDialogFragment(viewModel.storageDetail());
-                dialog.show(getChildFragmentManager(), "storage_detail");
+                showOverlay(StorageDetailDialogFragment.createOverlayView(
+                        requireContext(), viewModel.storageDetail(), this::dismissOverlay));
             }
         } else {
             // 打开 KPI 详情弹窗
             OverviewViewModel.KpiDetail detail = viewModel.kpiDetailFor(type);
             if (detail != null) {
-                var dialog = new KpiDetailDialogFragment(detail);
-                dialog.show(getChildFragmentManager(), "kpi_detail");
+                showOverlay(KpiDetailDialogFragment.createOverlayView(
+                        requireContext(), detail, this::dismissOverlay));
             }
+        }
+    }
+
+    /** 显示对话框叠加层 */
+    private void showOverlay(View overlay) {
+        dismissOverlay();
+        currentOverlay = overlay;
+        if (overlayContainer != null) {
+            overlayContainer.addView(overlay);
+        }
+    }
+
+    /** 关闭当前对话框叠加层 */
+    private void dismissOverlay() {
+        if (currentOverlay != null && overlayContainer != null) {
+            overlayContainer.removeView(currentOverlay);
+            currentOverlay = null;
         }
     }
 

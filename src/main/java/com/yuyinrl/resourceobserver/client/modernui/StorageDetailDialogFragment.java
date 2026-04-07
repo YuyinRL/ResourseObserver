@@ -2,21 +2,15 @@ package com.yuyinrl.resourceobserver.client.modernui;
 
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
-import icyllis.modernui.annotation.NonNull;
 import icyllis.modernui.core.Context;
-import icyllis.modernui.fragment.DialogFragment;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
-import icyllis.modernui.util.DataSet;
 import icyllis.modernui.view.Gravity;
-import icyllis.modernui.view.LayoutInflater;
 import icyllis.modernui.view.View;
 import icyllis.modernui.view.ViewGroup;
 import icyllis.modernui.widget.FrameLayout;
 import icyllis.modernui.widget.LinearLayout;
 import icyllis.modernui.widget.TextView;
 import net.minecraft.network.chat.Component;
-
-import javax.annotation.Nullable;
 
 /**
  * 存储详情弹窗 —— 显示 AE2 存储容量的详细分解信息。
@@ -25,22 +19,38 @@ import javax.annotation.Nullable;
  * - 磁盘物品/流体通道使用率
  * - 外部物品/流体通道使用率
  * - 可靠性指示
+ * <p>
+ * 此类为纯 View 构建器（Modern UI 没有 DialogFragment），
+ * 通过 {@link #createOverlayView} 创建叠加层 View，由 {@link OverviewFragment} 管理生命周期。
  */
-public class StorageDetailDialogFragment extends DialogFragment {
+public final class StorageDetailDialogFragment {
 
-    private final OverviewViewModel.StorageDetail detail;
-
-    public StorageDetailDialogFragment(OverviewViewModel.StorageDetail detail) {
-        this.detail = detail;
+    private StorageDetailDialogFragment() {
     }
 
-    @Nullable
-    @Override
-    public View onCreateView(@NonNull LayoutInflater inflater,
-                             @Nullable ViewGroup container,
-                             @Nullable DataSet savedInstanceState) {
-        Context context = requireContext();
+    /**
+     * 创建存储详情弹窗的叠加层 View。
+     *
+     * @param context   UI 上下文
+     * @param detail    存储详情数据
+     * @param onDismiss 关闭回调
+     * @return 可直接添加到 FrameLayout 的叠加层 View
+     */
+    public static View createOverlayView(Context context,
+                                         OverviewViewModel.StorageDetail detail,
+                                         Runnable onDismiss) {
+        // === 半透明遮罩层 ===
+        var overlay = new FrameLayout(context);
+        overlay.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        ShapeDrawable scrim = new ShapeDrawable();
+        scrim.setColor(0x88000000);
+        overlay.setBackground(scrim);
+        overlay.setClickable(true); // 拦截点击，防止穿透
 
+        // === 对话框内容面板 ===
         var root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(root.dp(16), root.dp(12), root.dp(16), root.dp(12));
@@ -82,29 +92,29 @@ public class StorageDetailDialogFragment extends DialogFragment {
             root.addView(hint, hintParams);
         } else {
             // 分割线
-            addDivider(root);
+            addDivider(context, root);
 
             // 磁盘存储
-            addSectionTitle(root, "Disk Storage");
+            addSectionTitle(context, root, "Disk Storage");
             if (detail.diskItem().available()) {
-                addChannel(root, detail.diskItem());
+                addChannel(context, root, detail.diskItem());
             }
             if (detail.diskFluid().available()) {
-                addChannel(root, detail.diskFluid());
+                addChannel(context, root, detail.diskFluid());
             }
-            addReliabilityIndicator(root, "Disk Reliable", detail.diskReliable());
+            addReliabilityIndicator(context, root, "Disk Reliable", detail.diskReliable());
 
-            addDivider(root);
+            addDivider(context, root);
 
             // 外部存储
-            addSectionTitle(root, "External Storage");
+            addSectionTitle(context, root, "External Storage");
             if (detail.externalItem().available()) {
-                addChannel(root, detail.externalItem());
+                addChannel(context, root, detail.externalItem());
             }
             if (detail.externalFluid().available()) {
-                addChannel(root, detail.externalFluid());
+                addChannel(context, root, detail.externalFluid());
             }
-            addReliabilityIndicator(root, "External Reliable", detail.externalReliable());
+            addReliabilityIndicator(context, root, "External Reliable", detail.externalReliable());
         }
 
         // 关闭按钮
@@ -114,7 +124,7 @@ public class StorageDetailDialogFragment extends DialogFragment {
         closeBtn.setTextColor(UiThemeTokens.CYAN);
         closeBtn.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         closeBtn.setClickable(true);
-        closeBtn.setOnClickListener(v -> dismiss());
+        closeBtn.setOnClickListener(v -> onDismiss.run());
         var closeBtnParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -122,11 +132,12 @@ public class StorageDetailDialogFragment extends DialogFragment {
         closeBtnParams.topMargin = root.dp(8);
         root.addView(closeBtn, closeBtnParams);
 
-        return root;
+        overlay.addView(root);
+        return overlay;
     }
 
-    private void addDivider(LinearLayout parent) {
-        View divider = new View(requireContext());
+    private static void addDivider(Context context, LinearLayout parent) {
+        View divider = new View(context);
         ShapeDrawable divBg = new ShapeDrawable();
         divBg.setColor(UiThemeTokens.DIVIDER);
         divider.setBackground(divBg);
@@ -139,8 +150,8 @@ public class StorageDetailDialogFragment extends DialogFragment {
         parent.addView(divider, params);
     }
 
-    private void addSectionTitle(LinearLayout parent, String text) {
-        var tv = new TextView(requireContext());
+    private static void addSectionTitle(Context context, LinearLayout parent, String text) {
+        var tv = new TextView(context);
         tv.setText(text);
         tv.setTextSize(parent.sp(11));
         tv.setTextColor(UiThemeTokens.CYAN);
@@ -152,9 +163,7 @@ public class StorageDetailDialogFragment extends DialogFragment {
         parent.addView(tv, params);
     }
 
-    private void addChannel(LinearLayout parent, OverviewViewModel.StorageChannel channel) {
-        Context context = requireContext();
-
+    private static void addChannel(Context context, LinearLayout parent, OverviewViewModel.StorageChannel channel) {
         var row = new LinearLayout(context);
         row.setOrientation(LinearLayout.VERTICAL);
 
@@ -166,11 +175,11 @@ public class StorageDetailDialogFragment extends DialogFragment {
         row.addView(label);
 
         // Usage
-        addDetailRow(row, "Usage:", channel.usageText());
-        addDetailRow(row, "Types:", channel.typesText());
+        addDetailRow(context, row, "Usage:", channel.usageText());
+        addDetailRow(context, row, "Types:", channel.typesText());
 
         if (channel.usageDetailText() != null && !channel.usageDetailText().equals("N/A")) {
-            addDetailRow(row, "Detail:", channel.usageDetailText());
+            addDetailRow(context, row, "Detail:", channel.usageDetailText());
         }
 
         var params = new LinearLayout.LayoutParams(
@@ -182,8 +191,7 @@ public class StorageDetailDialogFragment extends DialogFragment {
         parent.addView(row, params);
     }
 
-    private void addDetailRow(LinearLayout parent, String label, String value) {
-        Context context = requireContext();
+    private static void addDetailRow(Context context, LinearLayout parent, String label, String value) {
         var row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
 
@@ -211,8 +219,7 @@ public class StorageDetailDialogFragment extends DialogFragment {
         parent.addView(row, rowParams);
     }
 
-    private void addReliabilityIndicator(LinearLayout parent, String label, boolean reliable) {
-        Context context = requireContext();
+    private static void addReliabilityIndicator(Context context, LinearLayout parent, String label, boolean reliable) {
         var row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
 

@@ -2,20 +2,14 @@ package com.yuyinrl.resourceobserver.client.modernui;
 
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
-import icyllis.modernui.annotation.NonNull;
 import icyllis.modernui.core.Context;
-import icyllis.modernui.fragment.DialogFragment;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
-import icyllis.modernui.util.DataSet;
 import icyllis.modernui.view.Gravity;
-import icyllis.modernui.view.LayoutInflater;
 import icyllis.modernui.view.View;
 import icyllis.modernui.view.ViewGroup;
 import icyllis.modernui.widget.FrameLayout;
 import icyllis.modernui.widget.LinearLayout;
 import icyllis.modernui.widget.TextView;
-
-import javax.annotation.Nullable;
 
 /**
  * KPI 详情弹窗 —— 显示单个 KPI 指标的详细信息。
@@ -25,22 +19,38 @@ import javax.annotation.Nullable;
  * - 状态提示文本
  * - 物品通道（Recent / Previous / Trend）
  * - 流体通道（如有）
+ * <p>
+ * 此类为纯 View 构建器（Modern UI 没有 DialogFragment），
+ * 通过 {@link #createOverlayView} 创建叠加层 View，由 {@link OverviewFragment} 管理生命周期。
  */
-public class KpiDetailDialogFragment extends DialogFragment {
+public final class KpiDetailDialogFragment {
 
-    private final OverviewViewModel.KpiDetail detail;
-
-    public KpiDetailDialogFragment(OverviewViewModel.KpiDetail detail) {
-        this.detail = detail;
+    private KpiDetailDialogFragment() {
     }
 
-    @Nullable
-    @Override
-    public View onCreateView(@NonNull LayoutInflater inflater,
-                             @Nullable ViewGroup container,
-                             @Nullable DataSet savedInstanceState) {
-        Context context = requireContext();
+    /**
+     * 创建 KPI 详情弹窗的叠加层 View。
+     *
+     * @param context   UI 上下文
+     * @param detail    KPI 详情数据
+     * @param onDismiss 关闭回调
+     * @return 可直接添加到 FrameLayout 的叠加层 View
+     */
+    public static View createOverlayView(Context context,
+                                         OverviewViewModel.KpiDetail detail,
+                                         Runnable onDismiss) {
+        // === 半透明遮罩层 ===
+        var overlay = new FrameLayout(context);
+        overlay.setLayoutParams(new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT
+        ));
+        ShapeDrawable scrim = new ShapeDrawable();
+        scrim.setColor(0x88000000);
+        overlay.setBackground(scrim);
+        overlay.setClickable(true); // 拦截点击，防止穿透
 
+        // === 对话框内容面板 ===
         var root = new LinearLayout(context);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(root.dp(16), root.dp(12), root.dp(16), root.dp(12));
@@ -83,17 +93,17 @@ public class KpiDetailDialogFragment extends DialogFragment {
         }
 
         // 分割线
-        addDivider(root);
+        addDivider(context, root);
 
         // 物品通道
         if (detail.itemChannel() != null && detail.itemChannel().available()) {
-            addChannel(root, detail.itemChannel());
+            addChannel(context, root, detail.itemChannel());
         }
 
         // 流体通道
         if (detail.fluidChannel() != null && detail.fluidChannel().available()) {
-            addDivider(root);
-            addChannel(root, detail.fluidChannel());
+            addDivider(context, root);
+            addChannel(context, root, detail.fluidChannel());
         }
 
         // 关闭按钮
@@ -103,7 +113,7 @@ public class KpiDetailDialogFragment extends DialogFragment {
         closeBtn.setTextColor(UiThemeTokens.CYAN);
         closeBtn.setTextAlignment(View.TEXT_ALIGNMENT_CENTER);
         closeBtn.setClickable(true);
-        closeBtn.setOnClickListener(v -> dismiss());
+        closeBtn.setOnClickListener(v -> onDismiss.run());
         var closeBtnParams = new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.WRAP_CONTENT
@@ -111,11 +121,12 @@ public class KpiDetailDialogFragment extends DialogFragment {
         closeBtnParams.topMargin = root.dp(8);
         root.addView(closeBtn, closeBtnParams);
 
-        return root;
+        overlay.addView(root);
+        return overlay;
     }
 
-    private void addDivider(LinearLayout parent) {
-        View divider = new View(requireContext());
+    private static void addDivider(Context context, LinearLayout parent) {
+        View divider = new View(context);
         ShapeDrawable divBg = new ShapeDrawable();
         divBg.setColor(UiThemeTokens.DIVIDER);
         divider.setBackground(divBg);
@@ -128,9 +139,7 @@ public class KpiDetailDialogFragment extends DialogFragment {
         parent.addView(divider, params);
     }
 
-    private void addChannel(LinearLayout parent, OverviewViewModel.KpiDetailChannel channel) {
-        Context context = requireContext();
-
+    private static void addChannel(Context context, LinearLayout parent, OverviewViewModel.KpiDetailChannel channel) {
         var label = new TextView(context);
         label.setText(channel.label());
         label.setTextSize(parent.sp(11));
@@ -140,13 +149,12 @@ public class KpiDetailDialogFragment extends DialogFragment {
                 ViewGroup.LayoutParams.WRAP_CONTENT
         ));
 
-        addDetailRow(parent, "Recent:", channel.recentText());
-        addDetailRow(parent, "Previous:", channel.previousText());
-        addDetailRow(parent, "Trend:", channel.trendText());
+        addDetailRow(context, parent, "Recent:", channel.recentText());
+        addDetailRow(context, parent, "Previous:", channel.previousText());
+        addDetailRow(context, parent, "Trend:", channel.trendText());
     }
 
-    private void addDetailRow(LinearLayout parent, String label, String value) {
-        Context context = requireContext();
+    private static void addDetailRow(Context context, LinearLayout parent, String label, String value) {
         var row = new LinearLayout(context);
         row.setOrientation(LinearLayout.HORIZONTAL);
 
