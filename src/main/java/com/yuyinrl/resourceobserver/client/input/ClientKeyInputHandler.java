@@ -1,8 +1,10 @@
 package com.yuyinrl.resourceobserver.client.input;
 
 import com.yuyinrl.resourceobserver.client.screen.OverviewConfigPreviewScreen;
+import com.yuyinrl.resourceobserver.client.ui.modern.ModernUiRuntime;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.screens.ChatScreen;
+import net.minecraft.network.chat.Component;
 import net.neoforged.bus.api.IEventBus;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.client.event.RegisterKeyMappingsEvent;
@@ -36,6 +38,9 @@ public final class ClientKeyInputHandler {
         }
         if (mc.screen instanceof ChatScreen) {
             return;
+        }
+        if (!ModernUiRuntime.isAvailable() && mc.player != null) {
+            mc.player.sendSystemMessage(Component.translatable("message.resourceobserver.modernui.missing"));
         }
         mc.setScreen(new OverviewConfigPreviewScreen(mc.screen));
     }

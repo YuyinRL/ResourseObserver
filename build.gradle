@@ -45,6 +45,10 @@ repositories {
             includeGroup "mekanism"
         }
     }
+    maven {
+        name 'IzzelAliz Maven'
+        url 'https://maven.izzel.io/releases/'
+    }
     // 如需额外的依赖仓库，请在此添加
     mavenCentral()
 }
@@ -141,6 +145,18 @@ dependencies {
     localRuntime "maven.modrinth:sophisticated-core:kA66Nbi1"
     localRuntime "maven.modrinth:functional-storage:sOE4zjiT"
     localRuntime "maven.modrinth:titanium:LmipxHTo"
+
+    // ModernUI migration dependency (Overview preview path)
+    implementation("icyllis.modernui:ModernUI-NeoForge:${minecraft_version}-${modernui_version}.+")
+    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Core:${modernui_version}")) {
+        exclude group: "org.slf4j", module: "slf4j-api"
+        exclude group: "org.apache.logging.log4j", module: "log4j-core"
+        exclude group: "org.apache.logging.log4j", module: "log4j-api"
+        exclude group: "com.google.code.findbugs", module: "jsr305"
+        exclude group: "org.jetbrains", module: "annotations"
+        exclude group: "com.ibm.icu", module: "icu4j"
+        exclude group: "it.unimi.dsi", module: "fastutil"
+    }
 }
 
 // 将所有已声明的替换属性展开到指定资源目标中。

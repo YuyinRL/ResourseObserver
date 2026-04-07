@@ -299,5 +299,6 @@
   "screen.resourceobserver.modern_preview.extended_hitbox": "扩展热区（跨框架容错）",
   "screen.resourceobserver.modern_preview.status.base": "光标位于基础热区",
   "screen.resourceobserver.modern_preview.status.extended": "光标仅位于扩展热区",
-  "screen.resourceobserver.modern_preview.status.none": "光标在测试热区外"
+  "screen.resourceobserver.modern_preview.status.none": "光标在测试热区外",
+  "message.resourceobserver.modernui.missing": "未检测到 ModernUI 模组，当前打开的是基于原版框架的迁移预览（Mock 数据）。"
 }

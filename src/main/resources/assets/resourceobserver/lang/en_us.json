@@ -299,5 +299,6 @@
   "screen.resourceobserver.modern_preview.extended_hitbox": "Extended hit area (for cross-framework tolerance)",
   "screen.resourceobserver.modern_preview.status.base": "Pointer in base hitbox",
   "screen.resourceobserver.modern_preview.status.extended": "Pointer only in extended hitbox",
-  "screen.resourceobserver.modern_preview.status.none": "Pointer outside test hitbox"
+  "screen.resourceobserver.modern_preview.status.none": "Pointer outside test hitbox",
+  "message.resourceobserver.modernui.missing": "ModernUI mod not detected; opening vanilla-based migration preview (mock data)."
 }
