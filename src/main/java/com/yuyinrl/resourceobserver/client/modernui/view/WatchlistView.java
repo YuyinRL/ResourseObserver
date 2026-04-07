@@ -92,6 +92,9 @@ public class WatchlistView extends LinearLayout {
      */
     static class WatchlistCard extends FrameLayout {
 
+        private static final int MAX_NAME_LENGTH = 20;
+        private static final int TRUNCATE_NAME_LENGTH = 18;
+
         final String itemId;
         private boolean selectedState;
 
@@ -117,7 +120,7 @@ public class WatchlistView extends LinearLayout {
             nameTv.setTextSize(sp(10));
             nameTv.setTextColor(UiThemeTokens.TEXT);
             String name = item.displayName();
-            nameTv.setText(name.length() > 20 ? name.substring(0, 18) + "..." : name);
+            nameTv.setText(name.length() > MAX_NAME_LENGTH ? name.substring(0, TRUNCATE_NAME_LENGTH) + "..." : name);
             column.addView(nameTv, new LinearLayout.LayoutParams(
                     ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT
             ));

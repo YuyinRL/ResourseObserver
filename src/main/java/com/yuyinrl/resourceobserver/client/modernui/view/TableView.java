@@ -34,6 +34,11 @@ import java.util.Map;
  */
 public class TableView extends LinearLayout {
 
+    private static final int MAX_GROUP_LABEL_LENGTH = 12;
+    private static final int TRUNCATE_GROUP_LABEL_LENGTH = 10;
+    private static final int MAX_ITEM_NAME_LENGTH = 25;
+    private static final int TRUNCATE_ITEM_NAME_LENGTH = 23;
+
     /** 回调接口 */
     public interface Callback {
         void onItemSelected(String itemId);
@@ -179,7 +184,7 @@ public class TableView extends LinearLayout {
 
         // 分组筛选按钮
         String groupLabel = uiState.groupNameByKey(uiState.groupFilterKey());
-        if (groupLabel.length() > 12) groupLabel = groupLabel.substring(0, 10) + "..";
+        if (groupLabel.length() > MAX_GROUP_LABEL_LENGTH) groupLabel = groupLabel.substring(0, TRUNCATE_GROUP_LABEL_LENGTH) + "..";
         addFilterButton(filterRow, groupLabel);
 
         // 状态筛选按钮
@@ -310,7 +315,7 @@ public class TableView extends LinearLayout {
         // 名称
         var nameTv = new TextView(getContext());
         String name = tr.displayName();
-        nameTv.setText(name.length() > 25 ? name.substring(0, 23) + ".." : name);
+        nameTv.setText(name.length() > MAX_ITEM_NAME_LENGTH ? name.substring(0, TRUNCATE_ITEM_NAME_LENGTH) + ".." : name);
         nameTv.setTextSize(sp(9));
         nameTv.setTextColor(UiThemeTokens.TEXT);
         row.addView(nameTv, new LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 2.0f));
