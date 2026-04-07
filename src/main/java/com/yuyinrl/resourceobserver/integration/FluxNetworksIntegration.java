@@ -24,7 +24,11 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 
 /**
  * Flux Networks 集成适配器 —— 从 Flux Controller 的 BlockEntity 中提取完整的网络统计和设备数据。
@@ -38,7 +42,7 @@ public final class FluxNetworksIntegration {
 
     private static volatile Boolean available;
 
-    // ========== Mekanism IStrictEnergyHandler 能力懒初始化 ==========
+    // ========== Mekanism IStrictEnergyHandler 鑳藉姏鎳掑垵濮嬪寲 ==========
     /**
      * 通过反射懒获取 Mekanism 的 BlockCapability&lt;IStrictEnergyHandler, Direction&gt;。
      * Mekanism 主模组 jar 是运行期依赖（localRuntime），不在编译期 classpath 中，
@@ -179,13 +183,16 @@ public final class FluxNetworksIntegration {
                             // 探测外部能量容器（仅 PLUG/POINT 类型）
                             long extEnergyStored = 0L;
                             long extEnergyCapacity = 0L;
+                            List<ExternalEnergyRef> externalRefs = List.of();
                             if ((deviceType == FluxDeviceType.PLUG || deviceType == FluxDeviceType.POINT)
                                     && deviceBlockPos != null) {
                                 Level deviceLevel = blockEntity.getLevel();
                                 if (deviceLevel != null) {
-                                    long[] ext = probeAdjacentEnergy(deviceLevel, deviceBlockPos);
-                                    extEnergyStored = ext[0];
-                                    extEnergyCapacity = ext[1];
+                                    externalRefs = probeAdjacentEnergyRefs(deviceLevel, deviceBlockPos);
+                                    for (ExternalEnergyRef ref : externalRefs) {
+                                        extEnergyStored = saturatingAdd(extEnergyStored, ref.stored());
+                                        extEnergyCapacity = saturatingAdd(extEnergyCapacity, ref.capacity());
+                                    }
                                 }
                             }
 
@@ -199,7 +206,8 @@ public final class FluxNetworksIntegration {
                                     maxEnergyStorage,
                                     posKey,
                                     extEnergyStored,
-                                    extEnergyCapacity
+                                    extEnergyCapacity,
+                                    externalRefs
                             ));
                         } catch (Exception e) {
                             ResourceObserverMod.LOGGER.debug(
@@ -245,41 +253,35 @@ public final class FluxNetworksIntegration {
      * @param devicePos Flux 接口（Plug/Point）所在的方块坐标
      * @return long[2]，[0]=外部容器当前储能，[1]=外部容器最大容量；未找到则均为 0
      */
-    private static long[] probeAdjacentEnergy(Level level, BlockPos devicePos) {
-        long bestStored = 0L;
-        long bestCapacity = 0L;
+    private static List<ExternalEnergyRef> probeAdjacentEnergyRefs(Level level, BlockPos devicePos) {
+        Map<String, ExternalEnergyRef> refs = new LinkedHashMap<>();
         BlockCapability<IStrictEnergyHandler, Direction> mekaEnergyCap = getMekanismStrictEnergyCapability();
         try {
             for (Direction dir : Direction.values()) {
                 BlockPos adjacentPos = devicePos.relative(dir);
-                // 跳过未加载的区块
                 if (!level.isLoaded(adjacentPos)) {
                     continue;
                 }
-                // 跳过 Flux Networks 自身的设备方块
                 BlockEntity adjacentBe = level.getBlockEntity(adjacentPos);
                 if (adjacentBe instanceof TileFluxDevice) {
                     continue;
                 }
 
-                // ── 路径 1：标准 NeoForge IEnergyStorage（返回 int，上限 ~4.29B FE）──
+                long storedAtPos = 0L;
+                long capAtPos = 0L;
+
                 IEnergyStorage energy = level.getCapability(Capabilities.EnergyStorage.BLOCK, adjacentPos, dir.getOpposite());
                 if (energy == null) {
                     energy = level.getCapability(Capabilities.EnergyStorage.BLOCK, adjacentPos, null);
                 }
                 if (energy != null) {
-                    // IEnergyStorage 接口返回 int，容量超过 Integer.MAX_VALUE (~2.1B) 时会溢出为负数。
-                    // 使用 Integer.toUnsignedLong() 正确处理 32-bit 无符号值，支持最大 ~4.29B FE。
                     long cap = Integer.toUnsignedLong(energy.getMaxEnergyStored());
-                    if (cap > bestCapacity) {
-                        bestCapacity = cap;
-                        bestStored = Integer.toUnsignedLong(energy.getEnergyStored());
+                    if (cap > capAtPos) {
+                        capAtPos = cap;
+                        storedAtPos = Integer.toUnsignedLong(energy.getEnergyStored());
                     }
                 }
 
-                // ── 路径 2：Mekanism IStrictEnergyHandler（long Joules，支持 T 级别 FE）──
-                // 仅当 Mekanism 已加载，且当前结果疑似被 int 上限截断（≤ Integer.MAX_VALUE）时才尝试。
-                // 也会在 IEnergyStorage 未找到时尝试，以覆盖仅注册 Mekanism 能力的方块。
                 if (mekaEnergyCap != null) {
                     try {
                         IStrictEnergyHandler mekaHandler = level.getCapability(mekaEnergyCap, adjacentPos, dir.getOpposite());
@@ -293,12 +295,11 @@ public final class FluxNetworksIntegration {
                                 joulesMax += mekaHandler.getMaxEnergy(ci);
                                 joulesStored += mekaHandler.getEnergy(ci);
                             }
-                            // 将 Mekanism 内部 Joules 转换为 FE
                             long feCap = joulesToFE(joulesMax);
                             long feStored = joulesToFE(joulesStored);
-                            if (feCap > bestCapacity) {
-                                bestCapacity = feCap;
-                                bestStored = feStored;
+                            if (feCap > capAtPos) {
+                                capAtPos = feCap;
+                                storedAtPos = feStored;
                             }
                         }
                     } catch (Exception e) {
@@ -306,22 +307,146 @@ public final class FluxNetworksIntegration {
                                 "[ResourceObserver] Mekanism energy probe failed at {}: {}", adjacentPos, e.getMessage());
                     }
                 }
+
+                if (capAtPos > 0L) {
+                    ExternalEnergyRef ref = new ExternalEnergyRef(
+                            resolveExternalGroupId(level, adjacentPos, adjacentBe),
+                            buildExternalRefName(level, adjacentPos),
+                            storedAtPos,
+                            capAtPos
+                    );
+                    refs.putIfAbsent(ref.extId(), ref);
+                }
             }
         } catch (Exception e) {
             ResourceObserverMod.LOGGER.debug(
                     "[ResourceObserver] Error probing adjacent energy at {}: {}", devicePos, e.getMessage());
         }
-        return new long[]{bestStored, bestCapacity};
+        return List.copyOf(refs.values());
     }
 
-    /**
-     * 将 Mekanism 内部能量单位（Joules）转换为 FE（Forge Energy）。
-     * 使用 Mekanism API 提供的 {@link IEnergyConversionHelper#feConversion()} 完成转换。
-     * 若转换助手不可用（Mekanism 未完全初始化），则直接返回原始 Joules 值作为降级方案。
-     *
-     * @param joules Mekanism 内部能量值（Joules）
-     * @return 对应的 FE 值
-     */
+    private static String resolveExternalGroupId(Level level, BlockPos pos, @Nullable BlockEntity adjacentBe) {
+        String mekMultiblockId = resolveMekMultiblockGroupId(adjacentBe);
+        if (mekMultiblockId != null && !mekMultiblockId.isBlank()) {
+            return mekMultiblockId;
+        }
+        return buildExternalRefId(level, pos);
+    }
+
+    @Nullable
+    private static String resolveMekMultiblockGroupId(@Nullable BlockEntity adjacentBe) {
+        if (adjacentBe == null) {
+            return null;
+        }
+        String className = adjacentBe.getClass().getName();
+        if (!className.startsWith("mekanism.")) {
+            return null;
+        }
+
+        Object mbUuid = invokeNoArg(adjacentBe, "getMultiblockUUID");
+        String uuidId = toMekMultiblockId(mbUuid);
+        if (uuidId != null) {
+            return uuidId;
+        }
+
+        Object multiblock = invokeNoArg(adjacentBe, "getMultiblock");
+        if (multiblock != null) {
+            Object inventoryId = readField(multiblock, "inventoryID");
+            String inventoryUuidId = toMekMultiblockId(inventoryId);
+            if (inventoryUuidId != null) {
+                return inventoryUuidId;
+            }
+        }
+        return null;
+    }
+
+    @Nullable
+    private static Object invokeNoArg(Object target, String methodName) {
+        try {
+            Method method = target.getClass().getMethod(methodName);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+        }
+        try {
+            Method method = target.getClass().getDeclaredMethod(methodName);
+            method.setAccessible(true);
+            return method.invoke(target);
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    @Nullable
+    private static Object readField(Object target, String fieldName) {
+        try {
+            Field field = target.getClass().getField(fieldName);
+            return field.get(target);
+        } catch (Exception ignored) {
+        }
+        try {
+            Field field = target.getClass().getDeclaredField(fieldName);
+            field.setAccessible(true);
+            return field.get(target);
+        } catch (Exception ignored) {
+        }
+        return null;
+    }
+
+    @Nullable
+    private static String toMekMultiblockId(@Nullable Object idObj) {
+        if (idObj == null) {
+            return null;
+        }
+        if (idObj instanceof Optional<?> optional) {
+            if (optional.isEmpty()) {
+                return null;
+            }
+            return toMekMultiblockId(optional.get());
+        }
+        String uuid;
+        if (idObj instanceof UUID value) {
+            uuid = value.toString();
+        } else {
+            uuid = idObj.toString();
+        }
+        if (uuid == null || uuid.isBlank()) {
+            return null;
+        }
+        String normalized = uuid.trim().replace('.', '_');
+        if (normalized.regionMatches(true, 0, "Optional[", 0, "Optional[".length())
+                && normalized.endsWith("]")) {
+            normalized = normalized.substring("Optional[".length(), normalized.length() - 1).trim();
+        }
+        if (normalized.isBlank()) {
+            return null;
+        }
+        String safe = normalized.replaceAll("[^A-Za-z0-9_-]", "_");
+        if (safe.isBlank()) {
+            return null;
+        }
+        return "mekmb_" + safe;
+    }
+
+    private static String buildExternalRefId(Level level, BlockPos pos) {
+        String dimKey = level.dimension().location().toString();
+        long dimHash = Integer.toUnsignedLong(dimKey.hashCode());
+        return "pos_"
+                + Long.toHexString(dimHash)
+                + "_" + pos.getX()
+                + "_" + pos.getY()
+                + "_" + pos.getZ();
+    }
+
+    private static String buildExternalRefName(Level level, BlockPos pos) {
+        try {
+            String blockName = level.getBlockState(pos).getBlock().getName().getString();
+            if (blockName != null && !blockName.isBlank()) {
+                return blockName + " @ " + pos.toShortString();
+            }
+        } catch (Exception ignored) {
+        }
+        return "External Storage @ " + pos.toShortString();
+    }
     private static long joulesToFE(long joules) {
         if (joules <= 0L) return 0L;
         try {
@@ -329,10 +454,20 @@ public final class FluxNetworksIntegration {
             if (helper == null) return joules; // Mekanism 尚未初始化，降级返回原值
             IEnergyConversion feConv = helper.feConversion();
             if (feConv == null || !feConv.isEnabled()) return joules;
-            return feConv.convertToAsLong(joules);
+            return feConv.convertTo(joules);
         } catch (Exception e) {
-            return joules; // 安全降级
+            return joules; // 瀹夊叏闄嶇骇
         }
+    }
+
+    private static long saturatingAdd(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
     }
 
 
@@ -394,8 +529,18 @@ public final class FluxNetworksIntegration {
             long maxEnergyStorage,
             String posKey,
             long externalEnergyStored,
-            long externalEnergyCapacity
+            long externalEnergyCapacity,
+            List<ExternalEnergyRef> externalRefs
+    ) {
+    }
+
+    public record ExternalEnergyRef(
+            String extId,
+            String displayName,
+            long stored,
+            long capacity
     ) {
     }
 }
+
 

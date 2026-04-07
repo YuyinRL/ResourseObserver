@@ -20,7 +20,7 @@ import java.util.Locale;
  */
 public final class PowerLoadChartRenderer {
     private static final int BAR_HEIGHT = 10;
-    private static final int SECTION_HEIGHT = 80;
+    private static final int SECTION_HEIGHT = 100;
     private static final int RING_OUTER_RADIUS = 28;
     private static final int RING_INNER_RADIUS = 18;
 

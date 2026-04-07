@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.screen;
 
+import com.yuyinrl.resourceobserver.client.PowerExternalSelectionCache;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModelMapper;
 import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModel;
@@ -37,6 +38,7 @@ import com.yuyinrl.resourceobserver.ui.state.TableStatusFilter;
 import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
 import net.minecraft.Util;
 import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.components.Button;
 import net.minecraft.client.gui.components.EditBox;
@@ -157,10 +159,9 @@ public class ResourceTerminalScreen extends Screen {
     private List<PowerDeviceListRenderer.DeviceRowHitbox> powerDeviceRowHitboxes = List.of();
     private int powerPageScrollPx;
     private int powerMaxPageScrollPx;
-    /** 选中的 Debug 面板设备类型（"plug"/"point"），null=未选中 */
-    private String debugSelectedDeviceType;
-    /** 选中的 Debug 面板设备在列表中的索引，-1=未选中 */
-    private int debugSelectedDeviceIndex = -1;
+    /** Selected external storage groups on power page (multi-select). */
+    private final LinkedHashSet<String> selectedExternalGroupIds = new LinkedHashSet<>();
+    private String externalSelectionCacheKey = "";
     /** Debug 面板中可点击的设备行热区 */
     private List<PowerDebugPanelRenderer.DeviceRowHitbox> debugDeviceRowHitboxes = List.of();
 
@@ -260,6 +261,7 @@ public class ResourceTerminalScreen extends Screen {
         this.payload = payload;
         this.chartWindow = payload.chartWindow();
         syncScopeFromPayload(payload);
+        refreshExternalSelectionCacheKey();
         rebuildViewModel();
     }
 
@@ -277,6 +279,7 @@ public class ResourceTerminalScreen extends Screen {
         this.payload = payload;
         this.chartWindow = payload.chartWindow();
         syncScopeFromPayload(payload);
+        refreshExternalSelectionCacheKey();
         rebuildViewModel();
         clampPageScroll();
         updateButtonStates();
@@ -285,6 +288,7 @@ public class ResourceTerminalScreen extends Screen {
     @Override
     protected void init() {
         super.init();
+        refreshExternalSelectionCacheKey();
         rebuildLayoutAndWidgets();
     }
 
@@ -885,6 +889,8 @@ public class ResourceTerminalScreen extends Screen {
         if (powerViewModel == null) {
             rebuildPowerViewModel();
         }
+        sanitizeSelectedExternalGroups();
+        PowerEffectiveStats effectiveStats = computeEffectivePowerStats();
 
         PowerContentLayout powerContent = computePowerContentLayout(powerPageScrollPx);
         powerMaxPageScrollPx = Math.max(0, powerContent.totalHeight() - layoutState.scrollViewport().height());
@@ -899,25 +905,30 @@ public class ResourceTerminalScreen extends Screen {
 
         // Header
         HeaderRenderer.render(gfx, font, powerContent.headerArea(), payload.observerPos(), payload.isBound());
+        PowerKpiRenderer.render(gfx, font, powerContent.kpiArea(), buildEffectivePowerKpis(effectiveStats));
 
         // Left panel: Load distribution donut + Overload Risk card
         PowerLoadChartRenderer.render(gfx, font, powerContent.loadChartArea(),
-                powerViewModel.loadSegments(), powerViewModel.totalDemandFEt());
+                powerViewModel.loadSegments(), effectiveStats.totalDemandPerTick());
 
         PowerOverloadAlertRenderer.render(gfx, font, powerContent.alertArea(),
-                powerViewModel.overloadInfo());
+                effectiveStats.overloadInfo());
 
         // Left panel (continued): Debug panel
         PowerDebugPanelRenderer.RenderResult debugResult = PowerDebugPanelRenderer.render(
                 gfx, font, powerContent.debugPanelArea(),
                 powerViewModel.debugSnapshot(),
-                debugSelectedDeviceType, debugSelectedDeviceIndex,
+                selectedExternalGroupIds,
                 bgMouseX, bgMouseY);
         debugDeviceRowHitboxes = debugResult.deviceRowHitboxes();
 
         // Right panel: Grid Load chart + Production Line Consumption table
         PowerGridChartRenderer.render(gfx, font, powerContent.gridChartArea(),
-                powerViewModel.totalInputPerTick(), powerViewModel.totalOutputPerTick());
+                effectiveStats.totalInputPerTick(),
+                effectiveStats.totalOutputPerTick(),
+                powerViewModel.totalInputPerTick(),
+                powerViewModel.totalOutputPerTick(),
+                effectiveStats.excludedTotalPerTick());
 
         PowerDeviceListRenderer.RenderResult deviceResult = PowerDeviceListRenderer.render(
                 gfx, font, powerContent.deviceListArea(), powerViewModel.devices(), bgMouseX, bgMouseY
@@ -927,12 +938,12 @@ public class ResourceTerminalScreen extends Screen {
         gfx.disableScissor();
     }
 
-    /** 处理电力网络页面的鼠标点击 */
+    /** Handle power network page clicks. */
     private boolean handlePowerNetworkClick(double mouseX, double mouseY, int button) {
         if (button != 0) {
             return super.mouseClicked(mouseX, mouseY, button);
         }
-        // 滚动条
+        // Scrollbar
         if (pageScrollThumbHitbox != null && pageScrollThumbHitbox.contains(mouseX, mouseY)) {
             pageScrollDragging = true;
             pageScrollDragOffset = (int) mouseY - pageScrollThumbHitbox.y();
@@ -942,24 +953,27 @@ public class ResourceTerminalScreen extends Screen {
             jumpPageScrollTo((int) mouseY);
             return true;
         }
-        // Debug 面板设备行点击（选中/取消选中接口以查看外部容器）
+        // Toggle related external storage groups by clicking an interface row.
         for (PowerDebugPanelRenderer.DeviceRowHitbox hitbox : debugDeviceRowHitboxes) {
             if (hitbox.rect().contains(mouseX, mouseY)) {
-                if (hitbox.deviceType().equals(debugSelectedDeviceType) && hitbox.index() == debugSelectedDeviceIndex) {
-                    // 再次点击已选中行 → 取消选中
-                    debugSelectedDeviceType = null;
-                    debugSelectedDeviceIndex = -1;
-                } else {
-                    debugSelectedDeviceType = hitbox.deviceType();
-                    debugSelectedDeviceIndex = hitbox.index();
+                List<String> relatedExternalGroupIds = hitbox.relatedExternalGroupIds();
+                if (relatedExternalGroupIds == null || relatedExternalGroupIds.isEmpty()) {
+                    return true;
                 }
+                boolean allSelected = selectedExternalGroupIds.containsAll(relatedExternalGroupIds);
+                if (allSelected) {
+                    selectedExternalGroupIds.removeAll(relatedExternalGroupIds);
+                } else {
+                    selectedExternalGroupIds.addAll(relatedExternalGroupIds);
+                }
+                persistSelectedExternalGroups();
                 return true;
             }
         }
         return super.mouseClicked(mouseX, mouseY, button);
     }
 
-    /** 计算电力网络页面各区段在可滚动内容中的布局位置（12列网格：左4 + 右8） */
+    /** Compute power page content layout in the scroll viewport. */
     private PowerContentLayout computePowerContentLayout(int scrollPx) {
         UiRect viewport = layoutState.scrollViewport();
         int contentX = viewport.x();
@@ -969,6 +983,10 @@ public class ResourceTerminalScreen extends Screen {
 
         UiRect headerArea = new UiRect(contentX, contentY, contentW, layoutState.headerHeight());
         int y = headerArea.bottom() + gap;
+
+        int kpiH = Math.max(40, layoutState.kpiHeight()-25);
+        UiRect kpiArea = new UiRect(contentX, y, contentW, kpiH);
+        y = kpiArea.bottom() + gap;
 
         // 12-column grid: left 4 cols (33%), right 8 cols (67%)
         int leftW = Math.max(80, (int) (contentW * 0.33f));
@@ -986,7 +1004,7 @@ public class ResourceTerminalScreen extends Screen {
         // Left panel (continued): debug panel below overload risk card
         PowerNetworkViewModel.DebugSnapshot dbgSnap = powerViewModel != null
                 ? powerViewModel.debugSnapshot() : PowerNetworkViewModel.DebugSnapshot.empty();
-        int debugPanelH = PowerDebugPanelRenderer.measureHeight(dbgSnap, debugSelectedDeviceType, debugSelectedDeviceIndex);
+        int debugPanelH = PowerDebugPanelRenderer.measureHeight(dbgSnap, selectedExternalGroupIds);
         UiRect debugPanelArea = new UiRect(leftX, alertArea.bottom() + gap, leftW, debugPanelH);
 
         // Right panel: grid chart + device list
@@ -998,14 +1016,15 @@ public class ResourceTerminalScreen extends Screen {
 
         int totalHeight = Math.max(debugPanelArea.bottom(), deviceListArea.bottom()) - contentY;
 
-        return new PowerContentLayout(headerArea, loadChartArea, alertArea, debugPanelArea, gridChartArea, deviceListArea, totalHeight);
+        return new PowerContentLayout(headerArea, kpiArea, loadChartArea, alertArea, debugPanelArea, gridChartArea, deviceListArea, totalHeight);
     }
 
     /**
-     * 电力网络页面可滚动内容布局（12列网格）。
+     * Scrollable layout for the power network page.
      */
     private record PowerContentLayout(
             UiRect headerArea,
+            UiRect kpiArea,
             UiRect loadChartArea,
             UiRect alertArea,
             UiRect debugPanelArea,
@@ -1015,9 +1034,158 @@ public class ResourceTerminalScreen extends Screen {
     ) {
     }
 
-    /** 重建电力网络页面的 ViewModel */
+    /** Rebuild power page ViewModel. */
     private void rebuildPowerViewModel() {
         powerViewModel = PowerNetworkViewModelMapper.fromPayload(payload);
+        sanitizeSelectedExternalGroups();
+    }
+
+    private void sanitizeSelectedExternalGroups() {
+        if (selectedExternalGroupIds.isEmpty()) {
+            return;
+        }
+        if (powerViewModel == null || powerViewModel.debugSnapshot() == null) {
+            selectedExternalGroupIds.clear();
+            persistSelectedExternalGroups();
+            return;
+        }
+        LinkedHashSet<String> validIds = new LinkedHashSet<>();
+        for (PowerNetworkViewModel.ExternalGroup group : powerViewModel.debugSnapshot().externalGroups()) {
+            validIds.add(group.extId());
+        }
+        if (selectedExternalGroupIds.retainAll(validIds)) {
+            persistSelectedExternalGroups();
+        }
+    }
+
+    private PowerEffectiveStats computeEffectivePowerStats() {
+        if (powerViewModel == null) {
+            return new PowerEffectiveStats(
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    0L,
+                    new PowerNetworkViewModel.OverloadInfo(0.0, 0L)
+            );
+        }
+
+        PowerNetworkViewModel.DebugSnapshot debugSnapshot = powerViewModel.debugSnapshot();
+        long rawInput = Math.max(0L, powerViewModel.totalInputPerTick());
+        long rawOutput = Math.max(0L, powerViewModel.totalOutputPerTick());
+
+        if (debugSnapshot == null) {
+            double headroomPercent = rawInput > 0
+                    ? Math.max(0.0, (rawInput - rawOutput) * 100.0 / rawInput)
+                    : 0.0;
+            long reservePerTick = Math.max(0L, rawInput - rawOutput);
+            return new PowerEffectiveStats(
+                    rawInput,
+                    rawOutput,
+                    0L,
+                    0L,
+                    0L,
+                    rawOutput,
+                    new PowerNetworkViewModel.OverloadInfo(headroomPercent, reservePerTick)
+            );
+        }
+
+        LinkedHashSet<String> excludedInterfaceKeys = new LinkedHashSet<>();
+        if (!selectedExternalGroupIds.isEmpty()) {
+            for (PowerNetworkViewModel.ExternalGroup group : debugSnapshot.externalGroups()) {
+                if (!selectedExternalGroupIds.contains(group.extId())) {
+                    continue;
+                }
+                excludedInterfaceKeys.addAll(group.interfaceKeys());
+            }
+        }
+
+        long excludedInput = 0L;
+        for (PowerNetworkViewModel.DeviceDebugEntry input : debugSnapshot.inputDevices()) {
+            if (excludedInterfaceKeys.contains(input.interfaceKey())) {
+                excludedInput = saturatingAdd(excludedInput, Math.abs(input.transferRate()));
+            }
+        }
+
+        long excludedOutput = 0L;
+        for (PowerNetworkViewModel.DeviceDebugEntry output : debugSnapshot.outputDevices()) {
+            if (excludedInterfaceKeys.contains(output.interfaceKey())) {
+                excludedOutput = saturatingAdd(excludedOutput, Math.abs(output.transferRate()));
+            }
+        }
+
+        long effectiveInput = Math.max(0L, rawInput - excludedInput);
+        long effectiveOutput = Math.max(0L, rawOutput - excludedOutput);
+        long excludedTotal = saturatingAdd(excludedInput, excludedOutput);
+
+        double headroomPercent = effectiveInput > 0
+                ? Math.max(0.0, (effectiveInput - effectiveOutput) * 100.0 / effectiveInput)
+                : 0.0;
+        long reservePerTick = Math.max(0L, effectiveInput - effectiveOutput);
+
+        return new PowerEffectiveStats(
+                effectiveInput,
+                effectiveOutput,
+                excludedInput,
+                excludedOutput,
+                excludedTotal,
+                effectiveOutput,
+                new PowerNetworkViewModel.OverloadInfo(headroomPercent, reservePerTick)
+        );
+    }
+
+    private List<PowerNetworkViewModel.PowerKpi> buildEffectivePowerKpis(PowerEffectiveStats stats) {
+        OverviewViewModel.Status inputStatus = stats.totalInputPerTick() > 0
+                ? OverviewViewModel.Status.POSITIVE
+                : OverviewViewModel.Status.NEUTRAL;
+
+        OverviewViewModel.Status outputStatus = stats.totalOutputPerTick() > stats.totalInputPerTick()
+                ? OverviewViewModel.Status.WARNING
+                : (stats.totalOutputPerTick() > 0 ? OverviewViewModel.Status.POSITIVE : OverviewViewModel.Status.NEUTRAL);
+
+        OverviewViewModel.Status excludedStatus = stats.excludedTotalPerTick() > 0
+                ? OverviewViewModel.Status.WARNING
+                : OverviewViewModel.Status.NEUTRAL;
+
+        return List.of(
+                new PowerNetworkViewModel.PowerKpi(
+                        "screen.resourceobserver.power.kpi.effective_input",
+                        formatCompactMetric(stats.totalInputPerTick()) + " FE/t",
+                        inputStatus
+                ),
+                new PowerNetworkViewModel.PowerKpi(
+                        "screen.resourceobserver.power.kpi.effective_output",
+                        formatCompactMetric(stats.totalOutputPerTick()) + " FE/t",
+                        outputStatus
+                ),
+                new PowerNetworkViewModel.PowerKpi(
+                        "screen.resourceobserver.power.kpi.external_excluded",
+                        formatCompactMetric(stats.excludedTotalPerTick()) + " FE/t",
+                        excludedStatus
+                )
+        );
+    }
+
+    private long saturatingAdd(long left, long right) {
+        if (right <= 0L) {
+            return left;
+        }
+        if (Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
+    private record PowerEffectiveStats(
+            long totalInputPerTick,
+            long totalOutputPerTick,
+            long excludedInputPerTick,
+            long excludedOutputPerTick,
+            long excludedTotalPerTick,
+            long totalDemandPerTick,
+            PowerNetworkViewModel.OverloadInfo overloadInfo
+    ) {
     }
 
     @Override
@@ -1027,8 +1195,58 @@ public class ResourceTerminalScreen extends Screen {
 
     @Override
     public void removed() {
+        persistSelectedExternalGroups();
         super.removed();
         chartRenderCache.clear();
+    }
+
+    private void refreshExternalSelectionCacheKey() {
+        String nextKey = buildExternalSelectionCacheKey(payload != null ? payload.observerPos() : null);
+        if (nextKey.equals(externalSelectionCacheKey)) {
+            return;
+        }
+        externalSelectionCacheKey = nextKey;
+        selectedExternalGroupIds.clear();
+        selectedExternalGroupIds.addAll(PowerExternalSelectionCache.loadSelection(externalSelectionCacheKey));
+    }
+
+    private void persistSelectedExternalGroups() {
+        if (externalSelectionCacheKey == null || externalSelectionCacheKey.isBlank()) {
+            return;
+        }
+        PowerExternalSelectionCache.saveSelection(externalSelectionCacheKey, selectedExternalGroupIds);
+    }
+
+    private String buildExternalSelectionCacheKey(net.minecraft.core.BlockPos observerPos) {
+        if (observerPos == null) {
+            return "";
+        }
+
+        Minecraft mc = Minecraft.getInstance();
+        String sessionId = "unknown";
+        ServerData serverData = mc.getCurrentServer();
+        if (serverData != null && serverData.ip != null && !serverData.ip.isBlank()) {
+            sessionId = "server:" + serverData.ip.trim().toLowerCase(Locale.ROOT);
+        } else if (mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
+            String levelName = mc.getSingleplayerServer().getWorldData().getLevelName();
+            sessionId = (levelName != null && !levelName.isBlank())
+                    ? "singleplayer:" + levelName.trim().toLowerCase(Locale.ROOT)
+                    : "singleplayer";
+        }
+
+        String dimension = mc.level != null
+                ? mc.level.dimension().location().toString()
+                : "unknown";
+
+        return sessionId
+                + "|"
+                + dimension
+                + "|"
+                + observerPos.getX()
+                + ","
+                + observerPos.getY()
+                + ","
+                + observerPos.getZ();
     }
 
     /** 处理标签页点击 */

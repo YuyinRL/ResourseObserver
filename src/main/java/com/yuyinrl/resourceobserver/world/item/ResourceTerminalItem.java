@@ -344,6 +344,34 @@ public class ResourceTerminalItem extends Item {
                                     0L, 0L, 0L
                             ));
                         }
+                        // 新版外储设备明细（每个外储设备独立上报，支持多接口分组去重）
+                        if (device.externalRefs() != null && !device.externalRefs().isEmpty()) {
+                            for (FluxNetworksIntegration.ExternalEnergyRef ref : device.externalRefs()) {
+                                String extId = ref.extId() == null ? "" : ref.extId();
+                                if (extId.isBlank()) {
+                                    continue;
+                                }
+                                String extName = ref.displayName() == null || ref.displayName().isBlank()
+                                        ? extId
+                                        : ref.displayName();
+                                itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                                        ObserverDataPayload.EntryType.ITEM,
+                                        "flux.device." + devIdx + ".ext." + extId + ".stored",
+                                        extName,
+                                        "flux_devices", "resourceobserver:terminal/kpi_storage",
+                                        ref.stored(),
+                                        0L, 0L, 0L
+                                ));
+                                itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                                        ObserverDataPayload.EntryType.ITEM,
+                                        "flux.device." + devIdx + ".ext." + extId + ".cap",
+                                        extName + " [Cap]",
+                                        "flux_devices", "resourceobserver:terminal/kpi_storage",
+                                        ref.capacity(),
+                                        0L, 0L, 0L
+                                ));
+                            }
+                        }
                     }
                 }
             }
