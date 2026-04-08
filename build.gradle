@@ -45,6 +45,13 @@ repositories {
             includeGroup "mekanism"
         }
     }
+    maven {
+        name "IzzelAliz Maven"
+        url "https://maven.izzel.io/releases/"
+        content {
+            includeGroup "icyllis.modernui"
+        }
+    }
     // 如需额外的依赖仓库，请在此添加
     mavenCentral()
 }
@@ -126,6 +133,27 @@ configurations {
 }
 
 dependencies {
+    // ModernUI（NeoForge）
+    implementation "icyllis.modernui:ModernUI-NeoForge:${modernui_mc_version}"
+    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Core:${modernui_core_version}")) {
+        exclude group: "org.slf4j", module: "slf4j-api"
+        exclude group: "org.apache.logging.log4j", module: "log4j-core"
+        exclude group: "org.apache.logging.log4j", module: "log4j-api"
+        exclude group: "com.google.code.findbugs", module: "jsr305"
+        exclude group: "org.jetbrains", module: "annotations"
+        exclude group: "com.ibm.icu", module: "icu4j"
+        exclude group: "it.unimi.dsi", module: "fastutil"
+    }
+    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Markflow:${modernui_core_version}")) {
+        exclude group: "org.slf4j", module: "slf4j-api"
+        exclude group: "org.apache.logging.log4j", module: "log4j-core"
+        exclude group: "org.apache.logging.log4j", module: "log4j-api"
+        exclude group: "com.google.code.findbugs", module: "jsr305"
+        exclude group: "org.jetbrains", module: "annotations"
+        exclude group: "com.ibm.icu", module: "icu4j"
+        exclude group: "it.unimi.dsi", module: "fastutil"
+    }
+
     // AE2 API（编译期） + 完整运行时 mod（本地开发测试用）
     compileOnly "org.appliedenergistics:appliedenergistics2:19.2.17:api"
     localRuntime "org.appliedenergistics:appliedenergistics2:19.2.17"
@@ -151,6 +179,7 @@ var generateModMetadata = tasks.register("generateModMetadata", ProcessResources
             minecraft_version_range: minecraft_version_range,
             neo_version            : neo_version,
             loader_version_range   : loader_version_range,
+            modernui_mc_version    : modernui_mc_version,
             mod_id                 : mod_id,
             mod_name               : mod_name,
             mod_license            : mod_license,

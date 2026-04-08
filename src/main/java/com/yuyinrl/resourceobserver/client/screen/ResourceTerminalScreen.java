@@ -82,11 +82,11 @@ public class ResourceTerminalScreen extends Screen {
     private static final int POPUP_SCROLL_STEP = 20;       // 弹出菜单滚动步进
     private static final double CHART_HOVER_RADIUS_PX = 8.0;
 
-    /** 面板尺寸模式枚举（S/M/L 三档） */
+    /** 面板尺寸模式枚举（S/M/L 三档，对应 95%/100%/105% 微调） */
     private enum SizeMode {
-        SMALL("S", 0.96f),
+        SMALL("S", 0.95f),
         MEDIUM("M", 1.00f),
-        LARGE("L", 1.04f);
+        LARGE("L", 1.05f);
 
         private final String label;
         private final float factor;
@@ -674,45 +674,65 @@ public class ResourceTerminalScreen extends Screen {
         }
     }
 
-    /** 渲染标签页栏 */
+    /** 渲染标签页栏（标签宽度根据文本自适应） */
     private void renderTabs(GuiGraphics gfx, net.minecraft.client.gui.Font font, int mouseX, int mouseY) {
         UiRect chrome = layoutState.fixedChrome();
-        int tabW = 80;
-        int tabH = Math.min(16, chrome.height() - 4);
-        int tabY = chrome.y() + 4;
+        int tabPadding = 10;       // 文本左右内边距之和
+        int tabGap = 4;            // 标签之间的间距
+        int tabH = Math.min(18, chrome.height() - 4);
+        int tabY = chrome.y() + (chrome.height() - tabH) / 2;
         int tabX = chrome.x() + 8;
 
+        // 提前计算各标签文本以确定动态宽度
+        String overviewLabel = Component.translatable("screen.resourceobserver.storage.tab.overview").getString();
+        String storageLabel = Component.translatable("screen.resourceobserver.storage.tab.storage_network").getString();
+        String powerLabel = Component.translatable("screen.resourceobserver.storage.tab.power_network").getString();
+
+        int tabMinW = 60;
+        int overviewTabW = Math.max(tabMinW, font.width(overviewLabel) + tabPadding);
+        int storageTabW = Math.max(tabMinW, font.width(storageLabel) + tabPadding);
+        int powerTabW = Math.max(tabMinW, font.width(powerLabel) + tabPadding);
+
+        // 如果标签总宽度超出 chrome 可用宽度，则等比收缩
+        int totalTabW = overviewTabW + storageTabW + powerTabW + tabGap * 2;
+        int availableW = chrome.width() - 16 - 40; // 左边距 8 + 右侧给关闭按钮留空间
+        if (totalTabW > availableW && availableW > 0) {
+            float shrink = availableW / (float) totalTabW;
+            overviewTabW = Math.max(tabMinW, Math.round(overviewTabW * shrink));
+            storageTabW = Math.max(tabMinW, Math.round(storageTabW * shrink));
+            powerTabW = Math.max(tabMinW, Math.round(powerTabW * shrink));
+        }
+
+        int textOffsetY = (tabH - 8) / 2; // 垂直居中（字高约 8px）
+
         // Overview 标签
-        tabOverviewHitbox = new UiRect(tabX, tabY, tabW, tabH);
+        tabOverviewHitbox = new UiRect(tabX, tabY, overviewTabW, tabH);
         boolean overviewActive = activePage == TerminalPage.OVERVIEW;
         boolean overviewHovered = tabOverviewHitbox.contains(mouseX, mouseY);
         int overviewBg = overviewActive ? UiThemeTokens.TAB_ACTIVE : (overviewHovered ? 0xAA21456A : UiThemeTokens.TAB_INACTIVE);
         gfx.fill(tabOverviewHitbox.x(), tabOverviewHitbox.y(), tabOverviewHitbox.right(), tabOverviewHitbox.bottom(), overviewBg);
         RenderUtils.drawBorder(gfx, tabOverviewHitbox, UiThemeTokens.DIVIDER);
-        String overviewLabel = Component.translatable("screen.resourceobserver.storage.tab.overview").getString();
-        gfx.drawString(font, RenderUtils.ellipsis(font, overviewLabel, tabW - 8), tabX + 4, tabY + 4, overviewActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+        gfx.drawString(font, RenderUtils.ellipsis(font, overviewLabel, overviewTabW - tabPadding), tabX + tabPadding / 2, tabY + textOffsetY, overviewActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
 
         // Storage Network 标签
-        int tab2X = tabX + tabW + 4;
-        tabStorageHitbox = new UiRect(tab2X, tabY, tabW, tabH);
+        int tab2X = tabX + overviewTabW + tabGap;
+        tabStorageHitbox = new UiRect(tab2X, tabY, storageTabW, tabH);
         boolean storageActive = activePage == TerminalPage.STORAGE_NETWORK;
         boolean storageHovered = tabStorageHitbox.contains(mouseX, mouseY);
         int storageBg = storageActive ? UiThemeTokens.TAB_ACTIVE : (storageHovered ? 0xAA21456A : UiThemeTokens.TAB_INACTIVE);
         gfx.fill(tabStorageHitbox.x(), tabStorageHitbox.y(), tabStorageHitbox.right(), tabStorageHitbox.bottom(), storageBg);
         RenderUtils.drawBorder(gfx, tabStorageHitbox, UiThemeTokens.DIVIDER);
-        String storageLabel = Component.translatable("screen.resourceobserver.storage.tab.storage_network").getString();
-        gfx.drawString(font, RenderUtils.ellipsis(font, storageLabel, tabW - 8), tab2X + 4, tabY + 4, storageActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+        gfx.drawString(font, RenderUtils.ellipsis(font, storageLabel, storageTabW - tabPadding), tab2X + tabPadding / 2, tabY + textOffsetY, storageActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
 
         // Power Network 标签
-        int tab3X = tab2X + tabW + 4;
-        tabPowerHitbox = new UiRect(tab3X, tabY, tabW, tabH);
+        int tab3X = tab2X + storageTabW + tabGap;
+        tabPowerHitbox = new UiRect(tab3X, tabY, powerTabW, tabH);
         boolean powerActive = activePage == TerminalPage.POWER_NETWORK;
         boolean powerHovered = tabPowerHitbox.contains(mouseX, mouseY);
         int powerBg = powerActive ? UiThemeTokens.TAB_ACTIVE : (powerHovered ? 0xAA21456A : UiThemeTokens.TAB_INACTIVE);
         gfx.fill(tabPowerHitbox.x(), tabPowerHitbox.y(), tabPowerHitbox.right(), tabPowerHitbox.bottom(), powerBg);
         RenderUtils.drawBorder(gfx, tabPowerHitbox, UiThemeTokens.DIVIDER);
-        String powerLabel = Component.translatable("screen.resourceobserver.storage.tab.power_network").getString();
-        gfx.drawString(font, RenderUtils.ellipsis(font, powerLabel, tabW - 8), tab3X + 4, tabY + 4, powerActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+        gfx.drawString(font, RenderUtils.ellipsis(font, powerLabel, powerTabW - tabPadding), tab3X + tabPadding / 2, tabY + textOffsetY, powerActive ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
     }
 
     /** 渲染总览页面内容 */
@@ -1342,19 +1362,24 @@ public class ResourceTerminalScreen extends Screen {
     }
 
     private void initGroupInputWidgets() {
-        int panelX = layoutState.panel().x() + (layoutState.panel().width() - 230) / 2;
-        int panelY = layoutState.panel().y() + (layoutState.panel().height() - 82) / 2;
+        int inputPanelW = Math.min(280, layoutState.panel().width() - 40);
+        int inputPanelH = 90;
+        int panelX = layoutState.panel().x() + (layoutState.panel().width() - inputPanelW) / 2;
+        int panelY = layoutState.panel().y() + (layoutState.panel().height() - inputPanelH) / 2;
 
-        groupNameEdit = addRenderableWidget(new EditBox(font, panelX + 12, panelY + 28, 206, 16, Component.empty()));
+        int editW = Math.max(80, inputPanelW - 24);
+        int btnW = Math.max(60, (editW - 14) / 2);
+
+        groupNameEdit = addRenderableWidget(new EditBox(font, panelX + 12, panelY + 28, editW, 18, Component.empty()));
         groupInputConfirmButton = addRenderableWidget(Button.builder(
                         Component.translatable("screen.resourceobserver.overview.group.input.confirm"),
                         btn -> submitGroupInput())
-                .bounds(panelX + 12, panelY + 52, 96, 16)
+                .bounds(panelX + 12, panelY + 54, btnW, 18)
                 .build());
         groupInputCancelButton = addRenderableWidget(Button.builder(
                         Component.translatable("screen.resourceobserver.overview.group.input.cancel"),
                         btn -> closeGroupInput())
-                .bounds(panelX + 122, panelY + 52, 96, 16)
+                .bounds(panelX + 12 + btnW + 14, panelY + 54, btnW, 18)
                 .build());
         setGroupInputVisible(false);
     }
@@ -1363,15 +1388,24 @@ public class ResourceTerminalScreen extends Screen {
         if (groupNameEdit == null || groupInputConfirmButton == null || groupInputCancelButton == null) {
             return;
         }
-        int panelX = layoutState.panel().x() + (layoutState.panel().width() - 230) / 2;
-        int panelY = layoutState.panel().y() + (layoutState.panel().height() - 82) / 2;
-        groupInputPanel = new UiRect(panelX, panelY, 230, 82);
+        int inputPanelW = Math.min(280, layoutState.panel().width() - 40);
+        int inputPanelH = 90;
+        int panelX = layoutState.panel().x() + (layoutState.panel().width() - inputPanelW) / 2;
+        int panelY = layoutState.panel().y() + (layoutState.panel().height() - inputPanelH) / 2;
+        groupInputPanel = new UiRect(panelX, panelY, inputPanelW, inputPanelH);
+
+        int editW = Math.max(80, inputPanelW - 24);
+        int btnW = Math.max(60, (editW - 14) / 2);
+
         groupNameEdit.setX(panelX + 12);
         groupNameEdit.setY(panelY + 28);
+        groupNameEdit.setWidth(editW);
         groupInputConfirmButton.setX(panelX + 12);
-        groupInputConfirmButton.setY(panelY + 52);
-        groupInputCancelButton.setX(panelX + 122);
-        groupInputCancelButton.setY(panelY + 52);
+        groupInputConfirmButton.setY(panelY + 54);
+        groupInputConfirmButton.setWidth(btnW);
+        groupInputCancelButton.setX(panelX + 12 + btnW + 14);
+        groupInputCancelButton.setY(panelY + 54);
+        groupInputCancelButton.setWidth(btnW);
     }
 
     private void setGroupInputVisible(boolean visible) {
