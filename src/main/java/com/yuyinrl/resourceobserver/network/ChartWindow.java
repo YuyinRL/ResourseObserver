@@ -16,9 +16,12 @@ public enum ChartWindow {
     WEEK_7D_30M(1, 336, 36000L, "7D/30m", "screen.resourceobserver.overview.chart.window.week"),
     /** 调试用：10分钟窗口，每5秒一个数据点（120个点） */
     // TODO: 短距图表调优完成后，移除或门控此仅调试窗口。
-    DEBUG_10M_5S(2, 120, 100L, "10m/5s", "screen.resourceobserver.overview.chart.window.debug");
+    DEBUG_10M_5S(2, 120, 100L, "10m/5s", "screen.resourceobserver.overview.chart.window.debug"),
+    /** 1小时窗口，每1分钟一个数据点（60个点）—— 高频细粒度实时监控 */
+    HOUR_1H_1M(3, 60, 1200L, "1H/1m", "screen.resourceobserver.overview.chart.window.hour");
 
     private static final ChartWindow[] UI_WINDOW_CYCLE = new ChartWindow[] {
+            HOUR_1H_1M,
             DAY_24H_5M,
             WEEK_7D_30M,
             //DEBUG_10M_5S, // TODO(debug-window): 取消这一行注释可在 UI 中启用 10m/5s 调试窗口
@@ -70,11 +73,6 @@ public enum ChartWindow {
 
     /** 根据 ID 查找窗口枚举值，未找到时默认返回 DAY_24H_5M */
     public static ChartWindow fromId(int id) {
-        for (ChartWindow value : values()) {
-            if (value.id == id) {
-                return value;
-            }
-        }
-        return DAY_24H_5M;
+        return EnumLookup.fromId(values(), ChartWindow::id, id, DAY_24H_5M);
     }
 }

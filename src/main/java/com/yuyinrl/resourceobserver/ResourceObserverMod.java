@@ -2,6 +2,7 @@ package com.yuyinrl.resourceobserver;
 
 import com.mojang.logging.LogUtils;
 import com.yuyinrl.resourceobserver.client.ChartRenderShaders;
+import com.yuyinrl.resourceobserver.client.ModItemProperties;
 import com.yuyinrl.resourceobserver.client.input.ClientKeyBindings;
 import com.yuyinrl.resourceobserver.network.ModNetworking;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
@@ -31,6 +32,7 @@ public class ResourceObserverMod {
         if (FMLEnvironment.dist == Dist.CLIENT) {
             ChartRenderShaders.register(modEventBus);
             ClientKeyBindings.register(modEventBus);
+            ModItemProperties.register(modEventBus);
         }
     }
 }

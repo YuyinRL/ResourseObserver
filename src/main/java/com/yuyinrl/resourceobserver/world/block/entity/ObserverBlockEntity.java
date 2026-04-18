@@ -16,6 +16,7 @@ import appeng.api.storage.cells.StorageCell;
 import appeng.api.storage.cells.IBasicCellItem;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
+import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
@@ -83,6 +84,17 @@ public class ObserverBlockEntity extends BlockEntity {
     private static final int SAMPLE_INTERVAL = 10;
     /** 双缓冲滑动窗口的每个子窗口采样数（12 秒），两个子窗口合计覆盖 12–24 秒的历史数据 */
     private static final int RATE_WINDOW_SAMPLES = 24;
+    /**
+     * 启动预热采样次数 —— 首次采样后额外跳过的样本数。
+     * 等待 AE2 缓存库存从部分加载变为完全加载，避免大量物品"突然出现"导致虚假增量。
+     * 4 次 × 0.5 秒 = 2 秒预热期。
+     */
+    private static final int WARMUP_SAMPLES = 4;
+    /**
+     * 速率 DEBUG 开关 —— 启动 JVM 时加 -Dresobs.ratedebug=true 可启用。
+     * 启用后每个窗口周期（12 秒）输出一条 [RateDebug] 日志，用于诊断速率偏差。
+     */
+    private static final boolean RATE_DEBUG = Boolean.getBoolean("resobs.ratedebug");
     private static final String AE2_CAPACITY_SCOPE_CELLS_ONLY = "AE2_CELLS_ONLY";
     private static final String FLUID_KEY_PREFIX = "fluid:";
     private static final int DEFAULT_ITEM_PROBE_COUNT = 1;
@@ -101,11 +113,15 @@ public class ObserverBlockEntity extends BlockEntity {
      * AE2 网络中每种物品的平滑净速率（networkId -> {itemId -> ratePerMin}），单位：每分钟。
      * 由双缓冲滑动窗口计算得出，正值=净生产，负值=净消耗。
      */
-    private final Map<String, Map<String, Long>> ae2ItemRatesPerMin = new HashMap<>();
+    private final Map<String, Map<String, Double>> ae2ItemRatesPerMin = new HashMap<>();
     /** AE2 网络中每种物品的平滑生产速率（networkId -> {itemId -> prodRatePerMin}），单位：每分钟，≥0 */
-    private final Map<String, Map<String, Long>> ae2ItemProdRatesPerMin = new HashMap<>();
+    private final Map<String, Map<String, Double>> ae2ItemProdRatesPerMin = new HashMap<>();
     /** AE2 网络中每种物品的平滑消耗速率（networkId -> {itemId -> consRatePerMin}），单位：每分钟，≥0 */
-    private final Map<String, Map<String, Long>> ae2ItemConsRatesPerMin = new HashMap<>();
+    private final Map<String, Map<String, Double>> ae2ItemConsRatesPerMin = new HashMap<>();
+    /** 服务端速率 EMA 状态 —— 平滑窗口噪声，α=0.10 */
+    private final Map<String, Map<String, Double>> ae2ItemProdRateEma = new HashMap<>();
+    private final Map<String, Map<String, Double>> ae2ItemConsRateEma = new HashMap<>();
+    private static final double SERVER_RATE_EMA_ALPHA = 0.10;
     // ── 双缓冲滑动窗口字段 ────────────────────────────────────────────────────────
     /** 当前窗口内每物品累计消耗量 */
     private final Map<String, Map<String, Long>> ae2ItemConsCurrent  = new HashMap<>();
@@ -119,6 +135,13 @@ public class ObserverBlockEntity extends BlockEntity {
     private final Map<String, Integer> ae2ItemWindowSampleCount      = new HashMap<>();
     /** 上一完整窗口的采样数（networkId -> count） */
     private final Map<String, Integer> ae2ItemPrevWindowSampleCount  = new HashMap<>();
+    /** 启动预热计数器 —— 跳过前几次采样，等待 AE2 缓存库存稳定后再开始累积增量 */
+    private final Map<String, Integer> ae2WarmupRemaining            = new HashMap<>();
+    // ── KPI 聚合双缓冲（实时速率，不依赖 HistorySavedData 环形缓冲区） ────────
+    /** 当前窗口 KPI 聚合：[0]=itemProd, [1]=itemCons, [2]=fluidProd, [3]=fluidCons */
+    private final Map<String, long[]> kpiAccumCurrent = new HashMap<>();
+    /** 上一完整窗口 KPI 聚合 */
+    private final Map<String, long[]> kpiAccumPrev = new HashMap<>();
     /** AE2 网络容量指标（networkId -> metrics） */
     private final Map<String, Ae2CellCapacityMetrics> ae2CellCapacityMetrics = new HashMap<>();
     /** 调试信息映射，记录每个网络的采样状态 */
@@ -398,29 +421,68 @@ public class ObserverBlockEntity extends BlockEntity {
     }
 
     /**
-     * 返回指定 AE2 网络中每种物品的平滑每分钟速率（EMA 处理后，单位：物品/分钟）。
-     * 正值表示净增（生产），负值表示净减（消耗）。
-     * 相比瞬时 delta，此数据在采样间隔内无活动时不会归零，适合用于 UI 消耗速率展示。
+     * 返回指定 AE2 网络中每种物品的平滑净速率（单位：物品/分钟，正=净生产，负=净消耗）。
      */
-    public Map<String, Long> getAe2ItemRatesPerMinFor(String networkId) {
-        Map<String, Long> data = ae2ItemRatesPerMin.get(networkId);
+    public Map<String, Double> getAe2ItemRatesPerMinFor(String networkId) {
+        Map<String, Double> data = ae2ItemRatesPerMin.get(networkId);
         return data == null ? Map.of() : Collections.unmodifiableMap(data);
     }
 
     /**
      * 返回指定 AE2 网络中每种物品的平滑生产速率（单位：物品/分钟，≥0）。
      */
-    public Map<String, Long> getAe2ItemProdRatesPerMinFor(String networkId) {
-        Map<String, Long> data = ae2ItemProdRatesPerMin.get(networkId);
+    public Map<String, Double> getAe2ItemProdRatesPerMinFor(String networkId) {
+        Map<String, Double> data = ae2ItemProdRatesPerMin.get(networkId);
         return data == null ? Map.of() : Collections.unmodifiableMap(data);
     }
 
     /**
      * 返回指定 AE2 网络中每种物品的平滑消耗速率（单位：物品/分钟，≥0）。
      */
-    public Map<String, Long> getAe2ItemConsRatesPerMinFor(String networkId) {
-        Map<String, Long> data = ae2ItemConsRatesPerMin.get(networkId);
+    public Map<String, Double> getAe2ItemConsRatesPerMinFor(String networkId) {
+        Map<String, Double> data = ae2ItemConsRatesPerMin.get(networkId);
         return data == null ? Map.of() : Collections.unmodifiableMap(data);
+    }
+
+    /**
+     * 计算指定网络绑定的实时 KPI 统计数据。
+     * <p>
+     * 使用与逐物品速率相同的双缓冲滑动窗口（每窗口 12 秒），
+     * 合并当前窗口 + 上一完整窗口计算平滑速率（12–24 秒响应延迟）。
+     * 不依赖 {@code ObserverHistorySavedData} 的环形缓冲区。
+     */
+    public ObserverDataPayload.KpiWindowStats getKpiStats(String networkId) {
+        long[] cur = kpiAccumCurrent.getOrDefault(networkId, new long[4]);
+        long[] prev = kpiAccumPrev.getOrDefault(networkId, new long[4]);
+        int curSamples = ae2ItemWindowSampleCount.getOrDefault(networkId, 0);
+        int prevSamples = ae2ItemPrevWindowSampleCount.getOrDefault(networkId, 0);
+
+        int totalSamples = curSamples + prevSamples;
+        boolean recentAvailable = totalSamples > 0;
+        boolean previousAvailable = prevSamples > 0;
+        boolean trendAvailable = curSamples > 0 && previousAvailable;
+
+        double toPerMin = 20.0 * 60.0 / SAMPLE_INTERVAL;  // 120.0
+
+        // 显示值：合并两个窗口的平滑速率
+        double itemProdRecent = recentAvailable ? (cur[0] + prev[0]) * toPerMin / totalSamples : 0;
+        double itemConsRecent = recentAvailable ? (cur[1] + prev[1]) * toPerMin / totalSamples : 0;
+        double fluidProdRecent = recentAvailable ? (cur[2] + prev[2]) * toPerMin / totalSamples : 0;
+        double fluidConsRecent = recentAvailable ? (cur[3] + prev[3]) * toPerMin / totalSamples : 0;
+
+        // 趋势对比值：上一完整窗口的速率
+        double itemProdPrev = previousAvailable ? prev[0] * toPerMin / prevSamples : 0;
+        double itemConsPrev = previousAvailable ? prev[1] * toPerMin / prevSamples : 0;
+        double fluidProdPrev = previousAvailable ? prev[2] * toPerMin / prevSamples : 0;
+        double fluidConsPrev = previousAvailable ? prev[3] * toPerMin / prevSamples : 0;
+
+        return new ObserverDataPayload.KpiWindowStats(
+                itemProdRecent, itemConsRecent,
+                itemProdPrev, itemConsPrev,
+                fluidProdRecent, fluidConsRecent,
+                fluidProdPrev, fluidConsPrev,
+                recentAvailable, previousAvailable, trendAvailable
+        );
     }
 
     public String getDebugInfoFor(String networkId) {
@@ -592,52 +654,120 @@ public class ObserverBlockEntity extends BlockEntity {
         }
 
         Map<String, Long> previous = ae2ItemAmounts.getOrDefault(networkId, Map.of());
-        Map<String, Long> deltas = computeDeltas(previous, snapshot);
+
+        // ── 启动预热保护 ──────────────────────────────────────────────────────
+        // 首次采样（无历史基线）：初始化预热计数器，跳过增量计算
+        // 预热期内（AE2 缓存库存可能仍在加载）：仅更新快照，不累积增量
+        boolean warmingUp;
+        if (previous.isEmpty()) {
+            ae2WarmupRemaining.put(networkId, WARMUP_SAMPLES);
+            warmingUp = true;
+        } else {
+            int remaining = ae2WarmupRemaining.getOrDefault(networkId, 0);
+            if (remaining > 0) {
+                ae2WarmupRemaining.put(networkId, remaining - 1);
+                warmingUp = true;
+            } else {
+                warmingUp = false;
+            }
+        }
+
+        Map<String, Long> deltas = warmingUp ? Map.of() : computeDeltas(previous, snapshot);
         ae2ItemAmounts.put(networkId, snapshot);
         ae2ItemDeltas.put(networkId, deltas);
 
         // ── 双缓冲滑动窗口速率计算 ───────────────────────────────────────────────
-        // 仅在有上次快照时才累积（跳过初始化采样，避免"物品凭空出现"的假正增量污染数据）
-        if (!previous.isEmpty()) {
+        // 预热期结束后才开始累积增量，避免 AE2 缓存库存不完整导致虚假增量污染 KPI
+        if (!warmingUp) {
             Map<String, Long> curCons = ae2ItemConsCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
             Map<String, Long> curProd = ae2ItemProdCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
+            // ── KPI 聚合累加（物品 + 流体分开计数） ──────────────────────────
+            long[] kpiCur = kpiAccumCurrent.computeIfAbsent(networkId, k -> new long[4]);
             for (Map.Entry<String, Long> entry : deltas.entrySet()) {
-                if (!isItemEntryId(entry.getKey())) continue;
                 long d = entry.getValue();
-                if (d < 0) curCons.merge(entry.getKey(), -d, Long::sum);
-                else if (d > 0) curProd.merge(entry.getKey(), d, Long::sum);
+                if (isFluidEntryId(entry.getKey())) {
+                    // 流体 → KPI 聚合
+                    if (d > 0) kpiCur[2] = saturatingAdd(kpiCur[2], d);
+                    else if (d < 0) kpiCur[3] = saturatingAdd(kpiCur[3], -d);
+                } else {
+                    // 物品 → 逐物品窗口 + KPI 聚合
+                    if (d < 0) curCons.merge(entry.getKey(), -d, Long::sum);
+                    else if (d > 0) curProd.merge(entry.getKey(), d, Long::sum);
+                    if (d > 0) kpiCur[0] = saturatingAdd(kpiCur[0], d);
+                    else if (d < 0) kpiCur[1] = saturatingAdd(kpiCur[1], -d);
+                }
             }
             int curSamples = ae2ItemWindowSampleCount.merge(networkId, 1, Integer::sum);
+            // DEBUG: per-sample delta log（启动时加 -Dresobs.ratedebug=true 开启）
+            if (RATE_DEBUG && !deltas.isEmpty()) {
+                ResourceObserverMod.LOGGER.info("[RateDebug] DELTA net={} smp={} deltas={}",
+                        networkId, curSamples, deltas);
+            }
 
             // 合并当前窗口 + 上一完整窗口，计算组合平均速率（覆盖 12–24 秒历史）
             Map<String, Long> prevCons    = ae2ItemConsPrev.getOrDefault(networkId, Map.of());
             Map<String, Long> prevProd    = ae2ItemProdPrev.getOrDefault(networkId, Map.of());
             int prevSamples = ae2ItemPrevWindowSampleCount.getOrDefault(networkId, 0);
             int totalSamples = Math.max(1, curSamples + prevSamples);
-            final long toPerMin = 20L * 60L / SAMPLE_INTERVAL;  // = 120
+            // 使用浮点除法消除整数截断误差
+            final double toPerMin = 20.0 * 60.0 / SAMPLE_INTERVAL;  // = 120.0
 
-            Map<String, Long> rates = new HashMap<>();
-            Map<String, Long> prodRates = new HashMap<>();
-            Map<String, Long> consRates = new HashMap<>();
+            Map<String, Double> rates = new HashMap<>();
+            Map<String, Double> prodRates = new HashMap<>();
+            Map<String, Double> consRates = new HashMap<>();
             java.util.Set<String> allItems = new java.util.HashSet<>(curCons.keySet());
             allItems.addAll(curProd.keySet());
             allItems.addAll(prevCons.keySet());
             allItems.addAll(prevProd.keySet());
+            // 服务端 EMA 状态：平滑窗口旋转和采样噪声
+            Map<String, Double> prevProdEma = ae2ItemProdRateEma.computeIfAbsent(networkId, k -> new HashMap<>());
+            Map<String, Double> prevConsEma = ae2ItemConsRateEma.computeIfAbsent(networkId, k -> new HashMap<>());
             for (String itemId : allItems) {
                 long consumed = curCons.getOrDefault(itemId, 0L) + prevCons.getOrDefault(itemId, 0L);
                 long produced = curProd.getOrDefault(itemId, 0L) + prevProd.getOrDefault(itemId, 0L);
-                // 正值=净生产，负值=净消耗（单位：每分钟）
-                long netRatePerMin = (produced - consumed) * toPerMin / totalSamples;
-                if (netRatePerMin != 0) rates.put(itemId, netRatePerMin);
-                // 分别计算生产和消耗速率（单位：每分钟，≥0）
-                long prodRatePerMin = produced * toPerMin / totalSamples;
-                long consRatePerMin = consumed * toPerMin / totalSamples;
-                if (prodRatePerMin > 0) prodRates.put(itemId, prodRatePerMin);
-                if (consRatePerMin > 0) consRates.put(itemId, consRatePerMin);
+                // 浮点速率（无截断噪声）
+                double rawProd = produced * toPerMin / totalSamples;
+                double rawCons = consumed * toPerMin / totalSamples;
+                // 服务端 EMA：第一次使用原始值播种，避免冷启动时跳变
+                double smoothProd = SERVER_RATE_EMA_ALPHA * rawProd
+                        + (1.0 - SERVER_RATE_EMA_ALPHA) * prevProdEma.getOrDefault(itemId, rawProd);
+                double smoothCons = SERVER_RATE_EMA_ALPHA * rawCons
+                        + (1.0 - SERVER_RATE_EMA_ALPHA) * prevConsEma.getOrDefault(itemId, rawCons);
+                prevProdEma.put(itemId, smoothProd);
+                prevConsEma.put(itemId, smoothCons);
+                double netRatePerMin = smoothProd - smoothCons;
+                if (Math.abs(netRatePerMin) > 0.001) rates.put(itemId, netRatePerMin);
+                if (smoothProd > 0.001) prodRates.put(itemId, smoothProd);
+                if (smoothCons > 0.001) consRates.put(itemId, smoothCons);
             }
             ae2ItemRatesPerMin.put(networkId, rates);
             ae2ItemProdRatesPerMin.put(networkId, prodRates);
             ae2ItemConsRatesPerMin.put(networkId, consRates);
+
+            // DEBUG: window completion log — 每 24 样本（12 秒）输出一次原始计算信息
+            if (RATE_DEBUG && curSamples == RATE_WINDOW_SAMPLES) {
+                ResourceObserverMod.LOGGER.info(
+                        "[RateDebug] WINDOW_END net={} curSmp={} prevSmp={} totalSmp={}",
+                        networkId, curSamples, prevSamples, totalSamples);
+                for (String dbgItem : allItems) {
+                    long dbgCurC  = curCons.getOrDefault(dbgItem, 0L);
+                    long dbgPrevC = prevCons.getOrDefault(dbgItem, 0L);
+                    long dbgCurP  = curProd.getOrDefault(dbgItem, 0L);
+                    long dbgPrevP = prevProd.getOrDefault(dbgItem, 0L);
+                    if (dbgCurC + dbgPrevC + dbgCurP + dbgPrevP == 0) continue;
+                    double dbgRawCons = (dbgCurC + dbgPrevC) * toPerMin / totalSamples;
+                    double dbgRawProd = (dbgCurP + dbgPrevP) * toPerMin / totalSamples;
+                    ResourceObserverMod.LOGGER.info(
+                            "[RateDebug]   item={} curCons={} prevCons={} rawCons={} smoothCons={}"
+                                    + " | curProd={} prevProd={} rawProd={} smoothProd={}",
+                            dbgItem, dbgCurC, dbgPrevC,
+                            String.format(Locale.ROOT, "%.1f", dbgRawCons),
+                            String.format(Locale.ROOT, "%.1f", consRates.getOrDefault(dbgItem, 0.0)),
+                            dbgCurP, dbgPrevP,
+                            String.format(Locale.ROOT, "%.1f", dbgRawProd),
+                            String.format(Locale.ROOT, "%.1f", prodRates.getOrDefault(dbgItem, 0.0)));
+                }
+            }
 
             // 当前窗口满后滚动：将当前窗口升格为"上一窗口"，重置当前窗口
             if (curSamples >= RATE_WINDOW_SAMPLES) {
@@ -647,6 +777,9 @@ public class ObserverBlockEntity extends BlockEntity {
                 curCons.clear();
                 curProd.clear();
                 ae2ItemWindowSampleCount.put(networkId, 0);
+                // KPI 聚合窗口同步滚动
+                kpiAccumPrev.put(networkId, kpiCur.clone());
+                kpiAccumCurrent.put(networkId, new long[4]);
             }
         }
 
@@ -2476,6 +2609,9 @@ public class ObserverBlockEntity extends BlockEntity {
         ae2ItemProdPrev.clear();
         ae2ItemWindowSampleCount.clear();
         ae2ItemPrevWindowSampleCount.clear();
+        ae2WarmupRemaining.clear();
+        kpiAccumCurrent.clear();
+        kpiAccumPrev.clear();
         ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
         capacityWarnSignatureMap.clear();

@@ -1,7 +1,6 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
-import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.ui.state.TableSortMode;
 import com.yuyinrl.resourceobserver.ui.state.TableStatusFilter;
 import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
@@ -52,21 +51,25 @@ public final class OverviewViewModelMapper {
         // 遍历所有绑定，构建表格行数据
         List<OverviewViewModel.TableRow> allRows = new ArrayList<>();
         for (ObserverDataPayload.BindingEntry binding : payload.bindings()) {
-            windowStatsAggregation = windowStatsAggregation.merge(binding.kpiWindowStats());
+            // 仅聚合物品/流体类绑定的 KPI 数据，跳过能量绑定（FLUX_ENERGY）
+            // FLUX 的 RF/tick 数据不应计入物品生产/消耗速率，否则会将百万级能量误算为物品
+            if (!"FLUX_ENERGY".equals(binding.networkType())) {
+                windowStatsAggregation = windowStatsAggregation.merge(binding.kpiWindowStats());
+            }
             cellCapacityAggregation = cellCapacityAggregation.merge(binding);
 
             // 为每种物品创建表格行
             for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
-                long production = item.productionRate();    // 服务端提供的每分钟生产速率（≥0）
-                long consumption = item.consumptionRate();  // 服务端提供的每分钟消耗速率（≥0）
-                long net = item.delta();
+                double production = item.productionRate();   // 服务端提供的每分钟生产速率（≥0）
+                double consumption = item.consumptionRate(); // 服务端提供的每分钟消耗速率（≥0）
+                long net = Math.round(production - consumption); // 净变化（四舍五入）
                 String localizedName = localizeEntryName(item.entryType(), item.itemId(), item.displayName());
                 allRows.add(new OverviewViewModel.TableRow(
                         item.itemId(),
                         localizedName,
                         normalizeGroupKey(item.groupKey()),
-                        production,
-                        consumption,
+                        Math.round(production),
+                        Math.round(consumption),
                         net,
                         item.amount(),
                         isCritical(net, item.amount()),
@@ -85,7 +88,6 @@ public final class OverviewViewModelMapper {
         StoragePresentation storagePresentation = buildStoragePresentation(cellCapacityAggregation);
         KpiPresentation kpiPresentation = buildKpiPresentation(
                 windowStatsAggregation,
-                payload.chartWindow(),
                 storagePresentation.storageKpi()
         );
         // 转换图表数据点
@@ -126,9 +128,9 @@ public final class OverviewViewModelMapper {
         List<OverviewViewModel.TableGroup> groupedRows = groupRows(filteredRows, uiState.groupFilterKey(), uiState.groups());
 
         return new OverviewViewModel(
-                "OPERATIONS DASHBOARD",
-                "Global monitoring of linked storage networks and resource flow.",
-                "LINK ESTABLISHED",
+                Component.translatable("screen.resourceobserver.overview.header.title").getString(),
+                Component.translatable("screen.resourceobserver.overview.header.subtitle").getString(),
+                Component.translatable("screen.resourceobserver.overview.link_status").getString(),
                 kpiPresentation.kpis(),
                 payload.chartWindow(),
                 payload.chartScopeItemId(),
@@ -151,24 +153,20 @@ public final class OverviewViewModelMapper {
      */
     private static KpiPresentation buildKpiPresentation(
             WindowStatsAggregation stats,
-            ChartWindow chartWindow,
             OverviewViewModel.KpiMetric storageKpi
     ) {
-        boolean recentAvailable = stats.recentBucketCount() > 0;
-        boolean previousAvailable = stats.previousBucketCount() > 0;
+        boolean recentAvailable = stats.recentAvailable();
+        boolean previousAvailable = stats.previousAvailable();
         boolean baseTrendAvailable = stats.trendAvailable() && recentAvailable && previousAvailable;
-        // 效率公式：消耗/生产比。efficiency=1.0 表示生产与消耗完全平衡，
-        // 显示值 = (1 - max(0, ratio-1)) * 100：
-        //   ratio=0.8 → 消耗低于生产 → 显示 100%（因为 max(0, -0.2)=0）
-        //   ratio=1.5 → 消耗超出生产 50% → 显示 50%
-        double itemProducedRecentRate = ratePerMinute(stats.itemProducedRecent(), stats.recentBucketCount(), chartWindow);
-        double itemProducedPreviousRate = ratePerMinute(stats.itemProducedPrevious(), stats.previousBucketCount(), chartWindow);
-        double itemConsumedRecentRate = ratePerMinute(stats.itemConsumedRecent(), stats.recentBucketCount(), chartWindow);
-        double itemConsumedPreviousRate = ratePerMinute(stats.itemConsumedPrevious(), stats.previousBucketCount(), chartWindow);
-        double fluidProducedRecentRate = ratePerMinute(stats.fluidProducedRecent(), stats.recentBucketCount(), chartWindow);
-        double fluidProducedPreviousRate = ratePerMinute(stats.fluidProducedPrevious(), stats.previousBucketCount(), chartWindow);
-        double fluidConsumedRecentRate = ratePerMinute(stats.fluidConsumedRecent(), stats.recentBucketCount(), chartWindow);
-        double fluidConsumedPreviousRate = ratePerMinute(stats.fluidConsumedPrevious(), stats.previousBucketCount(), chartWindow);
+        // 直接使用聚合后的速率（已在 merge 阶段按各绑定独立计算并累加）
+        double itemProducedRecentRate = stats.itemProducedRecentRate();
+        double itemProducedPreviousRate = stats.itemProducedPreviousRate();
+        double itemConsumedRecentRate = stats.itemConsumedRecentRate();
+        double itemConsumedPreviousRate = stats.itemConsumedPreviousRate();
+        double fluidProducedRecentRate = stats.fluidProducedRecentRate();
+        double fluidProducedPreviousRate = stats.fluidProducedPreviousRate();
+        double fluidConsumedRecentRate = stats.fluidConsumedRecentRate();
+        double fluidConsumedPreviousRate = stats.fluidConsumedPreviousRate();
 
         boolean itemProductionTrendAvailable = baseTrendAvailable && itemProducedPreviousRate > 0.0d;
         boolean itemConsumptionTrendAvailable = baseTrendAvailable && itemConsumedPreviousRate > 0.0d;
@@ -224,16 +222,16 @@ public final class OverviewViewModelMapper {
         List<OverviewViewModel.KpiMetric> kpis = new ArrayList<>(4);
         kpis.add(new OverviewViewModel.KpiMetric(
                 OverviewViewModel.KpiType.PRODUCTION,
-                "screen.resourceobserver.overview.section.kpi_production",
-                recentAvailable ? formatRateCompact(itemProducedRecentRate, "/min") : naText(),
+                Component.translatable("screen.resourceobserver.overview.section.kpi_production").getString(),
+                recentAvailable ? formatRateCompact(itemProducedRecentRate, "/min") : loadingText(),
                 productionTrendText,
                 productionStatus,
                 "resourceobserver:terminal/kpi_production"
         ));
         kpis.add(new OverviewViewModel.KpiMetric(
                 OverviewViewModel.KpiType.CONSUMPTION,
-                "screen.resourceobserver.overview.section.kpi_consumption",
-                recentAvailable ? formatRateCompact(itemConsumedRecentRate, "/min") : naText(),
+                Component.translatable("screen.resourceobserver.overview.section.kpi_consumption").getString(),
+                recentAvailable ? formatRateCompact(itemConsumedRecentRate, "/min") : loadingText(),
                 consumptionTrendText,
                 consumptionStatus,
                 "resourceobserver:terminal/kpi_consumption"
@@ -241,8 +239,8 @@ public final class OverviewViewModelMapper {
         kpis.add(storageKpi);
         kpis.add(new OverviewViewModel.KpiMetric(
                 OverviewViewModel.KpiType.BALANCE,
-                "screen.resourceobserver.overview.section.kpi_balance",
-                recentAvailable ? formatSignedPoints(itemBalanceRecent) : naText(),
+                Component.translatable("screen.resourceobserver.overview.section.kpi_balance").getString(),
+                recentAvailable ? formatSignedPoints(itemBalanceRecent) : loadingText(),
                 balanceTrendText,
                 balanceStatus,
                 "resourceobserver:terminal/kpi_efficiency"
@@ -257,7 +255,7 @@ public final class OverviewViewModelMapper {
                 new OverviewViewModel.KpiDetailChannel(
                         Component.translatable("screen.resourceobserver.overview.kpi.detail.channel.item").getString(),
                         detailLine("screen.resourceobserver.overview.kpi.detail.recent",
-                                recentAvailable ? formatRateExact(itemProducedRecentRate, "/min") : naText()),
+                                recentAvailable ? formatRateExact(itemProducedRecentRate, "/min") : loadingText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.previous",
                                 previousAvailable ? formatRateExact(itemProducedPreviousRate, "/min") : naText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.change",
@@ -267,7 +265,7 @@ public final class OverviewViewModelMapper {
                 new OverviewViewModel.KpiDetailChannel(
                         Component.translatable("screen.resourceobserver.overview.kpi.detail.channel.fluid").getString(),
                         detailLine("screen.resourceobserver.overview.kpi.detail.recent",
-                                recentAvailable ? formatRateExact(fluidProducedRecentRate, "B/min") : naText()),
+                                recentAvailable ? formatRateExact(fluidProducedRecentRate, "B/min") : loadingText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.previous",
                                 previousAvailable ? formatRateExact(fluidProducedPreviousRate, "B/min") : naText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.change",
@@ -283,7 +281,7 @@ public final class OverviewViewModelMapper {
                 new OverviewViewModel.KpiDetailChannel(
                         Component.translatable("screen.resourceobserver.overview.kpi.detail.channel.item").getString(),
                         detailLine("screen.resourceobserver.overview.kpi.detail.recent",
-                                recentAvailable ? formatRateExact(itemConsumedRecentRate, "/min") : naText()),
+                                recentAvailable ? formatRateExact(itemConsumedRecentRate, "/min") : loadingText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.previous",
                                 previousAvailable ? formatRateExact(itemConsumedPreviousRate, "/min") : naText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.change",
@@ -293,7 +291,7 @@ public final class OverviewViewModelMapper {
                 new OverviewViewModel.KpiDetailChannel(
                         Component.translatable("screen.resourceobserver.overview.kpi.detail.channel.fluid").getString(),
                         detailLine("screen.resourceobserver.overview.kpi.detail.recent",
-                                recentAvailable ? formatRateExact(fluidConsumedRecentRate, "B/min") : naText()),
+                                recentAvailable ? formatRateExact(fluidConsumedRecentRate, "B/min") : loadingText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.previous",
                                 previousAvailable ? formatRateExact(fluidConsumedPreviousRate, "B/min") : naText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.change",
@@ -309,7 +307,7 @@ public final class OverviewViewModelMapper {
                 new OverviewViewModel.KpiDetailChannel(
                         Component.translatable("screen.resourceobserver.overview.kpi.detail.channel.item").getString(),
                         detailLine("screen.resourceobserver.overview.kpi.detail.recent",
-                                recentAvailable ? formatSignedPoints(itemBalanceRecent) : naText()),
+                                recentAvailable ? formatSignedPoints(itemBalanceRecent) : loadingText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.previous",
                                 previousAvailable ? formatSignedPoints(itemBalancePrevious) : naText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.change",
@@ -319,7 +317,7 @@ public final class OverviewViewModelMapper {
                 new OverviewViewModel.KpiDetailChannel(
                         Component.translatable("screen.resourceobserver.overview.kpi.detail.channel.fluid").getString(),
                         detailLine("screen.resourceobserver.overview.kpi.detail.recent",
-                                recentAvailable ? formatSignedPoints(fluidBalanceRecent) : naText()),
+                                recentAvailable ? formatSignedPoints(fluidBalanceRecent) : loadingText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.previous",
                                 previousAvailable ? formatSignedPoints(fluidBalancePrevious) : naText()),
                         detailLine("screen.resourceobserver.overview.kpi.detail.change",
@@ -388,17 +386,6 @@ public final class OverviewViewModelMapper {
         };
     }
 
-    private static double ratePerMinute(long total, int bucketCount, ChartWindow chartWindow) {
-        if (bucketCount <= 0 || chartWindow == null) {
-            return Double.NaN;
-        }
-        double minutes = (bucketCount * chartWindow.bucketTicks()) / 1200.0d;
-        if (minutes <= 0.0d) {
-            return Double.NaN;
-        }
-        return total / minutes;
-    }
-
     private static double percentChange(double recent, double previous) {
         if (!Double.isFinite(recent) || !Double.isFinite(previous) || previous <= 0.0d) {
             return 0.0d;
@@ -430,6 +417,11 @@ public final class OverviewViewModelMapper {
 
     private static String naText() {
         return Component.translatable("screen.resourceobserver.overview.kpi.detail.na").getString();
+    }
+
+    /** 预热期占位文字（"Loading..." / "加载中…"） */
+    private static String loadingText() {
+        return Component.translatable("screen.resourceobserver.overview.kpi.loading").getString();
     }
 
     private static String formatRateCompact(double value, String unitSuffix) {
@@ -474,7 +466,7 @@ public final class OverviewViewModelMapper {
             String hint = Component.translatable("screen.resourceobserver.overview.kpi.storage.not_ae2").getString();
             OverviewViewModel.KpiMetric kpi = new OverviewViewModel.KpiMetric(
                     OverviewViewModel.KpiType.STORAGE,
-                    "screen.resourceobserver.overview.section.kpi_storage",
+                    Component.translatable("screen.resourceobserver.overview.section.kpi_storage").getString(),
                     "N/A",
                     hint,
                     OverviewViewModel.Status.NEUTRAL,
@@ -558,7 +550,7 @@ public final class OverviewViewModelMapper {
 
         OverviewViewModel.KpiMetric kpi = new OverviewViewModel.KpiMetric(
                 OverviewViewModel.KpiType.STORAGE,
-                "screen.resourceobserver.overview.section.kpi_storage",
+                Component.translatable("screen.resourceobserver.overview.section.kpi_storage").getString(),
                 Component.translatable("screen.resourceobserver.overview.kpi.storage.open_detail").getString(),
                 hint,
                 status,
@@ -922,62 +914,46 @@ public final class OverviewViewModelMapper {
     ) {
     }
 
+    /**
+     * 聚合多个绑定的 KPI 速率数据。
+     * 服务端已预计算每分钟速率，客户端仅需累加各绑定的速率值。
+     */
     private record WindowStatsAggregation(
-            long itemProducedRecent,
-            long itemConsumedRecent,
-            long itemProducedPrevious,
-            long itemConsumedPrevious,
-            long fluidProducedRecent,
-            long fluidConsumedRecent,
-            long fluidProducedPrevious,
-            long fluidConsumedPrevious,
-            int recentBucketCount,
-            int previousBucketCount,
+            double itemProducedRecentRate,
+            double itemConsumedRecentRate,
+            double itemProducedPreviousRate,
+            double itemConsumedPreviousRate,
+            double fluidProducedRecentRate,
+            double fluidConsumedRecentRate,
+            double fluidProducedPreviousRate,
+            double fluidConsumedPreviousRate,
+            boolean recentAvailable,
+            boolean previousAvailable,
             boolean trendAvailable
     ) {
         private static WindowStatsAggregation empty() {
             return new WindowStatsAggregation(
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0,
-                    0,
-                    false
+                    0.0d, 0.0d, 0.0d, 0.0d,
+                    0.0d, 0.0d, 0.0d, 0.0d,
+                    false, false, false
             );
         }
 
         private WindowStatsAggregation merge(ObserverDataPayload.KpiWindowStats stats) {
             if (stats == null) {
-                return new WindowStatsAggregation(
-                        itemProducedRecent,
-                        itemConsumedRecent,
-                        itemProducedPrevious,
-                        itemConsumedPrevious,
-                        fluidProducedRecent,
-                        fluidConsumedRecent,
-                        fluidProducedPrevious,
-                        fluidConsumedPrevious,
-                        recentBucketCount,
-                        previousBucketCount,
-                        false
-                );
+                return this;
             }
             return new WindowStatsAggregation(
-                    saturatingAdd(itemProducedRecent, Math.max(0L, stats.itemProducedRecent())),
-                    saturatingAdd(itemConsumedRecent, Math.max(0L, stats.itemConsumedRecent())),
-                    saturatingAdd(itemProducedPrevious, Math.max(0L, stats.itemProducedPrevious())),
-                    saturatingAdd(itemConsumedPrevious, Math.max(0L, stats.itemConsumedPrevious())),
-                    saturatingAdd(fluidProducedRecent, Math.max(0L, stats.fluidProducedRecent())),
-                    saturatingAdd(fluidConsumedRecent, Math.max(0L, stats.fluidConsumedRecent())),
-                    saturatingAdd(fluidProducedPrevious, Math.max(0L, stats.fluidProducedPrevious())),
-                    saturatingAdd(fluidConsumedPrevious, Math.max(0L, stats.fluidConsumedPrevious())),
-                    Math.max(recentBucketCount, Math.max(0, stats.recentBucketCount())),
-                    Math.max(previousBucketCount, Math.max(0, stats.previousBucketCount())),
+                    itemProducedRecentRate + stats.itemProducedRecentRate(),
+                    itemConsumedRecentRate + stats.itemConsumedRecentRate(),
+                    itemProducedPreviousRate + stats.itemProducedPreviousRate(),
+                    itemConsumedPreviousRate + stats.itemConsumedPreviousRate(),
+                    fluidProducedRecentRate + stats.fluidProducedRecentRate(),
+                    fluidConsumedRecentRate + stats.fluidConsumedRecentRate(),
+                    fluidProducedPreviousRate + stats.fluidProducedPreviousRate(),
+                    fluidConsumedPreviousRate + stats.fluidConsumedPreviousRate(),
+                    recentAvailable || stats.recentAvailable(),
+                    previousAvailable || stats.previousAvailable(),
                     trendAvailable || stats.trendAvailable()
             );
         }

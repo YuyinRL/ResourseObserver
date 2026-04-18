@@ -16,7 +16,8 @@ public record PowerNetworkViewModel(
         long totalStored,
         long totalCapacity,
         long totalDemandFEt,
-        DebugSnapshot debugSnapshot
+        DebugSnapshot debugSnapshot,
+        List<ConsumerEntry> consumers
 ) {
     public enum AlertLevel {
         NORMAL,
@@ -28,6 +29,7 @@ public record PowerNetworkViewModel(
             String nodeId,
             String displayName,
             String category,
+            String modName,
             long energyPerTick,
             long storedEnergy,
             long maxCapacity,
@@ -99,7 +101,8 @@ public record PowerNetworkViewModel(
             String extId,
             String displayName,
             long stored,
-            long capacity
+            long capacity,
+            long maxAcceptPerTick
     ) {
     }
 
@@ -109,6 +112,21 @@ public record PowerNetworkViewModel(
             long stored,
             long capacity,
             List<String> interfaceKeys
+    ) {
+    }
+
+    /**
+     * 从输出接口（Point）的相邻设备检测到的用电器。
+     * 按设备名称分组，汇总传输速率。
+     */
+    public record ConsumerEntry(
+            String deviceName,
+            String modName,
+            long consumptionPerTick,
+            double percentage,
+            double supplyRatio,
+            int color,
+            int count
     ) {
     }
 }

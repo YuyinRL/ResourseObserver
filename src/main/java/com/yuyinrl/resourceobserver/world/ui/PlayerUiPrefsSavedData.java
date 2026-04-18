@@ -55,8 +55,13 @@ public class PlayerUiPrefsSavedData extends SavedData {
     private static final String TAG_GROUP_SYSTEM = "group_system";
     private static final String TAG_ITEM_GROUPS = "item_groups";
     private static final String TAG_DEBUG_MODE = "debug_mode";
+    private static final String TAG_NETWORK_NAMES = "network_names";
+    private static final String TAG_NETWORK_ID = "network_id";
+    private static final String TAG_CUSTOM_NAME = "custom_name";
     /** 分组名称最大长度 */
     private static final int GROUP_NAME_MAX_LEN = 24;
+    /** 网络自定义名称最大长度 */
+    private static final int NETWORK_NAME_MAX_LEN = 32;
 
     private static final Factory<PlayerUiPrefsSavedData> FACTORY =
             new Factory<>(PlayerUiPrefsSavedData::new, PlayerUiPrefsSavedData::load);
@@ -121,6 +126,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
             case RENAME_GROUP -> prefs.renameGroup(itemId, actionValue);      // 重命名分组
             case DELETE_GROUP -> prefs.deleteGroup(itemId);          // 删除分组
             case CLEAR_ITEM_GROUP -> prefs.clearItemGroup(targets);  // 清除分组
+            case RENAME_NETWORK -> prefs.renameNetwork(itemId, actionValue); // 重命名网络节点
         };
         if (result.changed()) {
             setDirty(); // 标记数据已修改，触发自动保存
@@ -168,6 +174,16 @@ public class PlayerUiPrefsSavedData extends SavedData {
             playerTag.putBoolean(TAG_SORT_DESC, entry.getValue().sortDesc);
             playerTag.putString(TAG_STATUS_FILTER, entry.getValue().statusFilter.key());
             playerTag.putBoolean(TAG_DEBUG_MODE, entry.getValue().debugMode);
+
+            ListTag networkNames = new ListTag();
+            for (Map.Entry<String, String> nameEntry : entry.getValue().networkCustomNames.entrySet()) {
+                CompoundTag nameTag = new CompoundTag();
+                nameTag.putString(TAG_NETWORK_ID, nameEntry.getKey());
+                nameTag.putString(TAG_CUSTOM_NAME, nameEntry.getValue());
+                networkNames.add(nameTag);
+            }
+            playerTag.put(TAG_NETWORK_NAMES, networkNames);
+
             playersTag.add(playerTag);
         }
         tag.put(TAG_PLAYERS, playersTag);
@@ -247,6 +263,19 @@ public class PlayerUiPrefsSavedData extends SavedData {
             prefs.sortDesc = !playerTag.contains(TAG_SORT_DESC, Tag.TAG_BYTE) || playerTag.getBoolean(TAG_SORT_DESC);
             prefs.statusFilter = TableStatusFilter.fromKey(playerTag.getString(TAG_STATUS_FILTER));
             prefs.debugMode = playerTag.contains(TAG_DEBUG_MODE, Tag.TAG_BYTE) && playerTag.getBoolean(TAG_DEBUG_MODE);
+
+            if (playerTag.contains(TAG_NETWORK_NAMES, Tag.TAG_LIST)) {
+                ListTag networkNames = playerTag.getList(TAG_NETWORK_NAMES, Tag.TAG_COMPOUND);
+                for (int j = 0; j < networkNames.size(); j++) {
+                    CompoundTag nameTag = networkNames.getCompound(j);
+                    String netId = nameTag.getString(TAG_NETWORK_ID);
+                    String customName = nameTag.getString(TAG_CUSTOM_NAME);
+                    if (!netId.isBlank() && !customName.isBlank()) {
+                        prefs.networkCustomNames.put(netId, customName);
+                    }
+                }
+            }
+
             data.players.put(playerId, prefs);
         }
         return data;
@@ -342,6 +371,8 @@ public class PlayerUiPrefsSavedData extends SavedData {
         private TableStatusFilter statusFilter = TableStatusFilter.ALL;
         /** 观察者调试模式开关 */
         private boolean debugMode = false;
+        /** 网络自定义名称映射（networkId → 自定义名称） */
+        private final Map<String, String> networkCustomNames = new HashMap<>();
 
         /** 创建默认偏好（包含系统分组） */
         private static PlayerPrefs defaults() {
@@ -367,7 +398,8 @@ public class PlayerUiPrefsSavedData extends SavedData {
                     Map.copyOf(itemGroupMap),
                     sortMode,
                     sortDesc,
-                    statusFilter
+                    statusFilter,
+                    Map.copyOf(networkCustomNames)
             );
         }
 
@@ -596,6 +628,31 @@ public class PlayerUiPrefsSavedData extends SavedData {
             }
             return key;
         }
+
+        /**
+         * 重命名网络节点（自定义显示名称）。
+         * 空名称或空白名称会清除自定义名称（恢复默认名称）。
+         */
+        private ActionResult renameNetwork(String networkId, String newName) {
+            if (networkId == null || networkId.isBlank()) {
+                return ActionResult.NO_CHANGE;
+            }
+            if (newName == null || newName.isBlank()) {
+                // 清除自定义名称
+                return networkCustomNames.remove(networkId) != null
+                        ? ActionResult.changedSuccess() : ActionResult.NO_CHANGE;
+            }
+            String trimmed = newName.trim();
+            if (trimmed.length() > NETWORK_NAME_MAX_LEN) {
+                trimmed = trimmed.substring(0, NETWORK_NAME_MAX_LEN);
+            }
+            String old = networkCustomNames.get(networkId);
+            if (trimmed.equals(old)) {
+                return ActionResult.NO_CHANGE;
+            }
+            networkCustomNames.put(networkId, trimmed);
+            return ActionResult.changedSuccess();
+        }
     }
 
     /**
@@ -617,7 +674,8 @@ public class PlayerUiPrefsSavedData extends SavedData {
             Map<String, String> itemGroupMap,
             TableSortMode sortMode,
             boolean sortDesc,
-            TableStatusFilter statusFilter
+            TableStatusFilter statusFilter,
+            Map<String, String> networkCustomNames
     ) {
         /** 返回默认偏好快照 */
         public static PlayerUiPrefsSnapshot defaults() {
@@ -628,7 +686,8 @@ public class PlayerUiPrefsSavedData extends SavedData {
                     Map.of(),
                     TableSortMode.NET,
                     true,
-                    TableStatusFilter.ALL
+                    TableStatusFilter.ALL,
+                    Map.of()
             );
         }
 
@@ -639,6 +698,12 @@ public class PlayerUiPrefsSavedData extends SavedData {
             }
             String key = itemGroupMap.get(itemId);
             return key == null || key.isBlank() ? GROUP_UNGROUPED : key;
+        }
+
+        /** 查询网络的自定义名称，未设置则返回 null */
+        public String customNameForNetwork(String networkId) {
+            if (networkId == null || networkId.isBlank()) return null;
+            return networkCustomNames.get(networkId);
         }
     }
 

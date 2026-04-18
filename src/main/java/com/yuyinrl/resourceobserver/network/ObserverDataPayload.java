@@ -158,32 +158,33 @@ public record ObserverDataPayload(
         }
     }
 
+    /**
+     * KPI 时间窗口统计 —— 包含服务端预计算的每分钟速率（items/min 或 bytes/min）。
+     * <p>
+     * 速率公式（服务端计算）：rate = (区间内总增量 ÷ (bucketCount × bucketTicks)) × 1200
+     * 其中 1200 ticks = 1 分钟（20 ticks/s × 60s）。
+     * <p>
+     * recent = 最近 1/4 窗口的速率；previous = 倒数第二个 1/4 窗口的速率。
+     * trendAvailable = 两个区间都有完整数据时为 true。
+     */
     public record KpiWindowStats(
-            long itemProducedRecent,
-            long itemConsumedRecent,
-            long itemProducedPrevious,
-            long itemConsumedPrevious,
-            long fluidProducedRecent,
-            long fluidConsumedRecent,
-            long fluidProducedPrevious,
-            long fluidConsumedPrevious,
-            int recentBucketCount,
-            int previousBucketCount,
+            double itemProducedRecentRate,
+            double itemConsumedRecentRate,
+            double itemProducedPreviousRate,
+            double itemConsumedPreviousRate,
+            double fluidProducedRecentRate,
+            double fluidConsumedRecentRate,
+            double fluidProducedPreviousRate,
+            double fluidConsumedPreviousRate,
+            boolean recentAvailable,
+            boolean previousAvailable,
             boolean trendAvailable
     ) {
         public static KpiWindowStats unavailable() {
             return new KpiWindowStats(
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0,
-                    0,
-                    false
+                    0.0d, 0.0d, 0.0d, 0.0d,
+                    0.0d, 0.0d, 0.0d, 0.0d,
+                    false, false, false
             );
         }
     }
@@ -237,9 +238,9 @@ public record ObserverDataPayload(
             String groupKey,
             String iconSprite,
             long amount,
-            long delta,
-            long productionRate,
-            long consumptionRate
+            double delta,
+            double productionRate,
+            double consumptionRate
     ) {
     }
 
@@ -283,7 +284,7 @@ public record ObserverDataPayload(
                     boolean debugPreferred = buf.readBoolean();
                     ChartWindow chartWindow = ChartWindow.fromId(buf.readVarInt());
                     ChartScope chartScope = ChartScope.fromId(buf.readVarInt());
-                    String chartScopeItemId = buf.readBoolean() ? buf.readUtf(256) : "";
+                    String chartScopeItemId = PayloadCodecUtils.readOptionalString(buf, 256);
                     List<ChartPoint> chartSeries = readChartSeries(buf);
                     List<ChartPoint> energyChartSeries = readChartSeries(buf);
                     String tableGroupFilterKey = buf.readUtf(64);
@@ -340,11 +341,7 @@ public record ObserverDataPayload(
                     buf.writeBoolean(payload.debugPreferred);
                     buf.writeVarInt(payload.chartWindow.id());
                     buf.writeVarInt(payload.chartScope.id());
-                    boolean hasScopeItem = payload.chartScopeItemId != null && !payload.chartScopeItemId.isBlank();
-                    buf.writeBoolean(hasScopeItem);
-                    if (hasScopeItem) {
-                        buf.writeUtf(payload.chartScopeItemId, 256);
-                    }
+                    PayloadCodecUtils.writeOptionalString(buf, payload.chartScopeItemId, 256);
                     writeChartSeries(buf, payload.chartSeries);
                     writeChartSeries(buf, payload.energyChartSeries);
                     buf.writeUtf(payload.tableGroupFilterKey == null ? "" : payload.tableGroupFilterKey, 64);
@@ -368,20 +365,11 @@ public record ObserverDataPayload(
                         buf.writeLong(entry.totalConsumed);
                         writeKpiWindowStats(buf, entry.kpiWindowStats());
                         writeItemDeltas(buf, entry.itemDeltas());
-                        buf.writeUtf(clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
+                        buf.writeUtf(PayloadCodecUtils.clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
                     }
                 }
 
-                /** 截断 UTF 字符串至指定最大长度，防止超长调试信息导致数据包溢出 */
-                private static String clampUtf(String text, int maxLength) {
-                    if (text == null || text.isBlank()) {
-                        return "";
-                    }
-                    if (text.length() <= maxLength) {
-                        return text;
-                    }
-                    return text.substring(0, maxLength);
-                }
+
 
                 /** 反序列化存储单元容量指标（12 个 long + 1 个字符串 + 2 个布尔值） */
                 private static CellCapacityMetrics readCellCapacityMetrics(FriendlyByteBuf buf) {
@@ -438,32 +426,32 @@ public record ObserverDataPayload(
 
                 private static KpiWindowStats readKpiWindowStats(FriendlyByteBuf buf) {
                     return new KpiWindowStats(
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readVarInt(),
-                            buf.readVarInt(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readBoolean(),
+                            buf.readBoolean(),
                             buf.readBoolean()
                     );
                 }
 
                 private static void writeKpiWindowStats(FriendlyByteBuf buf, KpiWindowStats stats) {
                     KpiWindowStats safeStats = stats == null ? KpiWindowStats.unavailable() : stats;
-                    buf.writeLong(safeStats.itemProducedRecent());
-                    buf.writeLong(safeStats.itemConsumedRecent());
-                    buf.writeLong(safeStats.itemProducedPrevious());
-                    buf.writeLong(safeStats.itemConsumedPrevious());
-                    buf.writeLong(safeStats.fluidProducedRecent());
-                    buf.writeLong(safeStats.fluidConsumedRecent());
-                    buf.writeLong(safeStats.fluidProducedPrevious());
-                    buf.writeLong(safeStats.fluidConsumedPrevious());
-                    buf.writeVarInt(Math.max(0, safeStats.recentBucketCount()));
-                    buf.writeVarInt(Math.max(0, safeStats.previousBucketCount()));
+                    buf.writeDouble(safeStats.itemProducedRecentRate());
+                    buf.writeDouble(safeStats.itemConsumedRecentRate());
+                    buf.writeDouble(safeStats.itemProducedPreviousRate());
+                    buf.writeDouble(safeStats.itemConsumedPreviousRate());
+                    buf.writeDouble(safeStats.fluidProducedRecentRate());
+                    buf.writeDouble(safeStats.fluidConsumedRecentRate());
+                    buf.writeDouble(safeStats.fluidProducedPreviousRate());
+                    buf.writeDouble(safeStats.fluidConsumedPreviousRate());
+                    buf.writeBoolean(safeStats.recentAvailable());
+                    buf.writeBoolean(safeStats.previousAvailable());
                     buf.writeBoolean(safeStats.trendAvailable());
                 }
 
@@ -479,9 +467,9 @@ public record ObserverDataPayload(
                                 buf.readUtf(128),
                                 buf.readUtf(256),
                                 buf.readLong(),
-                                buf.readLong(),
-                                buf.readLong(),
-                                buf.readLong()
+                                buf.readDouble(),
+                                buf.readDouble(),
+                                buf.readDouble()
                         ));
                     }
                     return result;
@@ -498,9 +486,9 @@ public record ObserverDataPayload(
                         buf.writeUtf(itemDelta.groupKey(), 128);
                         buf.writeUtf(itemDelta.iconSprite(), 256);
                         buf.writeLong(itemDelta.amount());
-                        buf.writeLong(itemDelta.delta());
-                        buf.writeLong(itemDelta.productionRate());
-                        buf.writeLong(itemDelta.consumptionRate());
+                        buf.writeDouble(itemDelta.delta());
+                        buf.writeDouble(itemDelta.productionRate());
+                        buf.writeDouble(itemDelta.consumptionRate());
                     }
                 }
 

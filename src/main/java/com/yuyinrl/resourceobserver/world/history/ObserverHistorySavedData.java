@@ -41,6 +41,7 @@ public class ObserverHistorySavedData extends SavedData {
     private static final String TAG_DAY = "day";
     private static final String TAG_WEEK = "week";
     private static final String TAG_DEBUG_10M = "debug_10m";
+    private static final String TAG_HOUR = "hour";
     private static final String TAG_LATEST_BUCKET = "latest_bucket";
     private static final String TAG_SLOT_BUCKETS = "slot_buckets";
     private static final String TAG_PRODUCED = "produced";
@@ -54,6 +55,8 @@ public class ObserverHistorySavedData extends SavedData {
     private static final String TAG_ITEM_ID = "item_id";
     /** 物品系列数量超过此阈值时触发清理过期数据 */
     private static final int ITEM_PRUNE_THRESHOLD = 2048;
+    /** 每分钟的游戏 tick 数（20 ticks/s × 60s） */
+    private static final double TICKS_PER_MINUTE = 1200.0d;
 
     private static final Factory<ObserverHistorySavedData> FACTORY =
             new Factory<>(ObserverHistorySavedData::new, ObserverHistorySavedData::load);
@@ -226,6 +229,7 @@ public class ObserverHistorySavedData extends SavedData {
             tag.put(TAG_DAY, windows.get(ChartWindow.DAY_24H_5M).save());
             tag.put(TAG_WEEK, windows.get(ChartWindow.WEEK_7D_30M).save());
             tag.put(TAG_DEBUG_10M, windows.get(ChartWindow.DEBUG_10M_5S).save());
+            tag.put(TAG_HOUR, windows.get(ChartWindow.HOUR_1H_1M).save());
             return tag;
         }
 
@@ -240,6 +244,9 @@ public class ObserverHistorySavedData extends SavedData {
             }
             if (tag.contains(TAG_DEBUG_10M, Tag.TAG_COMPOUND)) {
                 history.windows.put(ChartWindow.DEBUG_10M_5S, WindowBuffer.load(ChartWindow.DEBUG_10M_5S, tag.getCompound(TAG_DEBUG_10M)));
+            }
+            if (tag.contains(TAG_HOUR, Tag.TAG_COMPOUND)) {
+                history.windows.put(ChartWindow.HOUR_1H_1M, WindowBuffer.load(ChartWindow.HOUR_1H_1M, tag.getCompound(TAG_HOUR)));
             }
             return history;
         }
@@ -338,7 +345,12 @@ public class ObserverHistorySavedData extends SavedData {
                     if (delta == 0L) {
                         continue;
                     }
-                    boolean fluid = isFluidItemId(deltaEntry.getKey());
+                    String key = deltaEntry.getKey();
+                    // 跳过能量类条目（如 "flux.input_per_tick"），不计入物品/流体 KPI 聚合
+                    if (isEnergyItemId(key)) {
+                        continue;
+                    }
+                    boolean fluid = isFluidItemId(key);
                     if (delta > 0L) {
                         if (fluid) {
                             fluidProducedDelta = saturatingAdd(fluidProducedDelta, delta);
@@ -458,23 +470,28 @@ public class ObserverHistorySavedData extends SavedData {
             }
         }
 
-        /** NBT 保存 */
+        /** 查询 KPI 统计（服务端预计算每分钟速率），使用图表窗口 1/4 作为观测跨度 */
         private ObserverDataPayload.KpiWindowStats queryWindowStats() {
+            int span = Math.max(1, size / 4);
+            return queryStats(span);
+        }
+
+        /** 按指定 bucket 跨度查询统计数据并预计算速率 */
+        private ObserverDataPayload.KpiWindowStats queryStats(int span) {
             if (latestBucket == Long.MIN_VALUE) {
                 return ObserverDataPayload.KpiWindowStats.unavailable();
             }
-            int span = Math.max(1, size / 4);
             long recentStartBucket = latestBucket - span + 1L;
             long previousStartBucket = recentStartBucket - span;
 
-            long itemProducedRecent = 0L;
-            long itemConsumedRecent = 0L;
-            long itemProducedPrevious = 0L;
-            long itemConsumedPrevious = 0L;
-            long fluidProducedRecent = 0L;
-            long fluidConsumedRecent = 0L;
-            long fluidProducedPrevious = 0L;
-            long fluidConsumedPrevious = 0L;
+            long itemProducedRecentRaw = 0L;
+            long itemConsumedRecentRaw = 0L;
+            long itemProducedPreviousRaw = 0L;
+            long itemConsumedPreviousRaw = 0L;
+            long fluidProducedRecentRaw = 0L;
+            long fluidConsumedRecentRaw = 0L;
+            long fluidProducedPreviousRaw = 0L;
+            long fluidConsumedPreviousRaw = 0L;
             int recentBucketCount = 0;
             int previousBucketCount = 0;
 
@@ -484,10 +501,10 @@ public class ObserverHistorySavedData extends SavedData {
                     continue;
                 }
                 int slot = slotIndex(bucket, size);
-                itemProducedRecent = saturatingAdd(itemProducedRecent, itemProduced[slot]);
-                itemConsumedRecent = saturatingAdd(itemConsumedRecent, itemConsumed[slot]);
-                fluidProducedRecent = saturatingAdd(fluidProducedRecent, fluidProduced[slot]);
-                fluidConsumedRecent = saturatingAdd(fluidConsumedRecent, fluidConsumed[slot]);
+                itemProducedRecentRaw = saturatingAdd(itemProducedRecentRaw, itemProduced[slot]);
+                itemConsumedRecentRaw = saturatingAdd(itemConsumedRecentRaw, itemConsumed[slot]);
+                fluidProducedRecentRaw = saturatingAdd(fluidProducedRecentRaw, fluidProduced[slot]);
+                fluidConsumedRecentRaw = saturatingAdd(fluidConsumedRecentRaw, fluidConsumed[slot]);
                 recentBucketCount++;
             }
             for (int i = 0; i < span; i++) {
@@ -496,27 +513,43 @@ public class ObserverHistorySavedData extends SavedData {
                     continue;
                 }
                 int slot = slotIndex(bucket, size);
-                itemProducedPrevious = saturatingAdd(itemProducedPrevious, itemProduced[slot]);
-                itemConsumedPrevious = saturatingAdd(itemConsumedPrevious, itemConsumed[slot]);
-                fluidProducedPrevious = saturatingAdd(fluidProducedPrevious, fluidProduced[slot]);
-                fluidConsumedPrevious = saturatingAdd(fluidConsumedPrevious, fluidConsumed[slot]);
+                itemProducedPreviousRaw = saturatingAdd(itemProducedPreviousRaw, itemProduced[slot]);
+                itemConsumedPreviousRaw = saturatingAdd(itemConsumedPreviousRaw, itemConsumed[slot]);
+                fluidProducedPreviousRaw = saturatingAdd(fluidProducedPreviousRaw, fluidProduced[slot]);
+                fluidConsumedPreviousRaw = saturatingAdd(fluidConsumedPreviousRaw, fluidConsumed[slot]);
                 previousBucketCount++;
             }
 
+            boolean recentAvailable = recentBucketCount > 0;
+            boolean previousAvailable = previousBucketCount > 0;
             boolean trendAvailable = recentBucketCount == span && previousBucketCount == span;
             return new ObserverDataPayload.KpiWindowStats(
-                    itemProducedRecent,
-                    itemConsumedRecent,
-                    itemProducedPrevious,
-                    itemConsumedPrevious,
-                    fluidProducedRecent,
-                    fluidConsumedRecent,
-                    fluidProducedPrevious,
-                    fluidConsumedPrevious,
-                    recentBucketCount,
-                    previousBucketCount,
+                    toRatePerMinute(itemProducedRecentRaw, recentBucketCount),
+                    toRatePerMinute(itemConsumedRecentRaw, recentBucketCount),
+                    toRatePerMinute(itemProducedPreviousRaw, previousBucketCount),
+                    toRatePerMinute(itemConsumedPreviousRaw, previousBucketCount),
+                    toRatePerMinute(fluidProducedRecentRaw, recentBucketCount),
+                    toRatePerMinute(fluidConsumedRecentRaw, recentBucketCount),
+                    toRatePerMinute(fluidProducedPreviousRaw, previousBucketCount),
+                    toRatePerMinute(fluidConsumedPreviousRaw, previousBucketCount),
+                    recentAvailable,
+                    previousAvailable,
                     trendAvailable
             );
+        }
+
+        /**
+         * 单位时间标准化速率计算（items/min 或 bytes/min）。
+         * 公式：(统计区间内总增量 ÷ 统计区间时长) × 目标单位时长
+         *   = (total ÷ (bucketCount × bucketTicks)) × 1200
+         * 其中 1200 ticks = 1 分钟（20 ticks/s × 60s）。
+         */
+        private double toRatePerMinute(long total, int bucketCount) {
+            if (bucketCount <= 0 || total <= 0L) {
+                return 0.0d;
+            }
+            double intervalTicks = (double) bucketCount * window.bucketTicks();
+            return ((double) total / intervalTicks) * TICKS_PER_MINUTE;
         }
 
         private boolean hasBucket(long bucket) {
@@ -685,6 +718,14 @@ public class ObserverHistorySavedData extends SavedData {
 
     private static boolean isFluidItemId(String itemId) {
         return itemId != null && itemId.startsWith("fluid:");
+    }
+
+    /**
+     * 判断 itemId 是否为能量类条目（如 Flux Networks 的 "flux.*" 键）。
+     * 能量类条目不应计入物品/流体 KPI 聚合，否则会将百万级 RF/tick 误当成物品数量。
+     */
+    private static boolean isEnergyItemId(String itemId) {
+        return itemId != null && itemId.startsWith("flux.");
     }
 
     private static long saturatingAdd(long left, long right) {

@@ -146,6 +146,7 @@ public class ResourceTerminalScreen extends Screen {
     private StorageNetworkViewModel storageViewModel;
     private String storageSelectedNodeId;
     private boolean storageAlertFilterActive;
+    private final java.util.Map<String, double[]> storageBufferEma = new java.util.HashMap<>();
     private List<StorageNodeListRenderer.NodeHitbox> storageNodeHitboxes = List.of();
     private List<StorageItemListRenderer.ItemRowHitbox> storageItemRowHitboxes = List.of();
     private UiRect storageAlertFilterButtonHitbox;
@@ -465,7 +466,10 @@ public class ResourceTerminalScreen extends Screen {
             if (button == 0 && resetFiltersHitbox != null && resetFiltersHitbox.rect().contains(mouseX, mouseY)) {
                 resetButtonPressedUntilMs = Util.getMillis() + 120L;
                 sendUiAction(UiActionType.RESET_FILTERS, "", "");
+                selectedItemId = null;
+                selectedItemIds.clear();
                 closePopupMenu();
+                requestRefreshNow();
                 return true;
             }
 
@@ -1344,7 +1348,7 @@ public class ResourceTerminalScreen extends Screen {
         layoutState = UiLayoutState.compute(width, height, layoutSpec, sizeMode.factor);
         chartRenderCache.clear();
 
-        closeButton = addRenderableWidget(Button.builder(Component.literal("X"), btn -> onClose())
+        closeButton = addRenderableWidget(Button.builder(Component.literal("✕"), btn -> onClose())
                 .bounds(layoutState.closeButton().x(), layoutState.closeButton().y(), layoutState.closeButton().width(), layoutState.closeButton().height())
                 .build());
 
@@ -1437,7 +1441,7 @@ public class ResourceTerminalScreen extends Screen {
     /** 重建存储网络页面的 ViewModel */
     private void rebuildStorageViewModel() {
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
-                payload, storageSelectedNodeId, storageAlertFilterActive
+                payload, storageSelectedNodeId, storageAlertFilterActive, storageBufferEma
         );
     }
 
@@ -1877,17 +1881,6 @@ public class ResourceTerminalScreen extends Screen {
         List<PopupOption> options = new ArrayList<>();
         for (OverviewViewModel.GroupOption group : viewModel.uiState().groups()) {
             boolean selected = group.key().equals(normalizedGroupKey);
-            if (PlayerUiPrefsSavedData.GROUP_UNGROUPED.equals(group.key())) {
-                options.add(PopupOption.action(
-                        selectedMarker(selected,
-                                Component.translatable("screen.resourceobserver.overview.group.menu.clear").getString()),
-                        UiActionType.CLEAR_ITEM_GROUP,
-                        primaryItemId,
-                        itemIds,
-                        ""
-                ));
-                continue;
-            }
             options.add(PopupOption.action(
                     selectedMarker(selected,
                             Component.translatable("screen.resourceobserver.overview.group.menu.assign", group.displayName()).getString()),

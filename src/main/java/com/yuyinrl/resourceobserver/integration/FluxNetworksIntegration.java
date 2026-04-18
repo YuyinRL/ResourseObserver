@@ -7,7 +7,10 @@ import mekanism.api.energy.IStrictEnergyHandler;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.core.GlobalPos;
+import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.entity.BlockEntity;
 import net.neoforged.neoforge.capabilities.BlockCapability;
 import net.neoforged.neoforge.capabilities.Capabilities;
@@ -269,6 +272,7 @@ public final class FluxNetworksIntegration {
 
                 long storedAtPos = 0L;
                 long capAtPos = 0L;
+                long maxAcceptAtPos = 0L;
 
                 IEnergyStorage energy = level.getCapability(Capabilities.EnergyStorage.BLOCK, adjacentPos, dir.getOpposite());
                 if (energy == null) {
@@ -279,6 +283,14 @@ public final class FluxNetworksIntegration {
                     if (cap > capAtPos) {
                         capAtPos = cap;
                         storedAtPos = Integer.toUnsignedLong(energy.getEnergyStored());
+                    }
+                    // 模拟接收以获取设备最大接受速率
+                    if (energy.canReceive()) {
+                        try {
+                            maxAcceptAtPos = Integer.toUnsignedLong(
+                                    energy.receiveEnergy(Integer.MAX_VALUE, true));
+                        } catch (Exception ignored) {
+                        }
                     }
                 }
 
@@ -313,7 +325,8 @@ public final class FluxNetworksIntegration {
                             resolveExternalGroupId(level, adjacentPos, adjacentBe),
                             buildExternalRefName(level, adjacentPos),
                             storedAtPos,
-                            capAtPos
+                            capAtPos,
+                            maxAcceptAtPos
                     );
                     refs.putIfAbsent(ref.extId(), ref);
                 }
@@ -439,9 +452,13 @@ public final class FluxNetworksIntegration {
 
     private static String buildExternalRefName(Level level, BlockPos pos) {
         try {
-            String blockName = level.getBlockState(pos).getBlock().getName().getString();
+            Block block = level.getBlockState(pos).getBlock();
+            String blockName = block.getName().getString();
+            // 注册 ID 前缀用于客户端提取模组命名空间，格式：registryId|BlockName @ [x, y, z]
+            ResourceLocation regId = BuiltInRegistries.BLOCK.getKey(block);
+            String prefix = regId != null ? regId.toString() + "|" : "";
             if (blockName != null && !blockName.isBlank()) {
-                return blockName + " @ " + pos.toShortString();
+                return prefix + blockName + " @ " + pos.toShortString();
             }
         } catch (Exception ignored) {
         }
@@ -538,7 +555,8 @@ public final class FluxNetworksIntegration {
             String extId,
             String displayName,
             long stored,
-            long capacity
+            long capacity,
+            long maxAcceptPerTick
     ) {
     }
 }

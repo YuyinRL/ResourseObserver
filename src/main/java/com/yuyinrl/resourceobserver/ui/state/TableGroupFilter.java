@@ -1,6 +1,6 @@
 package com.yuyinrl.resourceobserver.ui.state;
 
-import java.util.Locale;
+import com.yuyinrl.resourceobserver.network.EnumLookup;
 
 /**
  * 表格分组筛选枚举 —— 按物品分类过滤表格显示。
@@ -42,25 +42,11 @@ public enum TableGroupFilter {
 
     /** 根据 ID 查找分组筛选，未找到时默认返回 ALL */
     public static TableGroupFilter fromId(int id) {
-        for (TableGroupFilter value : values()) {
-            if (value.id == id) {
-                return value;
-            }
-        }
-        return ALL;
+        return EnumLookup.fromId(values(), TableGroupFilter::id, id, ALL);
     }
 
     /** 根据键名查找分组筛选（不区分大小写），未找到时默认返回 ALL */
     public static TableGroupFilter fromKey(String key) {
-        if (key == null || key.isBlank()) {
-            return ALL;
-        }
-        String normalized = key.toLowerCase(Locale.ROOT);
-        for (TableGroupFilter value : values()) {
-            if (value.key.equals(normalized)) {
-                return value;
-            }
-        }
-        return ALL;
+        return EnumLookup.fromKey(values(), TableGroupFilter::key, key, ALL);
     }
 }

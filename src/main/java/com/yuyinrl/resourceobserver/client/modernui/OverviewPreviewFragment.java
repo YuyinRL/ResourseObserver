@@ -38,6 +38,9 @@ import java.util.Objects;
 
 public final class OverviewPreviewFragment extends Fragment {
 
+    /** 全局活动实例引用，供按键关闭逻辑检测 */
+    private static volatile OverviewPreviewFragment activePreviewInstance;
+
     private static final int TABLE_HEADER_HEIGHT_DP = 20;
     private static final int TABLE_ROW_HEIGHT_DP = 16;
     private static final int TABLE_GROUP_HEIGHT_DP = 18;
@@ -81,6 +84,9 @@ public final class OverviewPreviewFragment extends Fragment {
     private boolean sortDesc = true;
     private OverviewViewModel.KpiType selectedKpiType;
 
+    /** Currently showing PopupMenu — dismissed on fragment pause to avoid orphaned menus. */
+    private PopupMenu activePopupMenu;
+
     public OverviewPreviewFragment(OverviewPreviewState state) {
         this.sourceState = Objects.requireNonNull(state, "state");
         initRuntimeState(state);
@@ -91,6 +97,10 @@ public final class OverviewPreviewFragment extends Fragment {
         return stage != null ? stage.dp(dpVal) : Math.round(dpVal);
     }
 
+    public static OverviewPreviewFragment getActiveInstance() {
+        return activePreviewInstance;
+    }
+
     @Nullable
     @Override
     public View onCreateView(
@@ -99,7 +109,7 @@ public final class OverviewPreviewFragment extends Fragment {
             @Nullable DataSet savedInstanceState
     ) {
         stage = new FrameLayout(getContext());
-        stage.setBackground(makeBackground(stage, 0xAA070D1A, 0xAA070D1A, 0, 0));
+        stage.setBackground(makeBackground(stage, 0xAA070D1A, 0xAA070D1A, 10, 0));
         stage.addOnLayoutChangeListener((v, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
             int w = right - left;
             int h = bottom - top;
@@ -110,6 +120,32 @@ public final class OverviewPreviewFragment extends Fragment {
             }
         });
         return stage;
+    }
+
+    @Override
+    public void onResume() {
+        super.onResume();
+        activePreviewInstance = this;
+    }
+
+    @Override
+    public void onPause() {
+        super.onPause();
+        if (activePreviewInstance == this) {
+            activePreviewInstance = null;
+        }
+        // Dismiss any open popup menu to avoid orphaned menus after screen close
+        if (activePopupMenu != null) {
+            activePopupMenu.dismiss();
+            activePopupMenu = null;
+        }
+        // Explicitly re-grab mouse on the game thread to prevent lingering cursor after screen close
+        Minecraft.getInstance().execute(() -> {
+            Minecraft mc = Minecraft.getInstance();
+            if (mc.screen == null) {
+                mc.mouseHandler.grabMouse();
+            }
+        });
     }
 
     private void initRuntimeState(OverviewPreviewState state) {
@@ -190,14 +226,14 @@ public final class OverviewPreviewFragment extends Fragment {
         LinearLayout panel = new LinearLayout(getContext());
         panel.setOrientation(LinearLayout.VERTICAL);
         panel.setPadding(margin, margin, margin, margin);
-        panel.setBackground(makeBackground(panel, UiThemeTokens.PANEL_BG, UiThemeTokens.PANEL_BORDER, 0, 1));
+        panel.setBackground(makeBackground(panel, UiThemeTokens.PANEL_BG, UiThemeTokens.PANEL_BORDER, 10, 1));
         FrameLayout.LayoutParams panelParams = new FrameLayout.LayoutParams(panelW, panelH, Gravity.CENTER);
         stage.addView(panel, panelParams);
 
         LinearLayout chrome = new LinearLayout(getContext());
         chrome.setOrientation(LinearLayout.HORIZONTAL);
         chrome.setPadding(dp(8), dp(4), dp(8), dp(4));
-        chrome.setBackground(makeBackground(chrome, UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER, 0, 1));
+        chrome.setBackground(makeBackground(chrome, UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER, 6, 1));
         panel.addView(chrome, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, layout.chromeHeight()));
         buildChrome(chrome, layout.chromeHeight() - dp(6));
 
@@ -318,7 +354,7 @@ public final class OverviewPreviewFragment extends Fragment {
         button.setGravity(Gravity.CENTER);
         button.setTextColor(active ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
         button.setPadding(dp(8), dp(3), dp(8), dp(3));
-        button.setBackground(makeBackground(button, active ? UiThemeTokens.TAB_ACTIVE : UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 0, 1));
+        button.setBackground(makeBackground(button, active ? UiThemeTokens.TAB_ACTIVE : UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 1000, 1));
         button.setOnClickListener(v -> {
             activeTab = tab;
             rebuildUi();
@@ -337,7 +373,7 @@ public final class OverviewPreviewFragment extends Fragment {
         button.setTextColor(UiThemeTokens.TEXT);
         button.setGravity(Gravity.CENTER);
         button.setPadding(dp(8), dp(3), dp(8), dp(3));
-        button.setBackground(makeBackground(button, UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 0, 1));
+        button.setBackground(makeBackground(button, UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 1000, 1));
         return button;
     }
 
@@ -360,11 +396,11 @@ public final class OverviewPreviewFragment extends Fragment {
         statusCard.setOrientation(LinearLayout.HORIZONTAL);
         statusCard.setPadding(dp(8), dp(4), dp(8), dp(4));
         int statusBorder = sourceState.linked() ? UiThemeTokens.CYAN : UiThemeTokens.ROSE;
-        statusCard.setBackground(makeBackground(statusCard, 0xE0182A41, statusBorder, 0, 1));
+        statusCard.setBackground(makeBackground(statusCard, 0xE0182A41, statusBorder, 6, 1));
         section.addView(statusCard, new LinearLayout.LayoutParams(cardW, dp(36)));
 
         View dot = new View(section.getContext());
-        dot.setBackground(makeBackground(dot, sourceState.linked() ? UiThemeTokens.EMERALD : UiThemeTokens.ROSE, 0, 0, 0));
+        dot.setBackground(makeBackground(dot, sourceState.linked() ? UiThemeTokens.EMERALD : UiThemeTokens.ROSE, 0, 1000, 0));
         LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(dp(6), dp(6));
         dotParams.topMargin = dp(4);
         dotParams.rightMargin = dp(4);
@@ -399,7 +435,7 @@ public final class OverviewPreviewFragment extends Fragment {
             boolean selected = selectedKpiType == card.type();
             int cardBg = selected ? 0xEE24466C : UiThemeTokens.CARD_BG;
             int cardBorder = selected ? UiThemeTokens.CYAN : UiThemeTokens.CARD_BORDER;
-            cardView.setBackground(makeBackground(cardView, cardBg, cardBorder, 0, 1));
+            cardView.setBackground(makeBackground(cardView, cardBg, cardBorder, 8, 1));
             cardView.setOnClickListener(v -> {
                 selectedKpiType = selectedKpiType == card.type() ? null : card.type();
                 rebuildUi();
@@ -410,7 +446,7 @@ public final class OverviewPreviewFragment extends Fragment {
             addText(cardView, card.trend(), statusColor(card.status()), 9, dp(2), ViewGroup.LayoutParams.MATCH_PARENT, true);
 
             View iconBox = new View(section.getContext());
-            iconBox.setBackground(makeBackground(iconBox, 0x4016253C, 0x4016253C, 0, 0));
+            iconBox.setBackground(makeBackground(iconBox, 0x4016253C, 0x4016253C, 4, 0));
             LinearLayout.LayoutParams iconParams = new LinearLayout.LayoutParams(dp(16), dp(16));
             iconParams.topMargin = dp(4);
             cardView.addView(iconBox, iconParams);
@@ -506,7 +542,7 @@ public final class OverviewPreviewFragment extends Fragment {
         int plotHeight = Math.max(dp(40), sectionHeight - dp(50));
         int plotWidth = sectionWidth - dp(16);
         FrameLayout plot = new FrameLayout(section.getContext());
-        plot.setBackground(makeBackground(plot, 0x5A0D1628, 0x773A5478, 0, 1));
+        plot.setBackground(makeBackground(plot, 0x5A0D1628, 0x773A5478, 6, 1));
         LinearLayout.LayoutParams plotParams = new LinearLayout.LayoutParams(plotWidth, plotHeight);
         plotParams.topMargin = dp(4);
         section.addView(plot, plotParams);
@@ -570,7 +606,7 @@ public final class OverviewPreviewFragment extends Fragment {
 
     private void addPoint(FrameLayout plot, int x, int y, int color) {
         View dot = new View(plot.getContext());
-        dot.setBackground(makeBackground(dot, color, color, 0, 0));
+        dot.setBackground(makeBackground(dot, color, color, 1000, 0));
         int dotSize = Math.max(2, dp(2));
         FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(dotSize, dotSize);
         params.leftMargin = x;
@@ -614,7 +650,7 @@ public final class OverviewPreviewFragment extends Fragment {
             boolean selected = entry.itemId.equals(selectedItemId);
             int bg = selected ? 0xCC142338 : UiThemeTokens.CARD_BG;
             int border = selected ? UiThemeTokens.CYAN : UiThemeTokens.CARD_BORDER;
-            card.setBackground(makeBackground(card, bg, border, 0, 1));
+            card.setBackground(makeBackground(card, bg, border, 8, 1));
             card.setOnClickListener(v -> {
                 selectedItemId = entry.itemId;
                 rebuildUi();
@@ -630,7 +666,7 @@ public final class OverviewPreviewFragment extends Fragment {
 
             TextView remove = addText(titleRow, "x", UiThemeTokens.ROSE, 10, 0, dp(16), false);
             remove.setGravity(Gravity.CENTER);
-            remove.setBackground(makeBackground(remove, 0x552A1018, 0xAA7F1D28, 0, 1));
+            remove.setBackground(makeBackground(remove, 0x552A1018, 0xAA7F1D28, 1000, 1));
             remove.setOnClickListener(v -> {
                 watchOrder.remove(entry.itemId);
                 MutableTableEntry rowEntry = rowById(entry.itemId);
@@ -700,7 +736,7 @@ public final class OverviewPreviewFragment extends Fragment {
         int tableInnerW = sectionWidth - dp(16);
         LinearLayout table = new LinearLayout(section.getContext());
         table.setOrientation(LinearLayout.VERTICAL);
-        table.setBackground(makeBackground(table, 0x5510182C, UiThemeTokens.DIVIDER, 0, 1));
+        table.setBackground(makeBackground(table, 0x5510182C, UiThemeTokens.DIVIDER, 6, 1));
         LinearLayout.LayoutParams tableParams = new LinearLayout.LayoutParams(tableInnerW, tableHeight);
         tableParams.topMargin = dp(4);
         section.addView(table, tableParams);
@@ -735,7 +771,7 @@ public final class OverviewPreviewFragment extends Fragment {
             LinearLayout groupRow = new LinearLayout(table.getContext());
             groupRow.setOrientation(LinearLayout.HORIZONTAL);
             groupRow.setPadding(dp(6), dp(2), dp(6), dp(2));
-            groupRow.setBackground(makeBackground(groupRow, 0x33202A40, 0x33202A40, 0, 0));
+            groupRow.setBackground(makeBackground(groupRow, 0x33202A40, 0x33202A40, 4, 0));
 
             boolean expanded = groupExpanded.getOrDefault(group.key, true);
             addText(groupRow, expanded ? "[-]" : "[+]", UiThemeTokens.CYAN, 9, 0, dp(22), false);
@@ -847,6 +883,7 @@ public final class OverviewPreviewFragment extends Fragment {
             }
             return true;
         });
+        activePopupMenu = popup;
         popup.show();
     }
 
@@ -867,6 +904,7 @@ public final class OverviewPreviewFragment extends Fragment {
             }
             return true;
         });
+        activePopupMenu = popup;
         popup.show();
     }
 
@@ -914,9 +952,9 @@ public final class OverviewPreviewFragment extends Fragment {
             rebuildUi();
             return true;
         });
+        activePopupMenu = popup;
         popup.show();
     }
-
     private String createGroupForRow() {
         int index = 1;
         String key = "custom_" + index;
@@ -1127,7 +1165,7 @@ public final class OverviewPreviewFragment extends Fragment {
     private LinearLayout section(int width, int height, int fill, int border) {
         LinearLayout section = new LinearLayout(getContext());
         section.setOrientation(LinearLayout.VERTICAL);
-        section.setBackground(makeBackground(section, fill, border, 0, 1));
+        section.setBackground(makeBackground(section, fill, border, 6, 1));
         section.setLayoutParams(new LinearLayout.LayoutParams(width, height));
         return section;
     }
@@ -1148,7 +1186,7 @@ public final class OverviewPreviewFragment extends Fragment {
     private TextView chartButton(LinearLayout parent, String text, boolean enabled) {
         TextView btn = textView(text, enabled ? UiThemeTokens.TEXT : UiThemeTokens.TEXT_MUTED, 9, 0, true);
         btn.setPadding(dp(6), dp(3), dp(6), dp(3));
-        btn.setBackground(makeBackground(btn, UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 0, 1));
+        btn.setBackground(makeBackground(btn, UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 1000, 1));
         btn.setEnabled(enabled);
         return btn;
     }
@@ -1156,7 +1194,7 @@ public final class OverviewPreviewFragment extends Fragment {
     private TextView filterButton(LinearLayout parent, String text) {
         TextView btn = textView(text, UiThemeTokens.TEXT_MUTED, 9, 0, true);
         btn.setPadding(dp(6), dp(3), dp(6), dp(3));
-        btn.setBackground(makeBackground(btn, UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 0, 1));
+        btn.setBackground(makeBackground(btn, UiThemeTokens.TAB_INACTIVE, UiThemeTokens.DIVIDER, 1000, 1));
         return btn;
     }
 

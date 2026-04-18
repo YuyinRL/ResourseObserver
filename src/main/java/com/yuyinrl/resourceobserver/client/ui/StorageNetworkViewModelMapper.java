@@ -1,6 +1,7 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
@@ -55,10 +56,27 @@ public final class StorageNetworkViewModelMapper {
         return !"FLUX_ENERGY".equalsIgnoreCase(type);
     }
 
+    /**
+     * Rate-EMA 平滑因子 —— 对消耗速率做重 EMA。
+     * α = 0.05 → 约 20 次采样达到半衰（10~20 秒），有效压制服务端整数取整噪声。
+     */
+    private static final double RATE_EMA_ALPHA = 0.05;
+
+    /**
+     * 倒计时锁定阈值 —— 新瞬时 buffer 与当前投影值偏差在此范围内不更新锚点，
+     * 让倒计时继续平稳递减。
+     */
+    private static final double LOCK_THRESHOLD_LOW  = 0.02;  // 2%
+    private static final double LOCK_THRESHOLD_HIGH = 0.25;  // 25%
+
+    /** 中等偏差时的混合权重（新值占比） */
+    private static final double BLEND_ALPHA = 0.15;
+
     public static StorageNetworkViewModel fromPayload(
             ObserverDataPayload payload,
             String selectedNodeId,
-            boolean alertFilterActive
+            boolean alertFilterActive,
+            Map<String, double[]> bufferEma
     ) {
         // 仅保留存储类绑定（过滤掉 FLUX_ENERGY 等纯能量绑定）
         List<ObserverDataPayload.BindingEntry> bindings = payload.bindings().stream()
@@ -89,7 +107,8 @@ public final class StorageNetworkViewModelMapper {
                     formatCompactDecimal(usedValue),
                     formatCompactDecimal(totalValue),
                     statusLabel,
-                    statusAlert
+                    statusAlert,
+                    parseCoordinatesText(binding.networkId())
             ));
         }
 
@@ -101,21 +120,23 @@ public final class StorageNetworkViewModelMapper {
             }
             for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
                 GlobalItemInfo info = globalMap.computeIfAbsent(item.itemId(),
-                        id -> new GlobalItemInfo(item.displayName(), item.iconSprite(), item.groupKey(), 0L, 0L, 0L, 0L));
+                        id -> new GlobalItemInfo(item.displayName(), item.iconSprite(), item.groupKey(), 0L, 0.0, 0.0, 0.0));
                 globalMap.put(item.itemId(), new GlobalItemInfo(
                         info.displayName(),
                         info.iconSprite(),
                         info.groupKey(),
                         saturatingAdd(info.globalAmount(), item.amount()),
-                        saturatingAdd(info.globalDelta(), item.delta()),
-                        saturatingAdd(info.globalProductionRate(), item.productionRate()),
-                        saturatingAdd(info.globalConsumptionRate(), item.consumptionRate())
+                        info.globalDelta() + item.delta(),
+                        info.globalProductionRate() + item.productionRate(),
+                        info.globalConsumptionRate() + item.consumptionRate()
                 ));
             }
         }
 
         // ========== 筛选物品列表 ==========
         List<StorageNetworkViewModel.ItemRow> items = new ArrayList<>();
+        // Track which items are present in this frame for EMA cleanup
+        java.util.Set<String> activeItemIds = new java.util.HashSet<>();
         if (hasSelection) {
             // 仅显示选中节点的物品
             ObserverDataPayload.BindingEntry selectedBinding = findBinding(bindings, selectedNodeId);
@@ -125,9 +146,21 @@ public final class StorageNetworkViewModelMapper {
                             new GlobalItemInfo(item.displayName(), item.iconSprite(), item.groupKey(), item.amount(), item.delta(), item.productionRate(), item.consumptionRate()));
                     StorageNetworkViewModel.AlertLevel alert = computeAlertLevel(item.amount(), item.consumptionRate(), selectedBinding);
                     String localizedName = localizeItemName(item.entryType(), item.itemId(), item.displayName());
-                    long burnRate = item.consumptionRate();
-                    String bufferText = computeBufferText(item.amount(), item.consumptionRate());
-                    double bufferRatio = computeBufferRatio(item.amount(), item.consumptionRate());
+                    double burnRate = item.consumptionRate();
+                    // Two-layer smoothing: rate EMA + countdown-lock
+                    String bufferText;
+                    double bufferRatio;
+                    if (burnRate <= 0 || item.amount() <= 0) {
+                        bufferText = "∞";
+                        bufferRatio = 1.0;
+                        bufferEma.remove(item.itemId());
+                    } else {
+                        double anchorSec = smoothRateAndUpdateAnchor(
+                                item.itemId(), burnRate, item.amount(), bufferEma);
+                        bufferText = formatBufferSeconds(Math.round(anchorSec));
+                        bufferRatio = bufferRatioFromSeconds(anchorSec);
+                    }
+                    activeItemIds.add(item.itemId());
                     items.add(new StorageNetworkViewModel.ItemRow(
                             item.itemId(),
                             localizedName,
@@ -149,9 +182,21 @@ public final class StorageNetworkViewModelMapper {
                 GlobalItemInfo info = entry.getValue();
                 StorageNetworkViewModel.AlertLevel alert = computeAlertLevelGlobal(info.globalAmount(), info.globalConsumptionRate(), bindings);
                 String localizedName = localizeItemName(ObserverDataPayload.EntryType.ITEM, entry.getKey(), info.displayName());
-                long burnRate = info.globalConsumptionRate();
-                String bufferText = computeBufferText(info.globalAmount(), info.globalConsumptionRate());
-                double bufferRatio = computeBufferRatio(info.globalAmount(), info.globalConsumptionRate());
+                double burnRate = info.globalConsumptionRate();
+                // Two-layer smoothing: rate EMA + countdown-lock
+                String bufferText;
+                double bufferRatio;
+                if (burnRate <= 0 || info.globalAmount() <= 0) {
+                    bufferText = "∞";
+                    bufferRatio = 1.0;
+                    bufferEma.remove(entry.getKey());
+                } else {
+                    double anchorSec = smoothRateAndUpdateAnchor(
+                            entry.getKey(), burnRate, info.globalAmount(), bufferEma);
+                    bufferText = formatBufferSeconds(Math.round(anchorSec));
+                    bufferRatio = bufferRatioFromSeconds(anchorSec);
+                }
+                activeItemIds.add(entry.getKey());
                 items.add(new StorageNetworkViewModel.ItemRow(
                         entry.getKey(),
                         localizedName,
@@ -167,6 +212,9 @@ public final class StorageNetworkViewModelMapper {
                 ));
             }
         }
+
+        // Purge stale EMA entries for items no longer present
+        bufferEma.keySet().retainAll(activeItemIds);
 
         // 应用警报筛选
         if (alertFilterActive) {
@@ -239,7 +287,7 @@ public final class StorageNetworkViewModelMapper {
     /** 计算单节点内物品的警报级别 */
     private static StorageNetworkViewModel.AlertLevel computeAlertLevel(
             long amount,
-            long consumptionRate,
+            double consumptionRate,
             ObserverDataPayload.BindingEntry binding
     ) {
         // 红色：库存 ≤ 0 或容量 ≥ 95%
@@ -251,10 +299,8 @@ public final class StorageNetworkViewModelMapper {
             return StorageNetworkViewModel.AlertLevel.RED;
         }
         // 黄色：消耗速率下库存不足 30 秒
-        // consumptionRate 是每分钟消耗量（正值），缓冲时间 = amount * 60 / consumptionRate 秒
-        // 缓冲 < 30s  →  amount * 60 < 30 * consumptionRate
         if (consumptionRate > 0) {
-            if (amount * 60L < ALERT_YELLOW_SECONDS * consumptionRate) {
+            if (amount * 60.0 < ALERT_YELLOW_SECONDS * consumptionRate) {
                 return StorageNetworkViewModel.AlertLevel.YELLOW;
             }
         }
@@ -264,7 +310,7 @@ public final class StorageNetworkViewModelMapper {
     /** 计算全局汇总物品的警报级别 */
     private static StorageNetworkViewModel.AlertLevel computeAlertLevelGlobal(
             long amount,
-            long consumptionRate,
+            double consumptionRate,
             List<ObserverDataPayload.BindingEntry> bindings
     ) {
         if (amount <= 0) {
@@ -277,9 +323,9 @@ public final class StorageNetworkViewModelMapper {
                 return StorageNetworkViewModel.AlertLevel.RED;
             }
         }
-        // 黄色：消耗速率下库存不足 30 秒（consumptionRate 是每分钟消耗量，正值）
+        // 黄色：消耗速率下库存不足 30 秒
         if (consumptionRate > 0) {
-            if (amount * 60L < ALERT_YELLOW_SECONDS * consumptionRate) {
+            if (amount * 60.0 < ALERT_YELLOW_SECONDS * consumptionRate) {
                 return StorageNetworkViewModel.AlertLevel.YELLOW;
             }
         }
@@ -489,13 +535,23 @@ public final class StorageNetworkViewModelMapper {
         if (consumptionRate <= 0 || amount <= 0) {
             return "∞";
         }
-        long totalSeconds = amount * 60L / consumptionRate;
-        long minutes = totalSeconds / 60;
+        return formatBufferSeconds(amount * 60L / consumptionRate);
+    }
+
+    /** 根据已平滑的缓冲秒数格式化文本。供倒计时 tick 外部调用。 */
+    public static String formatBufferSeconds(long totalSeconds) {
+        if (totalSeconds <= 0) return "∞";
+        long days = totalSeconds / 86400;
+        long hours = (totalSeconds % 86400) / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
         long seconds = totalSeconds % 60;
-        if (minutes > 0) {
-            return minutes + "m " + seconds + "s";
-        }
-        return seconds + "s";
+
+        StringBuilder sb = new StringBuilder();
+        if (days > 0) sb.append(days).append("d ");
+        if (days > 0 || hours > 0) sb.append(hours).append("h ");
+        if (days > 0 || hours > 0 || minutes > 0) sb.append(minutes).append("m ");
+        sb.append(seconds).append("s");
+        return sb.toString();
     }
 
     /**
@@ -515,11 +571,100 @@ public final class StorageNetworkViewModelMapper {
         if (consumptionRate <= 0 || amount <= 0) {
             return 1.0;
         }
-        double t = (double) amount * 60.0 / consumptionRate; // 剩余秒数（浮点）
+        return bufferRatioFromSeconds((double) amount * 60.0 / consumptionRate);
+    }
+
+    /** 根据已平滑的缓冲秒数计算进度条比例。供倒计时 tick 外部调用。 */
+    public static double bufferRatioFromSeconds(double t) {
         if (t <= 0)   return 0.0;
         if (t <= 30)  return t / 30.0 * 0.30;                         // 危险区 0% → 30%
         if (t <= 300) return 0.30 + (t - 30.0) / 270.0 * 0.40;       // 警告区 30% → 70%
         return Math.min(1.0, 0.70 + (t - 300.0) / 3300.0 * 0.30);    // 安全区 70% → 100%
+    }
+
+    /**
+     * 基于锚点计算某物品的倒计时秒数。
+     * <p>
+     * 返回值 = displayAnchorSec − (now − anchorTimeMs) / 1000，下限为 0。
+     * 如果 bufferEma 中不存在该物品，返回 −1 表示"不可用 / ∞"。
+     *
+     * @param itemId    物品 ID
+     * @param bufferEma EMA 状态 map（[0]=smoothedRate, [1]=anchorSec, [2]=anchorTimeMs, [3]=lastAmount）
+     * @return 倒计时秒数，或 −1 表示无穷大 / 无记录
+     */
+    public static double computeCountdownSeconds(String itemId, Map<String, double[]> bufferEma) {
+        double[] state = bufferEma.get(itemId);
+        if (state == null || state.length < 3 || state[1] <= 0) return -1;
+        double elapsed = (System.currentTimeMillis() - state[2]) / 1000.0;
+        return Math.max(0, state[1] - elapsed);
+    }
+
+    /**
+     * 双层平滑：Layer 1 = Rate EMA，Layer 2 = Countdown-Lock。
+     * <p>
+     * 状态数组 double[4]:
+     * <pre>
+     *   [0] = smoothedRatePerMin  — EMA 平滑后的消耗速率
+     *   [1] = displayAnchorSec    — 倒计时锚点秒数
+     *   [2] = anchorTimeMs        — 锚点设置时的系统时间戳
+     *   [3] = lastAmount          — 上次库存量（用于检测突变）
+     * </pre>
+     *
+     * @param itemId    物品 ID
+     * @param rawRate   本次服务端返回的消耗速率（items/min, long）
+     * @param amount    当前库存量
+     * @param bufferEma 跨 tick 持久化的状态 map
+     * @return 当前的显示锚点秒数（供 bufferText / bufferRatio 使用）
+     */
+    private static double smoothRateAndUpdateAnchor(
+            String itemId, double rawRate, long amount, Map<String, double[]> bufferEma) {
+
+        double now = System.currentTimeMillis();
+        double[] prev = bufferEma.get(itemId);
+
+        // ---- Layer 1: Rate EMA ----
+        double smoothedRate;
+        if (prev == null || prev.length < 4 || prev[0] <= 0) {
+            // First sample — seed with raw value
+            smoothedRate = rawRate;
+        } else {
+            smoothedRate = RATE_EMA_ALPHA * rawRate + (1.0 - RATE_EMA_ALPHA) * prev[0];
+        }
+
+        // Instantaneous buffer using smoothed rate
+        double instantBuffer = (double) amount * 60.0 / smoothedRate;
+
+        // ---- Layer 2: Countdown-Lock ----
+        double anchorSec;
+        if (prev == null || prev.length < 4 || prev[1] <= 0) {
+            // No previous anchor — seed directly
+            anchorSec = instantBuffer;
+        } else {
+            double elapsed = (now - prev[2]) / 1000.0;
+            double projected = prev[1] - elapsed; // what the countdown would be showing now
+            if (projected < 0) projected = 0;
+
+            double deviation = Math.abs(instantBuffer - projected) / Math.max(projected, 1.0);
+
+            if (deviation < LOCK_THRESHOLD_LOW) {
+                // Noise — don't touch anchor, let countdown tick naturally
+                // But we still need to return a value for the initial display;
+                // use the projected value (which the countdown timer would show anyway)
+                anchorSec = projected;
+                // Re-anchor at projected so the countdown keeps ticking from here
+                bufferEma.put(itemId, new double[]{ smoothedRate, projected, now, amount });
+                return anchorSec;
+            } else if (deviation > LOCK_THRESHOLD_HIGH) {
+                // Big change — snap to new value
+                anchorSec = instantBuffer;
+            } else {
+                // Gradual correction
+                anchorSec = BLEND_ALPHA * instantBuffer + (1.0 - BLEND_ALPHA) * projected;
+            }
+        }
+
+        bufferEma.put(itemId, new double[]{ smoothedRate, anchorSec, now, amount });
+        return anchorSec;
     }
 
     /** 计算节点已用值 */
@@ -550,14 +695,28 @@ public final class StorageNetworkViewModelMapper {
         return left + right;
     }
 
+    /** 从 networkId（格式 "blockId@posLong"）解析坐标文本 */
+    private static String parseCoordinatesText(String networkId) {
+        if (networkId == null) return null;
+        int at = networkId.lastIndexOf('@');
+        if (at < 0 || at + 1 >= networkId.length()) return null;
+        try {
+            long encoded = Long.parseLong(networkId.substring(at + 1));
+            BlockPos pos = BlockPos.of(encoded);
+            return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
+        } catch (NumberFormatException e) {
+            return null;
+        }
+    }
+
     private record GlobalItemInfo(
             String displayName,
             String iconSprite,
             String groupKey,
             long globalAmount,
-            long globalDelta,
-            long globalProductionRate,
-            long globalConsumptionRate
+            double globalDelta,
+            double globalProductionRate,
+            double globalConsumptionRate
     ) {
     }
 }

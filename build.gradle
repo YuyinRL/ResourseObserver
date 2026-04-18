@@ -79,6 +79,9 @@ neoForge {
 
             // 以逗号分隔的游戏测试命名空间列表，留空表示加载所有命名空间
             systemProperty 'neoforge.enabledGameTestNamespaces', project.mod_id
+            // 速率调试日志：启用后每 12 秒向日志输出 [RateDebug] 统计行
+            // 不需要时注释掉此行即可，不影响正常游戏性能
+            systemProperty 'resobs.ratedebug', 'true'
         }
 
         server {
@@ -133,26 +136,21 @@ configurations {
 }
 
 dependencies {
+    // ModernUI 共用排除规则（这些依赖由 Minecraft/NeoForge 运行时提供）
+    def modernUiExcludes = { dep ->
+        dep.exclude group: "org.slf4j", module: "slf4j-api"
+        dep.exclude group: "org.apache.logging.log4j", module: "log4j-core"
+        dep.exclude group: "org.apache.logging.log4j", module: "log4j-api"
+        dep.exclude group: "com.google.code.findbugs", module: "jsr305"
+        dep.exclude group: "org.jetbrains", module: "annotations"
+        dep.exclude group: "com.ibm.icu", module: "icu4j"
+        dep.exclude group: "it.unimi.dsi", module: "fastutil"
+    }
+
     // ModernUI（NeoForge）
     implementation "icyllis.modernui:ModernUI-NeoForge:${modernui_mc_version}"
-    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Core:${modernui_core_version}")) {
-        exclude group: "org.slf4j", module: "slf4j-api"
-        exclude group: "org.apache.logging.log4j", module: "log4j-core"
-        exclude group: "org.apache.logging.log4j", module: "log4j-api"
-        exclude group: "com.google.code.findbugs", module: "jsr305"
-        exclude group: "org.jetbrains", module: "annotations"
-        exclude group: "com.ibm.icu", module: "icu4j"
-        exclude group: "it.unimi.dsi", module: "fastutil"
-    }
-    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Markflow:${modernui_core_version}")) {
-        exclude group: "org.slf4j", module: "slf4j-api"
-        exclude group: "org.apache.logging.log4j", module: "log4j-core"
-        exclude group: "org.apache.logging.log4j", module: "log4j-api"
-        exclude group: "com.google.code.findbugs", module: "jsr305"
-        exclude group: "org.jetbrains", module: "annotations"
-        exclude group: "com.ibm.icu", module: "icu4j"
-        exclude group: "it.unimi.dsi", module: "fastutil"
-    }
+    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Core:${modernui_core_version}"), modernUiExcludes)
+    additionalRuntimeClasspath(compileOnly("icyllis.modernui:ModernUI-Markflow:${modernui_core_version}"), modernUiExcludes)
 
     // AE2 API（编译期） + 完整运行时 mod（本地开发测试用）
     compileOnly "org.appliedenergistics:appliedenergistics2:19.2.17:api"

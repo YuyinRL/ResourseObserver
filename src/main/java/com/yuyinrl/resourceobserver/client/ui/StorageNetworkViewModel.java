@@ -48,8 +48,9 @@ public record StorageNetworkViewModel(
      * @param selected      是否为当前选中节点
      * @param usedFormatted 已用容量格式化文本（如 "852.0k"）
      * @param totalFormatted 总容量格式化文本（如 "1000.0k"）
-     * @param statusLabel   状态标签（Healthy / Alert）
-     * @param statusAlert   是否为警报状态
+     * @param statusLabel     状态标签（Healthy / Alert）
+     * @param statusAlert     是否为警报状态
+     * @param coordinatesText 坐标文本（如 "X: 100, Y: 64, Z: -200"），null 表示无法解析
      */
     public record NodeEntry(
             String nodeId,
@@ -62,7 +63,8 @@ public record StorageNetworkViewModel(
             String usedFormatted,
             String totalFormatted,
             String statusLabel,
-            boolean statusAlert
+            boolean statusAlert,
+            String coordinatesText
     ) {
     }
 
@@ -99,10 +101,10 @@ public record StorageNetworkViewModel(
             String iconSprite,
             long localAmount,
             long globalAmount,
-            long delta,
+            double delta,
             AlertLevel alertLevel,
             String groupKey,
-            long burnRatePerMin,
+            double burnRatePerMin,
             String estimatedBufferText,
             double bufferRatio
     ) {

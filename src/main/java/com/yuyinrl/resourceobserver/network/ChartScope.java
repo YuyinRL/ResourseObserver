@@ -22,11 +22,6 @@ public enum ChartScope {
     }
 
     public static ChartScope fromId(int id) {
-        for (ChartScope value : values()) {
-            if (value.id == id) {
-                return value;
-            }
-        }
-        return GLOBAL;
+        return EnumLookup.fromId(values(), ChartScope::id, id, GLOBAL);
     }
 }

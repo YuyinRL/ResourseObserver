@@ -88,12 +88,14 @@ public final class PowerNetworkViewModelMapper {
 
             double usageRatio = Math.min(1.0, (double) stored / capacity);
             String category = inferCategory(binding.targetBlockId());
+            String modName = extractModNamespace(binding.targetBlockId());
             PowerNetworkViewModel.AlertLevel alertLevel = computeAlertLevel(usageRatio, inputPerTick, outputPerTick);
 
             devices.add(new PowerNetworkViewModel.DeviceEntry(
                     binding.networkId(),
                     binding.displayName(),
                     category,
+                    modName,
                     outputPerTick > 0 ? outputPerTick : inputPerTick,
                     stored,
                     capacity,
@@ -155,6 +157,9 @@ public final class PowerNetworkViewModelMapper {
                 externalGroups
         );
 
+        List<PowerNetworkViewModel.ConsumerEntry> consumers =
+                buildConsumers(debugOutputDevices, totalInputPerTick);
+
         return new PowerNetworkViewModel(
                 devices,
                 kpiCards,
@@ -166,7 +171,8 @@ public final class PowerNetworkViewModelMapper {
                 totalStored,
                 totalCapacity,
                 totalOutputPerTick,
-                debugSnapshot
+                debugSnapshot,
+                consumers
         );
     }
 
@@ -206,16 +212,22 @@ public final class PowerNetworkViewModelMapper {
         ExtRefMetricToken extToken = parseExtToken(tail);
         if (extToken != null) {
             Map<String, long[]> metricsByExtId = refMetricMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>());
-            long[] metrics = metricsByExtId.computeIfAbsent(extToken.extId(), k -> new long[2]);
+            long[] metrics = metricsByExtId.computeIfAbsent(extToken.extId(), k -> new long[3]);
             if ("stored".equals(extToken.metric())) {
                 metrics[0] = item.amount();
-            } else {
+            } else if ("cap".equals(extToken.metric())) {
                 metrics[1] = item.amount();
+            } else if ("maxAccept".equals(extToken.metric())) {
+                metrics[2] = item.amount();
             }
-            String name = item.displayName() == null || item.displayName().isBlank()
-                    ? extToken.extId()
-                    : item.displayName();
-            refNameMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>()).put(extToken.extId(), name);
+            // 仅从 .stored 条目获取干净的 displayName，避免 [Cap] / [MaxAccept] 后缀污染
+            if ("stored".equals(extToken.metric())) {
+                String name = item.displayName() == null || item.displayName().isBlank()
+                        ? extToken.extId()
+                        : item.displayName();
+                refNameMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>())
+                        .putIfAbsent(extToken.extId(), name);
+            }
             return;
         }
 
@@ -225,7 +237,7 @@ public final class PowerNetworkViewModelMapper {
                 interfaceKey,
                 item.displayName(),
                 deviceType,
-                item.delta(),
+                Math.round(item.delta()),
                 item.amount()
         ));
         if ("plug".equals(deviceType)) {
@@ -246,7 +258,7 @@ public final class PowerNetworkViewModelMapper {
         }
         String extId = payload.substring(0, split);
         String metric = payload.substring(split + 1);
-        if (!"stored".equals(metric) && !"cap".equals(metric)) {
+        if (!"stored".equals(metric) && !"cap".equals(metric) && !"maxAccept".equals(metric)) {
             return null;
         }
         return new ExtRefMetricToken(extId, metric);
@@ -293,6 +305,7 @@ public final class PowerNetworkViewModelMapper {
                 long[] metrics = entry.getValue();
                 long stored = metrics != null ? metrics[0] : 0L;
                 long cap = metrics != null ? metrics[1] : 0L;
+                long maxAccept = metrics != null && metrics.length > 2 ? metrics[2] : 0L;
                 String name = extId;
                 if (refNameByExtId != null && refNameByExtId.containsKey(extId)) {
                     String n = refNameByExtId.get(extId);
@@ -300,7 +313,7 @@ public final class PowerNetworkViewModelMapper {
                         name = n;
                     }
                 }
-                refs.add(new PowerNetworkViewModel.ExternalRef(extId, name, stored, cap));
+                refs.add(new PowerNetworkViewModel.ExternalRef(extId, name, stored, cap, maxAccept));
                 aggregatedStored = saturatingAdd(aggregatedStored, Math.max(0L, stored));
                 aggregatedCap = saturatingAdd(aggregatedCap, Math.max(0L, cap));
             }
@@ -345,9 +358,12 @@ public final class PowerNetworkViewModelMapper {
                         ref.extId(),
                         k -> new ExternalGroupAccumulator(ref.extId())
                 );
-                acc.displayName = (ref.displayName() == null || ref.displayName().isBlank())
-                        ? acc.displayName
-                        : ref.displayName();
+                // 去除注册 ID 前缀，保留干净的显示名称
+                String rawDisplay = ref.displayName();
+                if (rawDisplay != null && !rawDisplay.isBlank()) {
+                    int pipeIdx = rawDisplay.indexOf('|');
+                    acc.displayName = pipeIdx >= 0 ? rawDisplay.substring(pipeIdx + 1) : rawDisplay;
+                }
                 acc.stored = Math.max(acc.stored, Math.max(0L, ref.stored()));
                 acc.capacity = Math.max(acc.capacity, Math.max(0L, ref.capacity()));
                 if (device.interfaceKey() != null && !device.interfaceKey().isBlank()) {
@@ -385,10 +401,10 @@ public final class PowerNetworkViewModelMapper {
             for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
                 if ("flux.energy_stored".equals(item.itemId())) {
                     if (isInput && item.delta() > 0) {
-                        return item.delta();
+                        return Math.round(item.delta());
                     }
                     if (!isInput && item.delta() < 0) {
-                        return Math.abs(item.delta());
+                        return Math.round(Math.abs(item.delta()));
                     }
                 }
             }
@@ -416,6 +432,16 @@ public final class PowerNetworkViewModelMapper {
             return "logistics";
         }
         return "other";
+    }
+
+    /**
+     * 从方块注册 ID 中提取模组命名空间（冒号前的部分）。
+     */
+    private static String extractModNamespace(String targetBlockId) {
+        if (targetBlockId == null || targetBlockId.isBlank()) return "";
+        int colonIdx = targetBlockId.indexOf(':');
+        if (colonIdx <= 0) return targetBlockId;
+        return targetBlockId.substring(0, colonIdx);
     }
 
     private static PowerNetworkViewModel.AlertLevel computeAlertLevel(
@@ -466,6 +492,129 @@ public final class PowerNetworkViewModelMapper {
         }
         segments.sort(Comparator.comparingDouble(PowerNetworkViewModel.LoadSegment::percentage).reversed());
         return segments;
+    }
+
+    // ── Consumer palette (distinct colors for different consumer device types) ──
+    private static final int[] CONSUMER_COLORS = {
+            UiThemeTokens.CYAN,     // 0
+            UiThemeTokens.AMBER,    // 1
+            UiThemeTokens.EMERALD,  // 2
+            UiThemeTokens.BLUE,     // 3
+            UiThemeTokens.ROSE,     // 4
+            0xFF818CF8,             // 5 indigo
+            0xFFA78BFA,             // 6 violet
+            0xFF2DD4BF,             // 7 teal
+    };
+
+    /**
+     * 从输出接口（Point）的相邻设备构建用电器列表。
+     * <p>
+     * 每个 Point 设备的 externalRefs 包含其相邻方块的名称和位置。
+     * 将相邻方块按名称（去除坐标部分）分组，汇总 transferRate。
+     */
+    private static List<PowerNetworkViewModel.ConsumerEntry> buildConsumers(
+            List<PowerNetworkViewModel.DeviceDebugEntry> outputDevices, long totalInputPerTick) {
+        if (outputDevices == null || outputDevices.isEmpty()) return List.of();
+
+        // 第一遍：按唯一物理设备聚合（extId 基于坐标，同一方块位置只算一次）
+        // 同一个用电设备可能被多个输出接口检测到，此处先按 extId 去重
+        Map<String, long[]> uniqueDeviceMap = new LinkedHashMap<>();
+        Map<String, String> deviceModMap = new LinkedHashMap<>();
+        Map<String, String> deviceDisplayNameMap = new LinkedHashMap<>();
+
+        for (PowerNetworkViewModel.DeviceDebugEntry device : outputDevices) {
+            long rate = Math.abs(device.transferRate());
+
+            List<PowerNetworkViewModel.ExternalRef> refs = device.externalRefs();
+            if (refs != null && !refs.isEmpty()) {
+                long perRef = refs.size() > 0 && rate > 0 ? rate / refs.size() : 0;
+                long remainder = rate > 0 ? rate - perRef * refs.size() : 0;
+                for (int i = 0; i < refs.size(); i++) {
+                    PowerNetworkViewModel.ExternalRef ref = refs.get(i);
+                    // 使用 extId（基于坐标的唯一标识）作为去重 key
+                    String dedupeKey = ref.extId() != null && !ref.extId().isBlank()
+                            ? ref.extId() : ref.displayName();
+                    long share = perRef + (i == 0 ? remainder : 0);
+                    uniqueDeviceMap.computeIfAbsent(dedupeKey, k -> new long[1]);
+                    uniqueDeviceMap.get(dedupeKey)[0] += share;
+                    // 保存 displayName 和 mod 信息用于第二遍
+                    deviceDisplayNameMap.putIfAbsent(dedupeKey, ref.displayName());
+                    deviceModMap.putIfAbsent(dedupeKey, extractModFromRefName(ref.displayName()));
+                }
+            } else if (rate > 0) {
+                // 无外部引用但有传输速率的设备（回退情况）
+                String name = device.deviceName() != null && !device.deviceName().isBlank()
+                        ? device.deviceName() : "Unknown";
+                uniqueDeviceMap.computeIfAbsent(name, k -> new long[1]);
+                uniqueDeviceMap.get(name)[0] += rate;
+                deviceDisplayNameMap.putIfAbsent(name, name);
+            }
+        }
+
+        // 第二遍：按设备类型名（去坐标）分组展示，count 为去重后的物理设备数
+        Map<String, long[]> consumerMap = new LinkedHashMap<>();
+        Map<String, String> modNameMap = new LinkedHashMap<>();
+        for (Map.Entry<String, long[]> ue : uniqueDeviceMap.entrySet()) {
+            String dedupeKey = ue.getKey();
+            String rawDisplayName = deviceDisplayNameMap.getOrDefault(dedupeKey, dedupeKey);
+            String cleanName = stripCoordinates(rawDisplayName);
+            long consumption = ue.getValue()[0];
+            consumerMap.computeIfAbsent(cleanName, k -> new long[2]);
+            consumerMap.get(cleanName)[0] += consumption;
+            consumerMap.get(cleanName)[1]++;
+            modNameMap.putIfAbsent(cleanName, deviceModMap.getOrDefault(dedupeKey, ""));
+        }
+
+        if (consumerMap.isEmpty()) return List.of();
+
+        long grandTotal = 0L;
+        for (long[] val : consumerMap.values()) grandTotal += val[0];
+
+        List<PowerNetworkViewModel.ConsumerEntry> result = new ArrayList<>();
+        int colorIdx = 0;
+        for (Map.Entry<String, long[]> entry : consumerMap.entrySet()) {
+            long consumption = entry.getValue()[0];
+            int count = (int) entry.getValue()[1];
+            double pct = grandTotal > 0 ? (consumption * 100.0) / grandTotal : 0.0;
+            // 供能占用 = 设备消耗 / 总有效输入
+            double supplyRatio = totalInputPerTick > 0
+                    ? (consumption * 100.0) / totalInputPerTick : 0.0;
+            int color = CONSUMER_COLORS[colorIdx % CONSUMER_COLORS.length];
+            colorIdx++;
+            String modName = modNameMap.getOrDefault(entry.getKey(), "");
+            result.add(new PowerNetworkViewModel.ConsumerEntry(
+                    entry.getKey(), modName, consumption, pct, supplyRatio, color, count));
+        }
+        result.sort(Comparator.comparingLong(PowerNetworkViewModel.ConsumerEntry::consumptionPerTick).reversed());
+        return result;
+    }
+
+    /**
+     * 从带注册 ID 前缀的 displayName 中提取模组命名空间。
+     * 格式："mekanism:energy_cube|Energy Cube @ [1, 2, 3]" → "mekanism"
+     * 无前缀时返回空串。
+     */
+    private static String extractModFromRefName(String rawName) {
+        if (rawName == null || rawName.isBlank()) return "";
+        int pipeIdx = rawName.indexOf('|');
+        if (pipeIdx <= 0) return "";
+        String regId = rawName.substring(0, pipeIdx);
+        int colonIdx = regId.indexOf(':');
+        return colonIdx > 0 ? regId.substring(0, colonIdx) : regId;
+    }
+
+    /**
+     * 从 "registryId|Block Name @ [x, y, z]" 格式中提取干净的设备名称。
+     * 先去除注册 ID 前缀，再去除坐标后缀。
+     */
+    private static String stripCoordinates(String rawName) {
+        if (rawName == null || rawName.isBlank()) return "Unknown";
+        // 去除注册 ID 前缀
+        int pipeIdx = rawName.indexOf('|');
+        String cleaned = pipeIdx >= 0 ? rawName.substring(pipeIdx + 1) : rawName;
+        // 去除坐标后缀
+        int atIdx = cleaned.lastIndexOf(" @ ");
+        return atIdx > 0 ? cleaned.substring(0, atIdx).trim() : cleaned.trim();
     }
 
     private static List<PowerNetworkViewModel.OverloadAlert> buildOverloadAlerts(

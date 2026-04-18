@@ -1,6 +1,6 @@
 package com.yuyinrl.resourceobserver.ui.state;
 
-import java.util.Locale;
+import com.yuyinrl.resourceobserver.network.EnumLookup;
 
 /**
  * 表格状态筛选枚举 —— 根据物品的流通状态过滤显示。
@@ -39,25 +39,11 @@ public enum TableStatusFilter {
 
     /** 根据 ID 查找状态筛选，未找到时默认返回 ALL */
     public static TableStatusFilter fromId(int id) {
-        for (TableStatusFilter value : values()) {
-            if (value.id == id) {
-                return value;
-            }
-        }
-        return ALL;
+        return EnumLookup.fromId(values(), TableStatusFilter::id, id, ALL);
     }
 
     /** 根据键名查找状态筛选（不区分大小写），未找到时默认返回 ALL */
     public static TableStatusFilter fromKey(String key) {
-        if (key == null || key.isBlank()) {
-            return ALL;
-        }
-        String normalized = key.toLowerCase(Locale.ROOT);
-        for (TableStatusFilter value : values()) {
-            if (value.key.equals(normalized)) {
-                return value;
-            }
-        }
-        return ALL;
+        return EnumLookup.fromKey(values(), TableStatusFilter::key, key, ALL);
     }
 }

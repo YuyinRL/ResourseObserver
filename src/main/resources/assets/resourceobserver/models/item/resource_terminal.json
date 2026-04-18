@@ -2,5 +2,13 @@
   "parent": "minecraft:item/generated",
   "textures": {
     "layer0": "resourceobserver:item/resource_terminal"
-  }
+  },
+  "overrides": [
+    {
+      "predicate": {
+        "resourceobserver:bound": 1
+      },
+      "model": "resourceobserver:item/resource_terminal_err"
+    }
+  ]
 }
