@@ -167,6 +167,10 @@ dependencies {
     localRuntime "maven.modrinth:sophisticated-core:kA66Nbi1"
     localRuntime "maven.modrinth:functional-storage:sOE4zjiT"
     localRuntime "maven.modrinth:titanium:LmipxHTo"
+    // Draconic Evolution + 依赖（本地开发测试用，运行时通过反射访问）
+    localRuntime "curse.maven:codechicken-lib-1-8-242818:7281427"
+    localRuntime "curse.maven:brandons-core-231382:6769922"
+    localRuntime "curse.maven:draconic-evolution-223565:6770008"
 }
 
 // 将所有已声明的替换属性展开到指定资源目标中。

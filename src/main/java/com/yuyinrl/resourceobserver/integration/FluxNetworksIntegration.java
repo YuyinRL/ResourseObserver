@@ -45,7 +45,7 @@ public final class FluxNetworksIntegration {
 
     private static volatile Boolean available;
 
-    // ========== Mekanism IStrictEnergyHandler 鑳藉姏鎳掑垵濮嬪寲 ==========
+    // ========== Mekanism IStrictEnergyHandler 能力懒初始化 ==========
     /**
      * 通过反射懒获取 Mekanism 的 BlockCapability&lt;IStrictEnergyHandler, Direction&gt;。
      * Mekanism 主模组 jar 是运行期依赖（localRuntime），不在编译期 classpath 中，
@@ -80,6 +80,41 @@ public final class FluxNetworksIntegration {
             }
         }
         return mekanismStrictEnergyCap;
+    }
+
+    // ========== BrandonsCore IOPStorage 能力懒初始化（Draconic Evolution） ==========
+    /**
+     * 通过反射懒获取 BrandonsCore 的 BlockCapability（IOPStorage）。
+     * IOPStorage 扩展自 IEnergyStorage，提供 long 精度的 getOPStored() / getMaxOPStored()，
+     * 解决 DE Energy Core 数万亿 RF 容量在 int 精度下溢出的问题。
+     * BrandonsCore 不在编译期 classpath 中，全部通过反射访问。
+     * 若 BrandonsCore 未加载，则返回 null，并不再重试。
+     */
+    @Nullable
+    @SuppressWarnings("unchecked")
+    private static volatile BlockCapability<Object, Direction> brandonsCoreOPCap;
+    private static volatile boolean brandonsCoreCapResolved = false;
+
+    @Nullable
+    @SuppressWarnings("unchecked")
+    private static BlockCapability<Object, Direction> getBrandonsCoreOPCapability() {
+        if (!brandonsCoreCapResolved) {
+            synchronized (FluxNetworksIntegration.class) {
+                if (!brandonsCoreCapResolved) {
+                    try {
+                        Class<?> capClass = Class.forName("com.brandon3055.brandonscore.capability.CapabilityOP");
+                        Field field = capClass.getField("BLOCK");
+                        brandonsCoreOPCap = (BlockCapability<Object, Direction>) field.get(null);
+                        ResourceObserverMod.LOGGER.debug("[ResourceObserver] BrandonsCore IOPStorage capability resolved");
+                    } catch (Exception e) {
+                        brandonsCoreOPCap = null;
+                        ResourceObserverMod.LOGGER.debug("[ResourceObserver] BrandonsCore capability not available: {}", e.getMessage());
+                    }
+                    brandonsCoreCapResolved = true;
+                }
+            }
+        }
+        return brandonsCoreOPCap;
     }
 
     /**
@@ -320,6 +355,51 @@ public final class FluxNetworksIntegration {
                     }
                 }
 
+                // DE Energy Pylon → Energy Core 直连探测
+                // 通过 Pylon 的 coreOffset 字段定位到 Energy Core 多方块结构，
+                // 直接从 Core.energy 读取真实储能数据（long 精度），跳过 Pylon 自身的 opAdapter
+                long[] deResult = probeDEEnergyCoreViaPylon(level, adjacentPos, adjacentBe);
+                if (deResult != null) {
+                    if (deResult[1] > capAtPos) {
+                        capAtPos = deResult[1];
+                        storedAtPos = deResult[0];
+                    }
+                    if (deResult[2] > maxAcceptAtPos) {
+                        maxAcceptAtPos = deResult[2];
+                    }
+                } else {
+                    // 通用 BrandonsCore IOPStorage 探测（非 DE Pylon 的其他使用 OP 系统的模组）
+                    BlockCapability<Object, Direction> opCap = getBrandonsCoreOPCapability();
+                    if (opCap != null) {
+                        try {
+                            Object opStorage = level.getCapability(opCap, adjacentPos, dir.getOpposite());
+                            if (opStorage == null) {
+                                opStorage = level.getCapability(opCap, adjacentPos, null);
+                            }
+                            if (opStorage != null) {
+                                long opStored = (long) opStorage.getClass().getMethod("getOPStored").invoke(opStorage);
+                                long opMax = (long) opStorage.getClass().getMethod("getMaxOPStored").invoke(opStorage);
+                                if (opMax > capAtPos) {
+                                    capAtPos = opMax;
+                                    storedAtPos = opStored;
+                                }
+                                try {
+                                    long opMaxAccept = (long) opStorage.getClass()
+                                            .getMethod("receiveOP", long.class, boolean.class)
+                                            .invoke(opStorage, Long.MAX_VALUE, true);
+                                    if (opMaxAccept > maxAcceptAtPos) {
+                                        maxAcceptAtPos = opMaxAccept;
+                                    }
+                                } catch (Exception ignored) {
+                                }
+                            }
+                        } catch (Exception e) {
+                            ResourceObserverMod.LOGGER.debug(
+                                    "[ResourceObserver] BrandonsCore OP probe failed at {}: {}", adjacentPos, e.getMessage());
+                        }
+                    }
+                }
+
                 if (capAtPos > 0L) {
                     ExternalEnergyRef ref = new ExternalEnergyRef(
                             resolveExternalGroupId(level, adjacentPos, adjacentBe),
@@ -342,6 +422,10 @@ public final class FluxNetworksIntegration {
         String mekMultiblockId = resolveMekMultiblockGroupId(adjacentBe);
         if (mekMultiblockId != null && !mekMultiblockId.isBlank()) {
             return mekMultiblockId;
+        }
+        String deCoreId = resolveDECoreGroupId(level, pos, adjacentBe);
+        if (deCoreId != null && !deCoreId.isBlank()) {
+            return deCoreId;
         }
         return buildExternalRefId(level, pos);
     }
@@ -371,6 +455,125 @@ public final class FluxNetworksIntegration {
             }
         }
         return null;
+    }
+
+    /**
+     * 通过 DE Energy Pylon 定位到其连接的 Energy Core 多方块结构，
+     * 直接从 Core.energy（OPStorageOP）读取储能数据（long 精度）。
+     * <p>
+     * 链路：Pylon.coreOffset → Core BlockPos → Core.energy → getOPStored() / getMaxOPStored()
+     *
+     * @param level    服务端 Level
+     * @param pylonPos Energy Pylon 的方块坐标
+     * @param pylonBe  Energy Pylon 的方块实体
+     * @return long[3] = {stored, capacity, maxAcceptPerTick}；非 DE Pylon 或定位失败时返回 null
+     */
+    @Nullable
+    private static long[] probeDEEnergyCoreViaPylon(Level level, BlockPos pylonPos, @Nullable BlockEntity pylonBe) {
+        if (pylonBe == null) {
+            return null;
+        }
+        String className = pylonBe.getClass().getName();
+        if (!className.equals("com.brandon3055.draconicevolution.blocks.tileentity.TileEnergyPylon")) {
+            return null;
+        }
+
+        // Pylon.coreOffset 是 ManagedPos 类型，调用 get() 获取 BlockPos
+        Object coreOffsetField = readField(pylonBe, "coreOffset");
+        if (coreOffsetField == null) {
+            return null;
+        }
+        Object offsetPos = invokeNoArg(coreOffsetField, "get");
+        if (!(offsetPos instanceof BlockPos coreOffset)) {
+            return null;
+        }
+
+        // 计算 Core 坐标：corePos = pylonPos - coreOffset（与 TileEnergyPylon.getCore() 一致）
+        BlockPos corePos = pylonPos.subtract(coreOffset);
+        if (!level.isLoaded(corePos)) {
+            return null;
+        }
+
+        BlockEntity coreBe = level.getBlockEntity(corePos);
+        if (coreBe == null) {
+            return null;
+        }
+        String coreClassName = coreBe.getClass().getName();
+        if (!coreClassName.equals("com.brandon3055.draconicevolution.blocks.tileentity.TileEnergyCore")) {
+            return null;
+        }
+
+        // 读取 Core.energy 字段（OPStorageOP 类型）并调用 getOPStored() / getMaxOPStored()
+        Object energy = readField(coreBe, "energy");
+        if (energy == null) {
+            return null;
+        }
+
+        try {
+            long stored = (long) energy.getClass().getMethod("getOPStored").invoke(energy);
+            long capacity = (long) energy.getClass().getMethod("getMaxOPStored").invoke(energy);
+
+            long maxAccept = 0L;
+            try {
+                maxAccept = (long) energy.getClass()
+                        .getMethod("receiveOP", long.class, boolean.class)
+                        .invoke(energy, Long.MAX_VALUE, true);
+            } catch (Exception ignored) {
+            }
+
+            return new long[]{stored, capacity, maxAccept};
+        } catch (Exception e) {
+            ResourceObserverMod.LOGGER.debug(
+                    "[ResourceObserver] DE Energy Core read failed at {}: {}", corePos, e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * 通过 DE Energy Pylon 定位到 Energy Core，读取 Core 的 linkUUID 作为多方块分组 ID。
+     * 同一个 Energy Core 的多个 Pylon 会返回相同的 linkUUID，实现去重分组。
+     */
+    @Nullable
+    private static String resolveDECoreGroupId(Level level, BlockPos pylonPos, @Nullable BlockEntity adjacentBe) {
+        if (adjacentBe == null) {
+            return null;
+        }
+        String className = adjacentBe.getClass().getName();
+        if (!className.equals("com.brandon3055.draconicevolution.blocks.tileentity.TileEnergyPylon")) {
+            return null;
+        }
+
+        // Pylon.coreOffset → Core 坐标
+        Object coreOffsetField = readField(adjacentBe, "coreOffset");
+        if (coreOffsetField == null) {
+            return null;
+        }
+        Object offsetPos = invokeNoArg(coreOffsetField, "get");
+        if (!(offsetPos instanceof BlockPos coreOffset)) {
+            return null;
+        }
+
+        BlockPos corePos = pylonPos.subtract(coreOffset);
+        if (!level.isLoaded(corePos)) {
+            return null;
+        }
+
+        BlockEntity coreBe = level.getBlockEntity(corePos);
+        if (coreBe == null) {
+            return null;
+        }
+
+        // Core.linkUUID 是 ManagedUUID 类型，调用 get() 获取实际 UUID
+        Object linkUUID = readField(coreBe, "linkUUID");
+        if (linkUUID != null) {
+            Object uuid = invokeNoArg(linkUUID, "get");
+            if (uuid instanceof UUID u) {
+                return "decore_" + u;
+            }
+        }
+
+        // 降级：用 Core 坐标作为分组标识（Core 未激活时没有 linkUUID）
+        return "decore_" + corePos.getX() + "_" + corePos.getY() + "_" + corePos.getZ();
     }
 
     @Nullable
