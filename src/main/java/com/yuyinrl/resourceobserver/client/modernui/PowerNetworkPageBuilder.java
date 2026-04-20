@@ -15,6 +15,7 @@ import icyllis.modernui.view.ViewGroup;
 import icyllis.modernui.widget.FrameLayout;
 import icyllis.modernui.widget.LinearLayout;
 import icyllis.modernui.widget.ScrollView;
+import icyllis.modernui.widget.Switch;
 import icyllis.modernui.widget.TextView;
 
 import java.util.ArrayList;
@@ -57,6 +58,7 @@ final class PowerNetworkPageBuilder {
     private static final int TAG_GRID_UTIL_TV = 0x7F_0108;
     private static final int TAG_GRID_BAR_FILL = 0x7F_0109;
     private static final int TAG_DEVICE_SECTION = 0x7F_010B;
+    private static final int TAG_DONUT_TOGGLE = 0x7F_010C;
 
     private PowerNetworkPageBuilder() {}
 
@@ -420,6 +422,11 @@ final class PowerNetworkPageBuilder {
         // ── Update donut chart data (in-place, preserves hover state) ──
         PowerNetworkViewModel.OverloadInfo info = stats.overloadInfo();
         double headroom = info != null ? info.headroomPercent() : 100.0;
+
+        // 甜甜圈模式：仅显示负载分布时将 headroom 置 0
+        boolean usedOnly = terminal.getBridge().isPowerDonutUsedOnly();
+        double effectiveHeadroom = usedOnly ? 0.0 : headroom;
+
         boolean critical = headroom < 5;
         boolean warning = headroom < 15;
         int accentColor = critical ? UiThemeTokens.ROSE
@@ -428,9 +435,16 @@ final class PowerNetworkPageBuilder {
         List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers =
                 computeEffectiveConsumers(vm, effectiveExtIds, stats.totalInputPerTick());
         List<DonutChartView.Segment> donutSegs = buildDonutSegments(vm, stats, effectiveConsumers);
-        String centerValue = String.format(Locale.ROOT, "%.1f%%", headroom);
-        String centerLabel = tr("screen.resourceobserver.power.section.load_chart");
-        donut.setData(donutSegs, headroom, centerValue, centerLabel, accentColor);
+        double utilization = 100.0 - headroom;
+        String centerValue = usedOnly
+                ? String.format(Locale.ROOT, "%.1f%%", utilization)
+                : String.format(Locale.ROOT, "%.1f%%", headroom);
+        String centerLabel = usedOnly
+                ? tr("screen.resourceobserver.power.donut.center_utilization")
+                : tr("screen.resourceobserver.power.section.load_chart");
+        donut.setData(donutSegs, effectiveHeadroom, centerValue, centerLabel, accentColor);
+
+        // Switch 组件自行维护 checked 状态，增量更新无需干预
 
         // ── Update KPI text values ──
         List<PowerNetworkViewModel.PowerKpi> kpis = buildEffectiveKpis(stats, vm, effectiveExtIds);
@@ -1390,6 +1404,10 @@ final class PowerNetworkPageBuilder {
         PowerNetworkViewModel.OverloadInfo info = stats.overloadInfo();
         double headroom = info != null ? info.headroomPercent() : 100.0;
 
+        // 甜甜圈模式：仅显示负载分布时将 headroom 置 0，使扇区填满整个圆环
+        boolean usedOnly = terminal.getBridge().isPowerDonutUsedOnly();
+        double effectiveHeadroom = usedOnly ? 0.0 : headroom;
+
         boolean critical = headroom < 5;
         boolean warning = headroom < 15;
         int accentColor = critical ? UiThemeTokens.ROSE
@@ -1399,13 +1417,55 @@ final class PowerNetworkPageBuilder {
         List<DonutChartView.Segment> donutSegs = buildDonutSegments(vm, stats, effectiveConsumers);
 
         // ── Center text ──
-        String centerValue = String.format(Locale.ROOT, "%.1f%%", headroom);
-        String centerLabel = tr("screen.resourceobserver.power.section.load_chart");
+        double utilization = 100.0 - headroom;
+        String centerValue = usedOnly
+                ? String.format(Locale.ROOT, "%.1f%%", utilization)
+                : String.format(Locale.ROOT, "%.1f%%", headroom);
+        String centerLabel = usedOnly
+                ? tr("screen.resourceobserver.power.donut.center_utilization")
+                : tr("screen.resourceobserver.power.section.load_chart");
+
+        // ── Switch: 切换甜甜圈显示模式（仅显示负载 / 含余量） ──
+        LinearLayout switchRow = new LinearLayout(terminal.getContext());
+        switchRow.setOrientation(LinearLayout.HORIZONTAL);
+        switchRow.setGravity(Gravity.CENTER_VERTICAL | Gravity.LEFT);
+
+        Switch donutSwitch = new Switch(terminal.getContext());
+        donutSwitch.setTag(TAG_DONUT_TOGGLE);
+        donutSwitch.setText(tr("screen.resourceobserver.power.donut.toggle.used_only"));
+        donutSwitch.setTextColor(UiThemeTokens.TEXT_MUTED);
+        donutSwitch.setTextSize(8 * getTextScale());
+        donutSwitch.setPadding(terminal.dp(6), 0, terminal.dp(6), 0);
+        donutSwitch.setChecked(usedOnly);
+        donutSwitch.setOnCheckedChangeListener((btn, checked) -> {
+            terminal.getBridge().setPowerDonutUsedOnly(checked);
+            // 直接更新甜甜圈数据，无需重建整个页面
+            DonutChartView donut = terminal.getContentContainer().findViewWithTag(TAG_DONUT);
+            if (donut != null) {
+                double h = checked ? 0.0 : headroom;
+                double util = 100.0 - headroom;
+                String cv = checked
+                        ? String.format(java.util.Locale.ROOT, "%.1f%%", util)
+                        : String.format(java.util.Locale.ROOT, "%.1f%%", headroom);
+                String cl = checked
+                        ? tr("screen.resourceobserver.power.donut.center_utilization")
+                        : tr("screen.resourceobserver.power.section.load_chart");
+                donut.setData(donutSegs, h, cv, cl, accentColor);
+            }
+        });
+        switchRow.addView(donutSwitch, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, terminal.dp(22)));
+
+        LinearLayout.LayoutParams switchRowLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        switchRowLp.gravity = Gravity.LEFT;
+        switchRowLp.topMargin = terminal.dp(2);
+        section.addView(switchRow, switchRowLp);
 
         // ── DonutChartView ──
         DonutChartView donut = new DonutChartView(terminal.getContext());
         donut.setTag(TAG_DONUT);
-        donut.setData(donutSegs, headroom, centerValue, centerLabel, accentColor);
+        donut.setData(donutSegs, effectiveHeadroom, centerValue, centerLabel, accentColor);
 
         int pieSize = Math.min(sectionWidth - terminal.dp(16), sectionHeight - terminal.dp(56));
         pieSize = Math.max(terminal.dp(64), pieSize);

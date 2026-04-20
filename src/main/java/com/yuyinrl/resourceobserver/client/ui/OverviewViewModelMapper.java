@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+import com.yuyinrl.resourceobserver.client.util.PinyinMatcher;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.ui.state.TableSortMode;
 import com.yuyinrl.resourceobserver.ui.state.TableStatusFilter;
@@ -41,15 +42,17 @@ public final class OverviewViewModelMapper {
     /**
      * 将 Payload 数据转换为 OverviewViewModel。
      * 这是 Mapper 的唯一公共入口，完成完整的数据转换流程。
+     *
+     * @param searchQuery 搜索关键词（按 displayName 过滤），为空时不过滤
      */
-    public static OverviewViewModel fromPayload(ObserverDataPayload payload) {
+    public static OverviewViewModel fromPayload(ObserverDataPayload payload, String searchQuery) {
         LinkedHashSet<String> watchlistSet = new LinkedHashSet<>(payload.watchlistItemIds());
         // 汇总所有绑定网络的 KPI 总量
         WindowStatsAggregation windowStatsAggregation = WindowStatsAggregation.empty();
         CellCapacityAggregation cellCapacityAggregation = CellCapacityAggregation.empty();
 
-        // 遍历所有绑定，构建表格行数据
-        List<OverviewViewModel.TableRow> allRows = new ArrayList<>();
+        // 遍历所有绑定，构建表格行数据（按 itemId 合并跨网络重复物品）
+        Map<String, OverviewViewModel.TableRow> mergedRows = new LinkedHashMap<>();
         for (ObserverDataPayload.BindingEntry binding : payload.bindings()) {
             // 仅聚合物品/流体类绑定的 KPI 数据，跳过能量绑定（FLUX_ENERGY）
             // FLUX 的 RF/tick 数据不应计入物品生产/消耗速率，否则会将百万级能量误算为物品
@@ -58,26 +61,49 @@ public final class OverviewViewModelMapper {
             }
             cellCapacityAggregation = cellCapacityAggregation.merge(binding);
 
-            // 为每种物品创建表格行
+            // 为每种物品创建或合并表格行
             for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
                 double production = item.productionRate();   // 服务端提供的每分钟生产速率（≥0）
                 double consumption = item.consumptionRate(); // 服务端提供的每分钟消耗速率（≥0）
-                long net = Math.round(production - consumption); // 净变化（四舍五入）
                 String localizedName = localizeEntryName(item.entryType(), item.itemId(), item.displayName());
-                allRows.add(new OverviewViewModel.TableRow(
-                        item.itemId(),
-                        localizedName,
-                        normalizeGroupKey(item.groupKey()),
-                        Math.round(production),
-                        Math.round(consumption),
-                        net,
-                        item.amount(),
-                        isCritical(net, item.amount()),
-                        watchlistSet.contains(item.itemId()),
-                        item.iconSprite()
-                ));
+
+                OverviewViewModel.TableRow existing = mergedRows.get(item.itemId());
+                if (existing != null) {
+                    // 同一物品出现在多个网络中，累加数量和速率
+                    long mergedProd = existing.production() + Math.round(production);
+                    long mergedCons = existing.consumption() + Math.round(consumption);
+                    long mergedNet = mergedProd - mergedCons;
+                    long mergedStock = saturatingAdd(existing.stock(), item.amount());
+                    mergedRows.put(item.itemId(), new OverviewViewModel.TableRow(
+                            existing.itemId(),
+                            existing.displayName(),
+                            existing.groupKey(),
+                            mergedProd,
+                            mergedCons,
+                            mergedNet,
+                            mergedStock,
+                            isCritical(mergedNet, mergedStock),
+                            watchlistSet.contains(item.itemId()),
+                            existing.iconSprite()
+                    ));
+                } else {
+                    long net = Math.round(production - consumption);
+                    mergedRows.put(item.itemId(), new OverviewViewModel.TableRow(
+                            item.itemId(),
+                            localizedName,
+                            normalizeGroupKey(item.groupKey()),
+                            Math.round(production),
+                            Math.round(consumption),
+                            net,
+                            item.amount(),
+                            isCritical(net, item.amount()),
+                            watchlistSet.contains(item.itemId()),
+                            item.iconSprite()
+                    ));
+                }
             }
         }
+        List<OverviewViewModel.TableRow> allRows = new ArrayList<>(mergedRows.values());
 
         // 无物品级数据时使用绑定级数据构建回退行
         if (allRows.isEmpty()) {
@@ -122,7 +148,7 @@ public final class OverviewViewModelMapper {
         // 应用筛选和排序
         List<OverviewViewModel.TableRow> filteredRows = applyFiltersAndSort(
                 allRows, uiState.statusFilter(), uiState.groupFilterKey(),
-                uiState.sortMode(), uiState.sortDesc()
+                uiState.sortMode(), uiState.sortDesc(), searchQuery
         );
         // 按分组归类行数据
         List<OverviewViewModel.TableGroup> groupedRows = groupRows(filteredRows, uiState.groupFilterKey(), uiState.groups());
@@ -677,7 +703,7 @@ public final class OverviewViewModelMapper {
     }
 
     /**
-     * 应用状态筛选、分组筛选和排序。
+     * 应用状态筛选、分组筛选、搜索过滤和排序。
      * 先过滤不符合条件的行，再按指定模式排序。
      */
     private static List<OverviewViewModel.TableRow> applyFiltersAndSort(
@@ -685,14 +711,21 @@ public final class OverviewViewModelMapper {
             TableStatusFilter statusFilter,
             String groupFilterKey,
             TableSortMode sortMode,
-            boolean sortDesc
+            boolean sortDesc,
+            String searchQuery
     ) {
+        String queryTrimmed = (searchQuery == null || searchQuery.isBlank())
+                ? "" : searchQuery.trim();
         List<OverviewViewModel.TableRow> filtered = new ArrayList<>();
         for (OverviewViewModel.TableRow row : rows) {
             if (!matchesStatus(row, statusFilter)) {
                 continue;
             }
             if (!matchesGroup(row, groupFilterKey)) {
+                continue;
+            }
+            if (!queryTrimmed.isEmpty()
+                    && !PinyinMatcher.matches(row.displayName(), queryTrimmed)) {
                 continue;
             }
             filtered.add(row);

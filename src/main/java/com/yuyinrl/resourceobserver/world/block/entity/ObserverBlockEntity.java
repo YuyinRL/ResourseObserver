@@ -148,6 +148,10 @@ public class ObserverBlockEntity extends BlockEntity {
     private final Map<String, String> debugInfoMap = new HashMap<>();
     /** 容量告警签名（networkId -> last signature），避免重复刷日志 */
     private final Map<String, String> capacityWarnSignatureMap = new HashMap<>();
+    /** 容量告警时间戳（networkId -> 上次输出 WARN 的 System.nanoTime()），用于频率限制 */
+    private final Map<String, Long> capacityWarnTimestampMap = new HashMap<>();
+    /** 容量告警日志最小间隔（纳秒），同一网络 5 分钟内最多输出一次 WARN */
+    private static final long CAPACITY_WARN_INTERVAL_NS = 5L * 60L * 1_000_000_000L;
     private static final Map<Class<?>, CellMetricsAccessors> CELL_METRICS_ACCESSORS = new HashMap<>();
     private static final Set<Class<?>> CELL_METRICS_UNSUPPORTED = new HashSet<>();
     /** 上次采样的游戏时间，用于控制采样间隔 */
@@ -370,6 +374,7 @@ public class ObserverBlockEntity extends BlockEntity {
         ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
         capacityWarnSignatureMap.clear();
+        capacityWarnTimestampMap.clear();
         fluxSampleResults.clear();
         setChanged();
         syncConnectedState();
@@ -816,8 +821,23 @@ public class ObserverBlockEntity extends BlockEntity {
             String signature = readResult.debugInfo();
             String previous = capacityWarnSignatureMap.put(networkId, signature);
             if (!signature.equals(previous)) {
-                ResourceObserverMod.LOGGER.warn(
-                        "[ResourceObserver] AE2 capacity probe degraded at {} network={} info={}",
+                // 频率限制：同一网络 5 分钟内最多输出一次 WARN
+                long now = System.nanoTime();
+                Long lastWarn = capacityWarnTimestampMap.get(networkId);
+                if (lastWarn == null || (now - lastWarn) >= CAPACITY_WARN_INTERVAL_NS) {
+                    capacityWarnTimestampMap.put(networkId, now);
+                    ResourceObserverMod.LOGGER.warn(
+                            "[ResourceObserver] AE2 capacity probe degraded at {} network={}"
+                                    + " reliable={} available={}",
+                            targetPos.toShortString(),
+                            networkId,
+                            metrics.reliable(),
+                            metrics.available()
+                    );
+                }
+                // 完整诊断信息降级为 DEBUG，需要时可通过日志配置启用
+                ResourceObserverMod.LOGGER.debug(
+                        "[ResourceObserver] AE2 capacity probe detail at {} network={} info={}",
                         targetPos.toShortString(),
                         networkId,
                         signature
@@ -826,6 +846,7 @@ public class ObserverBlockEntity extends BlockEntity {
             return;
         }
         capacityWarnSignatureMap.remove(networkId);
+        capacityWarnTimestampMap.remove(networkId);
     }
 
     /**
@@ -2615,6 +2636,7 @@ public class ObserverBlockEntity extends BlockEntity {
         ae2CellCapacityMetrics.clear();
         debugInfoMap.clear();
         capacityWarnSignatureMap.clear();
+        capacityWarnTimestampMap.clear();
         fluxSampleResults.clear();
         if (tag.contains(TAG_BINDINGS, Tag.TAG_LIST)) {
             ListTag listTag = tag.getList(TAG_BINDINGS, Tag.TAG_COMPOUND);

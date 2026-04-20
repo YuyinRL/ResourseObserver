@@ -334,5 +334,10 @@
   "tooltip.resourceobserver.terminal.observer_pos": "Observer: [%s, %s, %s]",
   "tooltip.resourceobserver.terminal.no_network": "No network connections",
   "tooltip.resourceobserver.terminal.networks_header": "Networks: %s binding(s)",
-  "tooltip.resourceobserver.terminal.shift_hint": "Hold [Shift] for details"
+  "tooltip.resourceobserver.terminal.shift_hint": "Hold [Shift] for details",
+
+  "screen.resourceobserver.search.hint": "Search items...",
+  "screen.resourceobserver.search.clear": "Clear search",
+  "screen.resourceobserver.power.donut.toggle.used_only": "Load Only",
+  "screen.resourceobserver.power.donut.center_utilization": "Utilization"
 }

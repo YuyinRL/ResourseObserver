@@ -16,6 +16,8 @@ import icyllis.modernui.animation.PropertyValuesHolder;
 import icyllis.modernui.animation.TimeInterpolator;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
 import icyllis.modernui.graphics.drawable.GradientDrawable;
+import icyllis.modernui.text.Editable;
+import icyllis.modernui.text.TextWatcher;
 import icyllis.modernui.view.Gravity;
 import icyllis.modernui.view.Menu;
 import icyllis.modernui.view.MenuItem;
@@ -987,6 +989,9 @@ final class OverviewPageBuilder {
         statusBtn.setOnClickListener(v -> showStatusFilterPopup(terminal, v, uiState));
         toolbar.addView(statusBtn);
 
+        // 搜索框
+        buildSearchBox(terminal, toolbar);
+
         toolbar.addView(spacer(terminal), spacerParams());
 
         // Reset button — 重置筛选条件并清除单物品图表选择，恢复全局视图
@@ -1029,6 +1034,98 @@ final class OverviewPageBuilder {
             expandedState.putIfAbsent(group.key(), true);
             buildTableGroup(terminal, section, sectionWidth, group, expandedState);
         }
+    }
+
+    /**
+     * 构建搜索框 —— 内联于筛选工具栏，按物品名称实时过滤表格内容。
+     * 搜索词通过 {@link ViewModelBridge} 在 Overview 和 Storage Network 页面间共享。
+     */
+    private static void buildSearchBox(ResourceTerminalFragment terminal, LinearLayout toolbar) {
+        int dp4 = terminal.dp(4);
+        int dp6 = terminal.dp(6);
+        int dp8 = terminal.dp(8);
+
+        LinearLayout searchContainer = new LinearLayout(terminal.getContext());
+        searchContainer.setOrientation(LinearLayout.HORIZONTAL);
+        searchContainer.setGravity(Gravity.CENTER_VERTICAL);
+
+        EditText searchEdit = new EditText(terminal.getContext());
+        searchEdit.setHint(tr("screen.resourceobserver.search.hint"));
+        searchEdit.setSingleLine(true);
+        searchEdit.setTextSize(10 * getTextScale());
+        searchEdit.setTextColor(UiThemeTokens.TEXT);
+        searchEdit.setHintTextColor(UiThemeTokens.TEXT_MUTED);
+
+        ShapeDrawable searchBg = new ShapeDrawable();
+        searchBg.setColor(UiThemeTokens.SECTION_BG);
+        searchBg.setCornerRadius(dp4);
+        searchBg.setStroke(terminal.dp(1), UiThemeTokens.DIVIDER);
+        searchEdit.setBackground(searchBg);
+        searchEdit.setPadding(dp8, dp4, dp8, dp4);
+
+        // 从 bridge 恢复当前搜索词（页面重建后保持一致）
+        String currentQuery = terminal.getBridge().getSearchQuery();
+        if (!currentQuery.isEmpty()) {
+            searchEdit.setText(currentQuery);
+        }
+
+        LinearLayout.LayoutParams editLp = new LinearLayout.LayoutParams(
+                terminal.dp(100), ViewGroup.LayoutParams.WRAP_CONTENT);
+        editLp.leftMargin = dp6;
+        searchContainer.addView(searchEdit, editLp);
+
+        // "×" 清除按钮
+        TextView clearBtn = new TextView(terminal.getContext());
+        clearBtn.setText("×");
+        clearBtn.setTextSize(12 * getTextScale());
+        clearBtn.setTextColor(UiThemeTokens.TEXT_MUTED);
+        clearBtn.setGravity(Gravity.CENTER);
+        clearBtn.setPadding(dp4, 0, dp4, 0);
+        clearBtn.setClickable(true);
+        clearBtn.setFocusable(true);
+        clearBtn.setVisibility(currentQuery.isEmpty() ? View.GONE : View.VISIBLE);
+        clearBtn.setOnClickListener(v -> {
+            searchEdit.setText("");
+            terminal.scheduleSearchUpdate("");
+        });
+        searchContainer.addView(clearBtn, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+
+        // 文字变化监听 —— 200ms 防抖后触发 ViewModel 重建
+        searchEdit.addTextChangedListener(new TextWatcher() {
+            @Override
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
+            @Override
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            @Override
+            public void afterTextChanged(Editable s) {
+                String text = s.toString();
+                clearBtn.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+                if (!text.equals(terminal.getBridge().getSearchQuery())) {
+                    terminal.scheduleSearchUpdate(text);
+                }
+            }
+        });
+
+        // 跟踪焦点状态，页面重建后据此恢复焦点（重建期间的失焦事件忽略）
+        searchEdit.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                terminal.getBridge().setSearchBoxFocused(true);
+            } else if (!terminal.isRebuilding()) {
+                terminal.getBridge().setSearchBoxFocused(false);
+            }
+        });
+
+        // 页面重建后恢复焦点（无论搜索词是否为空）
+        if (terminal.getBridge().isSearchBoxFocused()) {
+            searchEdit.post(() -> {
+                searchEdit.requestFocus();
+                searchEdit.setSelection(searchEdit.getText().length());
+            });
+        }
+
+        toolbar.addView(searchContainer, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
     }
 
     private static void addSortableHeader(ResourceTerminalFragment terminal, LinearLayout parent,

@@ -134,12 +134,18 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
     /** Whether a text input (e.g. group name popup) is currently active — suppresses inventory-key close */
     private boolean textInputActive = false;
 
+    /** 页面重建中标志 —— 防止旧视图销毁时的失焦事件清除 searchBoxFocused 状态 */
+    private boolean rebuilding = false;
+
     // ---- Hover tooltip state (vanilla-style tooltip via ScreenEvent.Render.Post) ----
     /** Pre-built tooltip lines for the currently hovered item/fluid (empty = no tooltip) */
     private volatile List<net.minecraft.network.chat.Component> hoveredTooltipLines = List.of();
 
     /** Timestamp of last full UI rebuild — used to suppress rapid data-change rebuilds on open */
     private long lastFullRebuildTime;
+
+    /** 搜索防抖回调 —— 延迟触发 ViewModel 重建，避免每次按键都重建页面 */
+    private Runnable searchDebounceRunnable;
 
     private final Runnable refreshRunnable = new Runnable() {
         @Override
@@ -195,6 +201,22 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
 
     public boolean isTextInputActive() { return textInputActive; }
     public void setTextInputActive(boolean active) { this.textInputActive = active; }
+
+    boolean isRebuilding() { return rebuilding; }
+
+    /**
+     * 防抖更新搜索词 —— 延迟 200ms 后才触发 ViewModel 重建 + 页面刷新，
+     * 连续快速输入时只有最后一次生效，避免每次按键都触发完整重建。
+     */
+    void scheduleSearchUpdate(String query) {
+        View root = getView();
+        if (root == null) return;
+        if (searchDebounceRunnable != null) {
+            root.removeCallbacks(searchDebounceRunnable);
+        }
+        searchDebounceRunnable = () -> bridge.setSearchQuery(query);
+        root.postDelayed(searchDebounceRunnable, 200L);
+    }
 
     // ---- Hover tooltip accessors (read on render thread via ScreenEvent) ----
     public List<net.minecraft.network.chat.Component> getHoveredTooltipLines() { return hoveredTooltipLines; }
@@ -445,6 +467,15 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
 
     private void buildPageContent() {
         if (contentContainer == null) return;
+        rebuilding = true;
+        try {
+            buildPageContentInner();
+        } finally {
+            rebuilding = false;
+        }
+    }
+
+    private void buildPageContentInner() {
 
         // Save scroll position before removing children
         if (contentContainer.getChildCount() > 0) {

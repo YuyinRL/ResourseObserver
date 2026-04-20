@@ -335,4 +335,8 @@
   ,"tooltip.resourceobserver.terminal.no_network": "未连接任何网络"
   ,"tooltip.resourceobserver.terminal.networks_header": "网络绑定: 共 %s 条"
   ,"tooltip.resourceobserver.terminal.shift_hint": "按住 [Shift] 查看详情"
+  ,"screen.resourceobserver.search.hint": "搜索物品..."
+  ,"screen.resourceobserver.search.clear": "清除搜索"
+  ,"screen.resourceobserver.power.donut.toggle.used_only": "仅显示负载"
+  ,"screen.resourceobserver.power.donut.center_utilization": "利用率"
 }

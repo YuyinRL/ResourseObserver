@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+import com.yuyinrl.resourceobserver.client.util.PinyinMatcher;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -72,11 +73,15 @@ public final class StorageNetworkViewModelMapper {
     /** 中等偏差时的混合权重（新值占比） */
     private static final double BLEND_ALPHA = 0.15;
 
+    /**
+     * @param searchQuery       搜索关键词（按 displayName 过滤），为空时不过滤
+     */
     public static StorageNetworkViewModel fromPayload(
             ObserverDataPayload payload,
             String selectedNodeId,
             boolean alertFilterActive,
-            Map<String, double[]> bufferEma
+            Map<String, double[]> bufferEma,
+            String searchQuery
     ) {
         // 仅保留存储类绑定（过滤掉 FLUX_ENERGY 等纯能量绑定）
         List<ObserverDataPayload.BindingEntry> bindings = payload.bindings().stream()
@@ -220,6 +225,14 @@ public final class StorageNetworkViewModelMapper {
         if (alertFilterActive) {
             items = items.stream()
                     .filter(row -> row.alertLevel() != StorageNetworkViewModel.AlertLevel.GREEN)
+                    .toList();
+        }
+
+        // 应用搜索过滤（支持拼音首字母匹配）
+        if (searchQuery != null && !searchQuery.isBlank()) {
+            String queryTrimmed = searchQuery.trim();
+            items = items.stream()
+                    .filter(row -> PinyinMatcher.matches(row.displayName(), queryTrimmed))
                     .toList();
         }
 

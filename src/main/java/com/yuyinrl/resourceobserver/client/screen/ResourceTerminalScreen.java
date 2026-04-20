@@ -1429,7 +1429,7 @@ public class ResourceTerminalScreen extends Screen {
 
     /** 从 Payload 重建 OverviewViewModel 和 StorageNetworkViewModel */
     private void rebuildViewModel() {
-        viewModel = OverviewViewModelMapper.fromPayload(payload);
+        viewModel = OverviewViewModelMapper.fromPayload(payload, "");
         for (OverviewViewModel.TableGroup group : viewModel.tableGroups()) {
             groupExpandedState.putIfAbsent(group.key(), true);
         }
@@ -1441,7 +1441,7 @@ public class ResourceTerminalScreen extends Screen {
     /** 重建存储网络页面的 ViewModel */
     private void rebuildStorageViewModel() {
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
-                payload, storageSelectedNodeId, storageAlertFilterActive, storageBufferEma
+                payload, storageSelectedNodeId, storageAlertFilterActive, storageBufferEma, ""
         );
     }
 

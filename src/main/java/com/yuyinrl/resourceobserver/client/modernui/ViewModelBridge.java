@@ -41,6 +41,15 @@ public final class ViewModelBridge {
     private String storageSelectedNodeId;
     private boolean storageAlertFilterActive;
 
+    /** 搜索关键词（客户端本地状态，不持久化），Overview 和 Storage Network 页面共享 */
+    private String searchQuery = "";
+
+    /** 搜索框是否处于聚焦状态 —— 页面重建后据此恢复焦点，避免输入中断 */
+    private boolean searchBoxFocused = false;
+
+    /** 甜甜圈图模式：true = 仅显示负载分布（忽略余量），false = 显示总容量含余量 */
+    private boolean powerDonutUsedOnly = false;
+
     /**
      * EMA smoothed buffer state per item — survives across rebuilds for stable display.
      * Each entry: [0] = smoothed seconds, [1] = anchor system time (ms).
@@ -86,14 +95,40 @@ public final class ViewModelBridge {
         this.storageSelectedNodeId = selectedNodeId;
         this.storageAlertFilterActive = alertFilterActive;
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
-                payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma);
+                payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
         notifyListeners();
     }
 
-    private void rebuildAllViewModels() {
-        overviewViewModel = OverviewViewModelMapper.fromPayload(payload);
+    /**
+     * 更新搜索关键词并重建 Overview 和 Storage ViewModel。
+     * 搜索词为客户端本地状态，不持久化到服务端。
+     */
+    public void setSearchQuery(String query) {
+        String normalized = query == null ? "" : query;
+        if (normalized.equals(this.searchQuery)) return;
+        this.searchQuery = normalized;
+        overviewViewModel = OverviewViewModelMapper.fromPayload(payload, searchQuery);
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
-                payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma);
+                payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
+        notifyListeners();
+    }
+
+    public String getSearchQuery() {
+        return searchQuery;
+    }
+
+    public void setSearchBoxFocused(boolean focused) {
+        this.searchBoxFocused = focused;
+    }
+
+    public boolean isSearchBoxFocused() {
+        return searchBoxFocused;
+    }
+
+    private void rebuildAllViewModels() {
+        overviewViewModel = OverviewViewModelMapper.fromPayload(payload, searchQuery);
+        storageViewModel = StorageNetworkViewModelMapper.fromPayload(
+                payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
         powerViewModel = PowerNetworkViewModelMapper.fromPayload(payload);
     }
 
@@ -125,6 +160,14 @@ public final class ViewModelBridge {
 
     public boolean isStorageAlertFilterActive() {
         return storageAlertFilterActive;
+    }
+
+    public boolean isPowerDonutUsedOnly() {
+        return powerDonutUsedOnly;
+    }
+
+    public void setPowerDonutUsedOnly(boolean usedOnly) {
+        this.powerDonutUsedOnly = usedOnly;
     }
 
     /** EMA 锚点 map — 供倒计时 tick 直接读取（只读；写入由 mapper 在数据刷新时完成）。 */

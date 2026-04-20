@@ -171,6 +171,9 @@ dependencies {
     localRuntime "curse.maven:codechicken-lib-1-8-242818:7281427"
     localRuntime "curse.maven:brandons-core-231382:6769922"
     localRuntime "curse.maven:draconic-evolution-223565:6770008"
+    // JEC (Just Enough Characters) — 可选，用于中文拼音搜索集成
+    compileOnly "curse.maven:just-enough-characters-250702:6681787"
+    localRuntime "curse.maven:just-enough-characters-250702:6681787"
 }
 
 // 将所有已声明的替换属性展开到指定资源目标中。
