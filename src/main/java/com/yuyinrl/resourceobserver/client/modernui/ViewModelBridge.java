@@ -1,6 +1,8 @@
 package com.yuyinrl.resourceobserver.client.modernui;
 
 import com.yuyinrl.resourceobserver.client.PowerExternalSelectionCache;
+import com.yuyinrl.resourceobserver.client.ui.CraftingViewModel;
+import com.yuyinrl.resourceobserver.client.ui.CraftingViewModelMapper;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModelMapper;
 import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModel;
@@ -37,6 +39,10 @@ public final class ViewModelBridge {
     private OverviewViewModel overviewViewModel;
     private StorageNetworkViewModel storageViewModel;
     private PowerNetworkViewModel powerViewModel;
+    private CraftingViewModel craftingViewModel;
+
+    /** Storage Network 页当前激活的子 Tab（"items" 或 "crafting"）。 */
+    private String storageSubTab = "items";
 
     private String storageSelectedNodeId;
     private boolean storageAlertFilterActive;
@@ -77,13 +83,15 @@ public final class ViewModelBridge {
         OverviewViewModel oldOverview = overviewViewModel;
         StorageNetworkViewModel oldStorage = storageViewModel;
         PowerNetworkViewModel oldPower = powerViewModel;
+        CraftingViewModel oldCrafting = craftingViewModel;
 
         rebuildAllViewModels();
         refreshExternalSelectionCacheKey();
 
         if (!Objects.equals(overviewViewModel, oldOverview)
                 || !Objects.equals(storageViewModel, oldStorage)
-                || !Objects.equals(powerViewModel, oldPower)) {
+                || !Objects.equals(powerViewModel, oldPower)
+                || !Objects.equals(craftingViewModel, oldCrafting)) {
             notifyListeners();
         }
     }
@@ -110,6 +118,7 @@ public final class ViewModelBridge {
         overviewViewModel = OverviewViewModelMapper.fromPayload(payload, searchQuery);
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
                 payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
+        craftingViewModel = CraftingViewModelMapper.fromPayload(payload, searchQuery);
         notifyListeners();
     }
 
@@ -130,6 +139,7 @@ public final class ViewModelBridge {
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
                 payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
         powerViewModel = PowerNetworkViewModelMapper.fromPayload(payload);
+        craftingViewModel = CraftingViewModelMapper.fromPayload(payload, searchQuery);
     }
 
     // ===================== Getters =====================
@@ -152,6 +162,23 @@ public final class ViewModelBridge {
 
     public PowerNetworkViewModel getPowerViewModel() {
         return powerViewModel;
+    }
+
+    public CraftingViewModel getCraftingViewModel() {
+        return craftingViewModel;
+    }
+
+    /** Storage Network 页当前子 Tab（"items" / "crafting"）。 */
+    public String getStorageSubTab() {
+        return storageSubTab;
+    }
+
+    /** 切换 Storage Network 子 Tab，并通知监听器触发 UI 重建。 */
+    public void setStorageSubTab(String subTab) {
+        String normalized = "crafting".equalsIgnoreCase(subTab) ? "crafting" : "items";
+        if (normalized.equals(this.storageSubTab)) return;
+        this.storageSubTab = normalized;
+        notifyListeners();
     }
 
     public String getStorageSelectedNodeId() {

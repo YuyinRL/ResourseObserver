@@ -160,6 +160,29 @@ public class ObserverBlockEntity extends BlockEntity {
     /** Flux Networks 采样结果缓存（networkId -> FluxSampleResult） */
     private final Map<String, FluxNetworksIntegration.FluxSampleResult> fluxSampleResults = new HashMap<>();
 
+    /** 活跃的 Observer 方块实体注册表 —— 供 Web API 枚举使用。弱引用集合，避免阻止卸载。 */
+    private static final Set<ObserverBlockEntity> LOADED =
+            Collections.newSetFromMap(new java.util.concurrent.ConcurrentHashMap<>());
+
+    /** 返回当前所有已加载的 Observer（副本快照）。 */
+    public static List<ObserverBlockEntity> loadedObservers() {
+        return new ArrayList<>(LOADED);
+    }
+
+    @Override
+    public void onLoad() {
+        super.onLoad();
+        if (level != null && !level.isClientSide) {
+            LOADED.add(this);
+        }
+    }
+
+    @Override
+    public void setRemoved() {
+        LOADED.remove(this);
+        super.setRemoved();
+    }
+
     /**
      * 网络绑定条目 —— 记录一个已绑定的资源网络的基本信息。
      * @param networkType  网络类型标识（如 "AE2_ITEMS"、"FLUX_ENERGY"）

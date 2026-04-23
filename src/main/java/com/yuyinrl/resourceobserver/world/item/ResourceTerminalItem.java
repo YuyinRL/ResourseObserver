@@ -1,6 +1,7 @@
 package com.yuyinrl.resourceobserver.world.item;
 
 import appeng.api.networking.IGrid;
+import com.yuyinrl.resourceobserver.integration.CraftingDataCollector;
 import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
@@ -338,6 +339,7 @@ public class ResourceTerminalItem extends Item {
 
         // 构建各绑定网络的数据条目
         List<ObserverDataPayload.BindingEntry> entries = new ArrayList<>();
+        List<ObserverDataPayload.CraftingBindingData> craftingBindings = new ArrayList<>();
         for (ObserverBlockEntity.BoundEntry binding : effectiveBindings) {
             ObserverBlockEntity.BindingStats stats = observer.getStatsFor(binding.networkId());
             List<ObserverDataPayload.ItemDeltaEntry> itemDeltas = buildItemDeltas(binding, observer, uiPrefs);
@@ -357,6 +359,10 @@ public class ResourceTerminalItem extends Item {
                     itemDeltas,
                     observer.getDebugInfoFor(binding.networkId())
             ));
+            // AE2_ITEMS 绑定追加合成数据快照
+            if ("AE2_ITEMS".equals(binding.networkType())) {
+                craftingBindings.add(buildCraftingBindingData(observer, binding.networkId()));
+            }
         }
 
         // 查询历史图表数据点
@@ -382,8 +388,53 @@ public class ResourceTerminalItem extends Item {
                 PlayerUiPrefsSavedData.WATCHLIST_LIMIT,
                 uiPrefs.watchlistItemIds(),
                 groups,
-                entries
+                entries,
+                craftingBindings
         );
+    }
+
+    /** 采集单个 AE2 绑定网络的合成数据快照（反射，失败返回空）。 */
+    private static ObserverDataPayload.CraftingBindingData buildCraftingBindingData(
+            ObserverBlockEntity observer,
+            String networkId
+    ) {
+        IGrid grid = observer.resolveAe2GridForNetwork(networkId);
+        if (grid == null) {
+            return ObserverDataPayload.CraftingBindingData.empty(networkId);
+        }
+        List<CraftingDataCollector.CraftableEntry> craftables = CraftingDataCollector.collectCraftables(grid);
+        List<CraftingDataCollector.CraftingJobEntry> jobs = CraftingDataCollector.collectActiveJobs(grid);
+        CraftingDataCollector.CraftingStorageMetrics storage = CraftingDataCollector.collectStorageMetrics(grid);
+
+        // Payload 侧限制到 256 条避免爆包
+        final int CRAFTABLES_LIMIT = 256;
+        int craftableCount = Math.min(craftables.size(), CRAFTABLES_LIMIT);
+        List<ObserverDataPayload.CraftableSnapshot> craftableSnapshots = new ArrayList<>(craftableCount);
+        for (int i = 0; i < craftableCount; i++) {
+            CraftingDataCollector.CraftableEntry c = craftables.get(i);
+            craftableSnapshots.add(new ObserverDataPayload.CraftableSnapshot(c.itemId(), c.displayName()));
+        }
+
+        List<ObserverDataPayload.CraftingJobSnapshot> jobSnapshots = new ArrayList<>(jobs.size());
+        for (CraftingDataCollector.CraftingJobEntry j : jobs) {
+            jobSnapshots.add(new ObserverDataPayload.CraftingJobSnapshot(
+                    j.cpuName() == null ? "" : j.cpuName(),
+                    j.outputItemId() == null ? "" : j.outputItemId(),
+                    j.outputDisplayName() == null ? "" : j.outputDisplayName(),
+                    j.totalAmount(),
+                    j.remainingAmount(),
+                    j.busy(),
+                    j.jobId() == null ? "" : j.jobId()
+            ));
+        }
+        ObserverDataPayload.CraftingStorageSnapshot storageSnapshot = new ObserverDataPayload.CraftingStorageSnapshot(
+                storage.cpuCount(),
+                storage.busyCpuCount(),
+                storage.totalStorageBytes(),
+                storage.totalCoProcessors(),
+                storage.reliable()
+        );
+        return new ObserverDataPayload.CraftingBindingData(networkId, jobSnapshots, craftableSnapshots, storageSnapshot);
     }
 
     /** 图表数据查询结果 —— 包含物品图表和能量图表两组数据系列 */

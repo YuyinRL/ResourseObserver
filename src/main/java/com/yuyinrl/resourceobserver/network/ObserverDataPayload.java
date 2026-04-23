@@ -59,7 +59,8 @@ public record ObserverDataPayload(
         int watchlistLimit,
         List<String> watchlistItemIds,
         List<GroupEntry> groups,
-        List<BindingEntry> bindings
+        List<BindingEntry> bindings,
+        List<CraftingBindingData> craftingBindings
 ) implements CustomPacketPayload {
     private static final int MAX_DEBUG_INFO_UTF = 2048;
 
@@ -265,6 +266,57 @@ public record ObserverDataPayload(
     ) {
     }
 
+    /**
+     * 合成数据 —— 单个 AE2_ITEMS 绑定网络的合成信息快照。
+     *
+     * @param networkId  AE2 网络 ID（与 BindingEntry.networkId 对应）
+     * @param jobs       当前所有 CPU 的任务状态
+     * @param craftables 可合成物品列表（已在服务端排序，最多 256 条）
+     * @param storage    合成存储容量汇总
+     */
+    public record CraftingBindingData(
+            String networkId,
+            List<CraftingJobSnapshot> jobs,
+            List<CraftableSnapshot> craftables,
+            CraftingStorageSnapshot storage
+    ) {
+        public static CraftingBindingData empty(String networkId) {
+            return new CraftingBindingData(networkId, List.of(), List.of(),
+                    CraftingStorageSnapshot.empty());
+        }
+    }
+
+    /**
+     * 合成任务快照。
+     */
+    public record CraftingJobSnapshot(
+            String cpuName,
+            String outputItemId,
+            String outputDisplayName,
+            long totalAmount,
+            long remainingAmount,
+            boolean busy,
+            String jobId
+    ) {
+    }
+
+    /** 可合成物品快照。 */
+    public record CraftableSnapshot(String itemId, String displayName) {
+    }
+
+    /** 合成存储容量汇总快照。 */
+    public record CraftingStorageSnapshot(
+            int cpuCount,
+            int busyCpuCount,
+            long totalStorageBytes,
+            int totalCoProcessors,
+            boolean reliable
+    ) {
+        public static CraftingStorageSnapshot empty() {
+            return new CraftingStorageSnapshot(0, 0, 0L, 0, true);
+        }
+    }
+
     /** 数据包类型标识 */
     public static final Type<ObserverDataPayload> TYPE =
             new Type<>(ResourceLocation.fromNamespaceAndPath(ResourceObserverMod.MODID, "observer_data"));
@@ -313,6 +365,7 @@ public record ObserverDataPayload(
                                 buf.readUtf(MAX_DEBUG_INFO_UTF)
                         ));
                     }
+                    List<CraftingBindingData> craftingBindings = readCraftingBindings(buf);
                     return new ObserverDataPayload(
                             pos,
                             bound,
@@ -329,7 +382,8 @@ public record ObserverDataPayload(
                             watchlistLimit,
                             watchlistItemIds,
                             groups,
-                            entries
+                            entries,
+                            craftingBindings
                     );
                 }
 
@@ -367,6 +421,7 @@ public record ObserverDataPayload(
                         writeItemDeltas(buf, entry.itemDeltas());
                         buf.writeUtf(PayloadCodecUtils.clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
                     }
+                    writeCraftingBindings(buf, payload.craftingBindings);
                 }
 
 
@@ -564,6 +619,82 @@ public record ObserverDataPayload(
                         buf.writeUtf(group.displayName(), 128);
                         buf.writeBoolean(group.systemGroup());
                     }
+                }
+
+                /** 反序列化合成数据列表 */
+                private static List<CraftingBindingData> readCraftingBindings(FriendlyByteBuf buf) {
+                    int count = buf.readVarInt();
+                    List<CraftingBindingData> list = new ArrayList<>(count);
+                    for (int i = 0; i < count; i++) {
+                        String networkId = buf.readUtf(512);
+                        int jobCount = buf.readVarInt();
+                        List<CraftingJobSnapshot> jobs = new ArrayList<>(jobCount);
+                        for (int j = 0; j < jobCount; j++) {
+                            jobs.add(new CraftingJobSnapshot(
+                                    buf.readUtf(128),
+                                    buf.readUtf(256),
+                                    buf.readUtf(256),
+                                    buf.readLong(),
+                                    buf.readLong(),
+                                    buf.readBoolean(),
+                                    buf.readUtf(64)
+                            ));
+                        }
+                        int craftCount = buf.readVarInt();
+                        List<CraftableSnapshot> craftables = new ArrayList<>(craftCount);
+                        for (int k = 0; k < craftCount; k++) {
+                            craftables.add(new CraftableSnapshot(
+                                    buf.readUtf(256),
+                                    buf.readUtf(256)
+                            ));
+                        }
+                        CraftingStorageSnapshot storage = new CraftingStorageSnapshot(
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readLong(),
+                                buf.readVarInt(),
+                                buf.readBoolean()
+                        );
+                        list.add(new CraftingBindingData(networkId, jobs, craftables, storage));
+                    }
+                    return list;
+                }
+
+                /** 序列化合成数据列表 */
+                private static void writeCraftingBindings(FriendlyByteBuf buf, List<CraftingBindingData> list) {
+                    List<CraftingBindingData> safe = list == null ? List.of() : list;
+                    buf.writeVarInt(safe.size());
+                    for (CraftingBindingData data : safe) {
+                        buf.writeUtf(data.networkId() == null ? "" : data.networkId(), 512);
+                        List<CraftingJobSnapshot> jobs = data.jobs() == null ? List.of() : data.jobs();
+                        buf.writeVarInt(jobs.size());
+                        for (CraftingJobSnapshot job : jobs) {
+                            buf.writeUtf(nullSafe(job.cpuName()), 128);
+                            buf.writeUtf(nullSafe(job.outputItemId()), 256);
+                            buf.writeUtf(nullSafe(job.outputDisplayName()), 256);
+                            buf.writeLong(job.totalAmount());
+                            buf.writeLong(job.remainingAmount());
+                            buf.writeBoolean(job.busy());
+                            buf.writeUtf(nullSafe(job.jobId()), 64);
+                        }
+                        List<CraftableSnapshot> craftables = data.craftables() == null ? List.of() : data.craftables();
+                        buf.writeVarInt(craftables.size());
+                        for (CraftableSnapshot c : craftables) {
+                            buf.writeUtf(nullSafe(c.itemId()), 256);
+                            buf.writeUtf(nullSafe(c.displayName()), 256);
+                        }
+                        CraftingStorageSnapshot storage = data.storage() == null
+                                ? CraftingStorageSnapshot.empty() : data.storage();
+                        buf.writeVarInt(storage.cpuCount());
+                        buf.writeVarInt(storage.busyCpuCount());
+                        buf.writeLong(storage.totalStorageBytes());
+                        buf.writeVarInt(storage.totalCoProcessors());
+                        buf.writeBoolean(storage.reliable());
+                    }
+                }
+
+                private static String nullSafe(String s) {
+                    return s == null ? "" : s;
                 }
             };
 

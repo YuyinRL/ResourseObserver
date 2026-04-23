@@ -9,6 +9,8 @@ import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import com.yuyinrl.resourceobserver.registry.ModBlocks;
 import com.yuyinrl.resourceobserver.registry.ModCreativeTabs;
 import com.yuyinrl.resourceobserver.registry.ModItems;
+import com.yuyinrl.resourceobserver.web.WebServerConfig;
+import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.world.command.ObserverCommands;
 import net.neoforged.api.distmarker.Dist;
 import net.neoforged.bus.api.IEventBus;
@@ -28,6 +30,8 @@ public class ResourceObserverMod {
         ModBlockEntities.register(modEventBus);
         ModCreativeTabs.register(modEventBus);
         ModNetworking.register(modEventBus);
+        WebServerConfig.register(modContainer);
+        WebServerService.register();
         ObserverCommands.register();
         if (FMLEnvironment.dist == Dist.CLIENT) {
             ChartRenderShaders.register(modEventBus);

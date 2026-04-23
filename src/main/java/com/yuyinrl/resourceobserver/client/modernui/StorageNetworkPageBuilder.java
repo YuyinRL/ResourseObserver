@@ -91,6 +91,19 @@ final class StorageNetworkPageBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         scroll.addView(content);
 
+        // ===== Sub-tab header: Items / Crafting =====
+        LinearLayout subTabBar = buildSubTabBar(terminal);
+        addSection(content, subTabBar, 0);
+
+        String subTab = terminal.getBridge().getStorageSubTab();
+        if ("crafting".equals(subTab)) {
+            CraftingSubTabBuilder.build(terminal, content, contentW, contentH);
+            if (animate) {
+                staggerSlideIn(content, 0, 40, 250);
+            }
+            return;
+        }
+
         // ===== 1. KPI section（全宽，存储 KPI 卡片） =====
         LinearLayout kpiSection = section(terminal, innerW, kpiH);
         kpiSection.setTag(TAG_KPI_SECTION);
@@ -169,6 +182,11 @@ final class StorageNetworkPageBuilder {
     static boolean tryIncrementalUpdate(ResourceTerminalFragment terminal) {
         StorageNetworkViewModel vm = terminal.getBridge().getStorageViewModel();
         if (vm == null) return false;
+
+        // Crafting sub-tab uses full rebuild (simpler; refreshes at 1/sec)
+        if ("crafting".equals(terminal.getBridge().getStorageSubTab())) {
+            return false;
+        }
 
         FrameLayout container = terminal.getContentContainer();
         if (container == null || container.getChildCount() == 0) return false;
@@ -514,6 +532,50 @@ final class StorageNetworkPageBuilder {
             // Store cell references: [capacityTv, statusDot, capFill, capBarContainer]
             nodeRefs.put(node.nodeId(), new View[]{capacityTv, dot, fill, barContainer});
         }
+    }
+
+    /** 子 Tab 切换栏 —— Items / Crafting。 */
+    private static LinearLayout buildSubTabBar(ResourceTerminalFragment terminal) {
+        LinearLayout bar = new LinearLayout(terminal.getContext());
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.setGravity(Gravity.CENTER_VERTICAL);
+        bar.setPadding(terminal.dp(4), terminal.dp(2), terminal.dp(4), terminal.dp(4));
+
+        String current = terminal.getBridge().getStorageSubTab();
+        bar.addView(buildSubTabButton(terminal,
+                tr("screen.resourceobserver.storage.subtab.items"),
+                "items", "items".equals(current)));
+        bar.addView(buildSubTabButton(terminal,
+                tr("screen.resourceobserver.storage.subtab.crafting"),
+                "crafting", "crafting".equals(current)));
+        return bar;
+    }
+
+    private static TextView buildSubTabButton(ResourceTerminalFragment terminal, String label,
+                                              String key, boolean active) {
+        TextView tab = new TextView(terminal.getContext());
+        tab.setText(label);
+        tab.setTextSize(10 * getTextScale());
+        tab.setIncludeFontPadding(false);
+        tab.setSingleLine();
+        tab.setGravity(Gravity.CENTER);
+        tab.setTextColor(active ? UiThemeTokens.CYAN : UiThemeTokens.TEXT);
+        tab.setPadding(terminal.dp(10), terminal.dp(3), terminal.dp(10), terminal.dp(3));
+        tab.setBackground(tabRippleBackground(tab, active));
+        tab.setClickable(true);
+        tab.setFocusable(true);
+        addHoverScaleEffect(tab);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, terminal.dp(20));
+        lp.rightMargin = terminal.dp(4);
+        tab.setLayoutParams(lp);
+        tab.setOnClickListener(v -> {
+            if (!key.equals(terminal.getBridge().getStorageSubTab())) {
+                terminal.getBridge().setStorageSubTab(key);
+                terminal.rebuildContent();
+            }
+        });
+        return tab;
     }
 
     private static void buildKpiSection(ResourceTerminalFragment terminal, LinearLayout section,
