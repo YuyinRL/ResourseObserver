@@ -5,8 +5,12 @@ import com.sun.net.httpserver.HttpServer;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.web.handler.CraftingHandler;
 import com.yuyinrl.resourceobserver.web.handler.HealthHandler;
+import com.yuyinrl.resourceobserver.web.handler.HistoryHandler;
+import com.yuyinrl.resourceobserver.web.handler.IconHandler;
+import com.yuyinrl.resourceobserver.web.handler.ItemsHandler;
 import com.yuyinrl.resourceobserver.web.handler.MetaHandler;
 import com.yuyinrl.resourceobserver.web.handler.ObserversHandler;
+import com.yuyinrl.resourceobserver.web.handler.SamplerDebugHandler;
 import com.yuyinrl.resourceobserver.web.handler.StaticHandler;
 import net.minecraft.server.MinecraftServer;
 import net.neoforged.bus.api.SubscribeEvent;
@@ -135,15 +139,21 @@ public final class WebServerService {
         MetaHandler meta = new MetaHandler(this);
         ObserversHandler observers = new ObserversHandler(this);
         CraftingHandler crafting = new CraftingHandler(this);
+        HistoryHandler history = new HistoryHandler(this);
+        ItemsHandler items = new ItemsHandler(this);
+        IconHandler icon = new IconHandler(this);
+        SamplerDebugHandler samplerDebug = new SamplerDebugHandler(this);
         StaticHandler staticHandler = new StaticHandler(this);
 
         server.createContext("/api/health", health);
         server.createContext("/api/meta", meta);
-        server.createContext("/api/observers", ex -> dispatchObservers(ex, observers, crafting));
+        server.createContext("/api/observers", ex -> dispatchObservers(ex, observers, crafting, history, items, samplerDebug));
+        server.createContext("/api/icon/", icon);
         server.createContext("/", staticHandler);
     }
 
-    private void dispatchObservers(HttpExchange ex, ObserversHandler observers, CraftingHandler crafting)
+    private void dispatchObservers(HttpExchange ex, ObserversHandler observers, CraftingHandler crafting,
+                                   HistoryHandler history, ItemsHandler items, SamplerDebugHandler samplerDebug)
             throws IOException {
         if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) {
             writeJson(ex, 204, "");
@@ -152,6 +162,12 @@ public final class WebServerService {
         String path = ex.getRequestURI().getPath();
         if (path.endsWith("/crafting")) {
             crafting.handle(ex);
+        } else if (path.endsWith("/history")) {
+            history.handle(ex);
+        } else if (path.endsWith("/items")) {
+            items.handle(ex);
+        } else if (path.endsWith("/debug/sampler")) {
+            samplerDebug.handle(ex);
         } else {
             observers.handle(ex);
         }

@@ -46,7 +46,12 @@ public final class MetaHandler extends BaseApiHandler implements HttpHandler {
         endpoints.put("observers", "/api/observers");
         endpoints.put("observerDetail", "/api/observers/{dim}/{x}/{y}/{z}");
         endpoints.put("observerCrafting", "/api/observers/{dim}/{x}/{y}/{z}/crafting");
+        endpoints.put("observerHistory", "/api/observers/{dim}/{x}/{y}/{z}/history?range=detail|short|medium|long&item={id}");
+        endpoints.put("observerItems", "/api/observers/{dim}/{x}/{y}/{z}/items?offset=&limit=&q=&sort=&dir=&alertsOnly=");
+        endpoints.put("icon", "/api/icon/{namespace}/{path}");
         body.put("endpoints", endpoints);
+
+        body.put("iconsAvailable", IconHandler.isClientSideAvailable());
 
         sendJson(exchange, 200, body);
     }

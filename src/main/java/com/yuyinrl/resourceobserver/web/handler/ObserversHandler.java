@@ -202,6 +202,10 @@ public final class ObserversHandler extends BaseApiHandler implements HttpHandle
             row.put("production", prodRates.getOrDefault(id, 0.0d));
             row.put("consumption", consRates.getOrDefault(id, 0.0d));
             row.put("net", netRates.getOrDefault(id, 0.0d));
+            // 注入翻译键 + 当前服务端语言下的显示名，供 Web 端按语言切换
+            ItemNameResolver.Resolved r = ItemNameResolver.resolve(id);
+            if (r.translationKey() != null) row.put("translationKey", r.translationKey());
+            if (r.displayName() != null) row.put("displayName", r.displayName());
             out.add(row);
         }
         return out;

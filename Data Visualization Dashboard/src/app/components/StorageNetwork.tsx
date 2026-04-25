@@ -1,19 +1,19 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   Box,
   Cpu,
   Database,
-  Filter,
   Layers,
+  List,
   LayoutGrid,
   Pencil,
   Pickaxe,
   Search,
-  X,
 } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
-import { useObserverCrafting, useObserverDetail } from '../hooks/useObservers';
+import { useObserverCrafting, useObserverDetail, useObserverItems } from '../hooks/useObservers';
+import type { ItemSortField, SortDirection } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import {
   countBindingsByType,
@@ -23,7 +23,8 @@ import {
   formatBytes,
 } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
-import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider } from './DashboardPrimitives';
+import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
+import { ItemIcon } from './ItemIcon';
 
 interface NodeView {
   id: string;
@@ -41,6 +42,11 @@ interface InventoryItem {
   stock: number;
   production: number;
   consumption: number;
+  net: number;
+  capacity: number;
+  remainingMinutes: number;
+  networkId?: string;
+  translationKey?: string;
   icon: typeof Pickaxe;
   accent: string;
 }
@@ -52,10 +58,10 @@ const MOCK_NODES: NodeView[] = [
 ];
 
 const MOCK_ITEMS: InventoryItem[] = [
-  { id: 'minecraft:iron_ingot', name: 'Iron Ingot', stock: 42000, production: 1200, consumption: 930, icon: Pickaxe, accent: 'text-amber-400' },
-  { id: 'minecraft:copper_ingot', name: 'Copper Ingot', stock: 31000, production: 860, consumption: 740, icon: Pickaxe, accent: 'text-orange-400' },
-  { id: 'ae2:printed_silicon', name: 'Printed Silicon', stock: 5200, production: 140, consumption: 112, icon: Layers, accent: 'text-cyan-400' },
-  { id: 'ae2:engineering_processor', name: 'Engineering Processor', stock: 1800, production: 64, consumption: 58, icon: Cpu, accent: 'text-emerald-400' },
+  { id: 'minecraft:iron_ingot', name: 'Iron Ingot', stock: 42000, production: 1200, consumption: 930, net: 270, capacity: 54000, remainingMinutes: 45, icon: Pickaxe, accent: 'text-amber-400' },
+  { id: 'minecraft:copper_ingot', name: 'Copper Ingot', stock: 31000, production: 860, consumption: 740, net: 120, capacity: 46000, remainingMinutes: 42, icon: Pickaxe, accent: 'text-orange-400' },
+  { id: 'ae2:printed_silicon', name: 'Printed Silicon', stock: 5200, production: 140, consumption: 112, net: 28, capacity: 7600, remainingMinutes: 46, icon: Layers, accent: 'text-cyan-400' },
+  { id: 'ae2:engineering_processor', name: 'Engineering Processor', stock: 1800, production: 64, consumption: 58, net: 6, capacity: 2800, remainingMinutes: 31, icon: Cpu, accent: 'text-emerald-400' },
 ];
 
 function iconForIndex(index: number) {
@@ -101,6 +107,13 @@ export const StorageNetwork = ({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [filterAlertsOnly, setFilterAlertsOnly] = useState(false);
   const [craftSearch, setCraftSearch] = useState('');
+  const [itemOffset, setItemOffset] = useState(0);
+  const [itemSort, setItemSort] = useState<ItemSortField>('amount');
+  const [itemSortDir, setItemSortDir] = useState<SortDirection>('desc');
+  const [itemViewMode, setItemViewMode] = useState<'list' | 'grid'>(() => {
+    if (typeof window === 'undefined') return 'list';
+    return window.localStorage.getItem('resourceobserver:itemViewMode') === 'grid' ? 'grid' : 'list';
+  });
   // ModernUI 对齐：KPI 详情弹窗、节点重命名弹窗
   const [kpiDialogIndex, setKpiDialogIndex] = useState<number | null>(null);
   const [renameTarget, setRenameTarget] = useState<NodeView | null>(null);
@@ -110,10 +123,39 @@ export const StorageNetwork = ({
 
   const liveNodes = useMemo(() => deriveStorageNodes(detail), [detail]);
   const liveItems = useMemo(() => deriveResourceItems(detail, 120), [detail]);
+  const pageLimit = 100;
+  const { data: itemPage } = useObserverItems(selectedId, {
+    offset: itemOffset,
+    limit: pageLimit,
+    q: searchQuery,
+    sort: itemSort,
+    dir: itemSortDir,
+    alertsOnly: filterAlertsOnly,
+  });
   const craftingSummary = useMemo(() => deriveCraftingSummary(craftingData ?? null), [craftingData]);
   const bindingCounts = useMemo(() => countBindingsByType(detail ?? null), [detail]);
   // 是否使用 Mock 回退：真实观察者且至少有 AE2 绑定时使用真实数据；否则回退以便独立演示
   const isLive = Boolean(selectedId) && bindingCounts.ae2 > 0;
+
+  useEffect(() => {
+    setItemOffset(0);
+  }, [selectedId, searchQuery, filterAlertsOnly, itemSort, itemSortDir]);
+
+  const changeItemViewMode = (mode: 'list' | 'grid') => {
+    setItemViewMode(mode);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('resourceobserver:itemViewMode', mode);
+    }
+  };
+
+  const changeSort = (field: ItemSortField) => {
+    if (itemSort === field) {
+      setItemSortDir((prev) => prev === 'desc' ? 'asc' : 'desc');
+      return;
+    }
+    setItemSort(field);
+    setItemSortDir(field === 'name' || field === 'remainingMinutes' ? 'asc' : 'desc');
+  };
 
   const nodes = useMemo<NodeView[]>(
     () => {
@@ -129,19 +171,41 @@ export const StorageNetwork = ({
   );
 
   const items = useMemo<InventoryItem[]>(
-    () => (liveItems && liveItems.length > 0
-      ? liveItems.map((item, index) => ({
+    () => {
+      if (isLive && itemPage) {
+        return itemPage.items.map((item, index) => ({
+          id: item.id,
+          name: item.displayName || item.id,
+          stock: item.amount,
+          production: item.production,
+          consumption: Math.max(1, item.consumption),
+          net: item.net,
+          capacity: item.capacity ?? Math.max(item.amount * 1.5, 1000),
+          remainingMinutes: item.remainingMinutes ?? item.amount / Math.max(item.consumption, 1),
+          networkId: item.networkId,
+          translationKey: item.translationKey,
+          icon: iconForIndex(index),
+          accent: accentForIndex(index),
+        }));
+      }
+      return liveItems && liveItems.length > 0
+        ? liveItems.map((item, index) => ({
           id: item.id,
           name: item.name,
           stock: item.stock,
           production: item.produced,
           consumption: Math.max(1, item.consumed),
+          net: item.produced - item.consumed,
+          capacity: item.capacity,
+          remainingMinutes: item.stock / Math.max(item.consumed, 1),
           icon: iconForIndex(index),
           accent: accentForIndex(index),
         }))
-      : MOCK_ITEMS),
-    [liveItems],
+        : MOCK_ITEMS;
+    },
+    [isLive, itemPage, liveItems],
   );
+  const totalItemCount = isLive && itemPage ? itemPage.total : items.length;
 
   const totalUsed = nodes.reduce((sum, node) => sum + node.used, 0);
   const totalCapacity = Math.max(1, nodes.reduce((sum, node) => sum + node.capacity, 0));
@@ -219,7 +283,7 @@ export const StorageNetwork = ({
         <KpiCard label={t('storage.kpi.networks')} value={String(nodes.length)} helper={selectedNode?.name ?? t('common.none')} icon={Database} tone="cyan" onClick={() => setKpiDialogIndex(0)} />
         <KpiCard label={t('storage.kpi.used')} value={formatBytes(totalUsed)} helper={t('storage.helper.total', { value: formatBytes(totalCapacity) })} icon={Layers} tone="blue" onClick={() => setKpiDialogIndex(1)} />
         <KpiCard label={t('storage.kpi.fill')} value={fillRatio.toFixed(1)} suffix="%" helper={t('storage.helper.alerts', { count: nodes.filter((node) => node.status === 'Alert').length })} icon={AlertTriangle} tone={fillRatio > 85 ? 'amber' : 'emerald'} onClick={() => setKpiDialogIndex(2)} />
-        <KpiCard label={t('storage.kpi.items')} value={String(items.length)} helper={t('storage.helper.craftables', { count: craftingSummary?.craftableCount ?? 0 })} icon={Box} tone="emerald" onClick={() => setKpiDialogIndex(3)} />
+        <KpiCard label={t('storage.kpi.items')} value={String(totalItemCount)} helper={t('storage.helper.craftables', { count: craftingSummary?.craftableCount ?? 0 })} icon={Box} tone="emerald" onClick={() => setKpiDialogIndex(3)} />
       </div>
 
       <div className="flex items-center justify-between gap-4">
@@ -232,23 +296,33 @@ export const StorageNetwork = ({
           ]}
         />
         {activeTab === 'items' ? (
-          <div className="inline-flex rounded-xl border border-slate-800 bg-slate-950/90 p-1 shadow-inner">
-            <button
-              onClick={() => setFilterAlertsOnly(false)}
-              className={`rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] ${
-                !filterAlertsOnly ? 'border border-cyan-500/20 bg-cyan-500/10 text-cyan-400' : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              {t('storage.filter.all')}
-            </button>
-            <button
-              onClick={() => setFilterAlertsOnly(true)}
-              className={`rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] ${
-                filterAlertsOnly ? 'border border-rose-500/20 bg-rose-500/10 text-rose-400' : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              {t('storage.filter.deficits')}
-            </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <IconSegmentedControl
+              value={itemViewMode}
+              onChange={(value) => changeItemViewMode(value as 'list' | 'grid')}
+              items={[
+                { value: 'list', label: t('storage.view.list'), icon: List },
+                { value: 'grid', label: t('storage.view.grid'), icon: LayoutGrid },
+              ]}
+            />
+            <div className="inline-flex rounded-xl border border-slate-800 bg-slate-950/90 p-1 shadow-inner">
+              <button
+                onClick={() => setFilterAlertsOnly(false)}
+                className={`rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] ${
+                  !filterAlertsOnly ? 'border border-cyan-500/20 bg-cyan-500/10 text-cyan-400' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {t('storage.filter.all')}
+              </button>
+              <button
+                onClick={() => setFilterAlertsOnly(true)}
+                className={`rounded-lg px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.2em] ${
+                  filterAlertsOnly ? 'border border-rose-500/20 bg-rose-500/10 text-rose-400' : 'text-slate-500 hover:text-slate-300'
+                }`}
+              >
+                {t('storage.filter.deficits')}
+              </button>
+            </div>
           </div>
         ) : null}
       </div>
@@ -257,7 +331,7 @@ export const StorageNetwork = ({
         <div className="grid grid-cols-1 gap-6 xl:grid-cols-12">
           <div className="space-y-6 xl:col-span-4">
             <Card className="p-5">
-              <SectionHeader title={t('storage.nodes.title')} subtitle={t('storage.nodes.subtitle')} icon={Database} />
+              <SectionHeader title={t('storage.nodes.title')} icon={Database} />
               <div className="mt-4 space-y-3">
                 {nodes.map((node) => {
                   const fill = (node.used / Math.max(node.capacity, 1)) * 100;
@@ -346,61 +420,161 @@ export const StorageNetwork = ({
             <div className="border-b border-slate-800 bg-slate-900/30 p-5">
               <SectionHeader
                 title={t('storage.items.title')}
-                subtitle={t('storage.items.subtitle')}
                 icon={Box}
-                action={<Filter size={16} className="text-slate-500" />}
+                action={itemViewMode === 'grid' ? <LayoutGrid size={16} className="text-slate-500" /> : <List size={16} className="text-slate-500" />}
               />
             </div>
-            <div className="flex flex-wrap items-center gap-4 border-b border-slate-800 bg-slate-900/10 px-4 py-3">
+            <div className="flex flex-wrap items-center gap-3 border-b border-slate-800 bg-slate-900/10 px-4 py-3">
               <Legend color="bg-emerald-500" label={t('storage.legend.stable')} />
               <Legend color="bg-amber-500" label={t('storage.legend.warning')} />
               <Legend color="bg-rose-500" label={t('storage.legend.critical')} />
-              <span className="ml-auto text-[10px] font-mono uppercase tracking-[0.18em] text-slate-600">{t('storage.sync.label', { value: t('app.metric.pollingValue') })}</span>
+              <div className="ml-auto flex flex-wrap items-center gap-2">
+                {(['amount', 'production', 'consumption', 'net', 'name'] as ItemSortField[]).map((field) => (
+                  <button
+                    key={field}
+                    onClick={() => changeSort(field)}
+                    className={`rounded-lg border px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.16em] transition-colors ${
+                      itemSort === field ? 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300' : 'border-slate-800 bg-slate-950 text-slate-500 hover:text-slate-300'
+                    }`}
+                  >
+                    {t(`storage.sort.${field}`)}{itemSort === field ? (itemSortDir === 'desc' ? ' ↓' : ' ↑') : ''}
+                  </button>
+                ))}
+                <span className="text-[10px] font-mono uppercase tracking-[0.18em] text-slate-600">{t('storage.sync.label', { value: t('app.metric.pollingValue') })}</span>
+              </div>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full border-collapse text-left">
-                <thead>
-                  <tr className="border-b border-slate-800 bg-slate-900/20 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
-                    <th className="p-4">{t('storage.table.item')}</th>
-                    <th className="p-4 text-right">{t('storage.table.stock')}</th>
-                    <th className="p-4 text-right">{t('storage.table.burn')}</th>
-                    <th className="p-4 min-w-[220px]">{t('storage.table.buffer')}</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-800/50">
+            {filteredItems.length === 0 ? (
+              <div className="p-8 text-center">
+                <p className="text-sm font-bold text-slate-300">{searchQuery ? t('storage.items.emptySearch') : t('storage.empty')}</p>
+                <p className="mt-1 text-xs text-slate-500">{searchQuery ? t('storage.items.emptySearchHint') : t('storage.items.emptyHint')}</p>
+              </div>
+            ) : itemViewMode === 'grid' ? (
+              <div className="max-h-[60vh] overflow-y-auto p-4">
+                <div className="grid grid-cols-2 gap-3 md:grid-cols-3 2xl:grid-cols-4">
                   {filteredItems.map((item) => {
-                    const durationMinutes = item.stock / Math.max(item.consumption, 1);
-                    const tone = durationMinutes < 0.5 ? 'bg-rose-500' : durationMinutes < 30 ? 'bg-amber-500' : 'bg-emerald-500';
-                    const textTone = durationMinutes < 0.5 ? 'text-rose-400' : durationMinutes < 30 ? 'text-amber-400' : 'text-emerald-400';
+                    const durationMinutes = item.remainingMinutes ?? item.stock / Math.max(item.consumption, 1);
+                    const net = item.net ?? item.production - item.consumption;
+                    const tone = durationMinutes < 0.5 ? 'border-rose-500/30 bg-rose-500/5' : durationMinutes < 30 ? 'border-amber-500/30 bg-amber-500/5' : 'border-slate-800 bg-slate-950/70';
+                    const netTone = net >= 0 ? 'text-emerald-400' : 'text-rose-400';
                     return (
-                      <tr key={item.id} className="transition-colors hover:bg-slate-800/30">
-                        <td className="p-4">
-                          <div className="flex items-center gap-3">
-                            <div className={`rounded-lg border border-slate-800 bg-slate-900 p-2 ${item.accent}`}>
-                              <item.icon size={18} />
+                      <HoverCard
+                        key={`${item.networkId ?? 'local'}-${item.id}`}
+                        width={260}
+                        trigger={({ ref, onMouseEnter, onMouseLeave }) => (
+                          <div
+                            ref={ref}
+                            onMouseEnter={onMouseEnter}
+                            onMouseLeave={onMouseLeave}
+                            className={`group relative rounded-xl border p-4 transition-all hover:-translate-y-0.5 hover:border-cyan-500/30 ${tone}`}
+                          >
+                            <div className="flex items-start justify-between gap-3">
+                              <ItemIcon item={item} />
+                              <span className={`font-mono text-xs font-bold ${netTone}`}>{net >= 0 ? '+' : ''}{net.toFixed(1)}/m</span>
                             </div>
-                            <div>
-                              <p className="text-sm font-bold text-white">{item.name}</p>
-                              <p className="text-[10px] font-mono text-slate-500">{item.id}</p>
+                            <p className="mt-3 truncate text-sm font-bold text-white" title={item.name}>{item.name}</p>
+                            <p className="truncate text-[10px] font-mono text-slate-500" title={item.id}>{item.id}</p>
+                            <div className="mt-3 flex items-center justify-between text-xs">
+                              <span className="font-mono text-slate-300">{item.stock.toLocaleString()}</span>
+                              <span className={durationMinutes < 30 ? 'font-mono font-bold text-amber-400' : 'font-mono text-slate-500'}>{formatDuration(durationMinutes)}</span>
                             </div>
                           </div>
-                        </td>
-                        <td className="p-4 text-right font-mono text-sm text-white">{item.stock.toLocaleString()}</td>
-                        <td className="p-4 text-right font-mono text-sm text-slate-400">-{item.consumption.toFixed(1)}/m</td>
-                        <td className="p-4">
-                          <div className="mb-1.5 flex justify-between text-[10px] font-mono">
-                            <span className={`font-bold ${textTone}`}>{formatDuration(durationMinutes)}</span>
-                            <span className="text-slate-600">{t('storage.buffer.remaining')}</span>
-                          </div>
-                          <ProgressBar value={Math.min(120, durationMinutes)} max={120} colorClass={tone} />
-                        </td>
-                      </tr>
+                        )}
+                      >
+                        {() => (
+                          <>
+                            <p className="truncate text-xs font-bold text-white">{item.name}</p>
+                            <p className="mt-1 break-all text-[10px] font-mono text-slate-500">{item.id}</p>
+                            <div className="mt-3 grid grid-cols-2 gap-2 text-[11px]">
+                              <TooltipMetric label={t('storage.table.stock')} value={item.stock.toLocaleString()} />
+                              <TooltipMetric label={t('storage.table.production')} value={`${item.production.toFixed(1)}/m`} tone="text-cyan-400" />
+                              <TooltipMetric label={t('storage.table.consumption')} value={`${item.consumption.toFixed(1)}/m`} tone="text-amber-400" />
+                              <TooltipMetric label={t('storage.table.net')} value={`${net >= 0 ? '+' : ''}${net.toFixed(1)}/m`} tone={netTone} />
+                              <TooltipMetric label={t('storage.buffer.remaining')} value={formatDuration(durationMinutes)} />
+                              <TooltipMetric label={t('observer.label')} value={item.networkId ?? t('common.none')} />
+                            </div>
+                          </>
+                        )}
+                      </HoverCard>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
+                </div>
+              </div>
+            ) : (
+              <div className="max-h-[60vh] overflow-x-auto overflow-y-auto">
+                <table className="w-full border-collapse text-left">
+                  <thead className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur">
+                    <tr className="border-b border-slate-800 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                      <th className="p-4">{t('storage.table.item')}</th>
+                      <th className="p-4 text-right">{t('storage.table.stock')}</th>
+                      <th className="p-4 text-right">{t('storage.table.production')}</th>
+                      <th className="p-4 text-right">{t('storage.table.burn')}</th>
+                      <th className="p-4 text-right">{t('storage.table.net')}</th>
+                      <th className="p-4 min-w-[220px]">{t('storage.table.buffer')}</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/50">
+                    {filteredItems.map((item) => {
+                      const durationMinutes = item.remainingMinutes ?? item.stock / Math.max(item.consumption, 1);
+                      const net = item.net ?? item.production - item.consumption;
+                      const tone = durationMinutes < 0.5 ? 'bg-rose-500' : durationMinutes < 30 ? 'bg-amber-500' : 'bg-emerald-500';
+                      const textTone = durationMinutes < 0.5 ? 'text-rose-400' : durationMinutes < 30 ? 'text-amber-400' : 'text-emerald-400';
+                      return (
+                        <tr key={`${item.networkId ?? 'local'}-${item.id}`} className="transition-colors hover:bg-slate-800/30">
+                          <td className="p-4">
+                            <div className="flex items-center gap-3">
+                              <ItemIcon item={item} />
+                              <div className="min-w-0 flex-1">
+                                <p className="truncate text-sm font-bold text-white" title={item.name}>{item.name}</p>
+                                <p className="truncate text-[10px] font-mono text-slate-500" title={item.id}>{item.id}</p>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="p-4 text-right font-mono text-sm text-white">{item.stock.toLocaleString()}</td>
+                          <td className="p-4 text-right font-mono text-sm text-cyan-400">{item.production.toFixed(1)}/m</td>
+                          <td className="p-4 text-right font-mono text-sm text-amber-400">-{item.consumption.toFixed(1)}/m</td>
+                          <td className={`p-4 text-right font-mono text-sm ${net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{net >= 0 ? '+' : ''}{net.toFixed(1)}/m</td>
+                          <td className="p-4">
+                            <div className="mb-1.5 flex justify-between text-[10px] font-mono">
+                              <span className={`font-bold ${textTone}`}>{formatDuration(durationMinutes)}</span>
+                              <span className="text-slate-600">{t('storage.buffer.remaining')}</span>
+                            </div>
+                            <ProgressBar value={Math.min(120, durationMinutes)} max={120} colorClass={tone} />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+            {isLive && itemPage ? (
+              <div className="flex items-center justify-between border-t border-slate-800 bg-slate-900/20 px-4 py-3 text-xs">
+                <span className="font-mono text-slate-500">
+                  {t('storage.items.pageInfo', {
+                    start: itemPage.total === 0 ? 0 : itemPage.offset + 1,
+                    end: Math.min(itemPage.offset + itemPage.limit, itemPage.total),
+                    total: itemPage.total,
+                  })}
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    disabled={itemOffset <= 0}
+                    onClick={() => setItemOffset((prev) => Math.max(0, prev - pageLimit))}
+                    className="rounded-lg border border-slate-800 px-3 py-1.5 font-bold uppercase tracking-[0.16em] text-slate-400 disabled:cursor-not-allowed disabled:opacity-40 hover:not-disabled:border-cyan-500/30 hover:not-disabled:text-cyan-300"
+                  >
+                    {t('common.previous')}
+                  </button>
+                  <button
+                    disabled={itemOffset + pageLimit >= itemPage.total}
+                    onClick={() => setItemOffset((prev) => prev + pageLimit)}
+                    className="rounded-lg border border-slate-800 px-3 py-1.5 font-bold uppercase tracking-[0.16em] text-slate-400 disabled:cursor-not-allowed disabled:opacity-40 hover:not-disabled:border-cyan-500/30 hover:not-disabled:text-cyan-300"
+                  >
+                    {t('common.next')}
+                  </button>
+                </div>
+              </div>
+            ) : null}
           </Card>
         </div>
       ) : (
@@ -462,25 +636,23 @@ export const StorageNetwork = ({
                 />
               </div>
 
-              <div className="overflow-x-auto">
+              <div className="max-h-[60vh] overflow-x-auto overflow-y-auto">
                 <table className="w-full border-collapse text-left">
-                  <thead>
-                    <tr className="border-b border-slate-800 bg-slate-900/20 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                  <thead className="sticky top-0 z-10 bg-slate-950/95 backdrop-blur">
+                    <tr className="border-b border-slate-800 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
                       <th className="p-4">{t('storage.table.item')}</th>
                       <th className="p-4">{t('observer.label')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/50">
-                    {filteredCraftables.slice(0, 120).map((item) => (
+                    {filteredCraftables.slice(0, 500).map((item) => (
                       <tr key={`${item.networkId}-${item.itemId}`} className="transition-colors hover:bg-slate-800/30">
                         <td className="p-4">
                           <div className="flex items-center gap-3">
-                            <div className="rounded-lg border border-slate-800 bg-slate-900 p-2 text-cyan-400">
-                              <Box size={16} />
-                            </div>
-                            <div>
-                              <p className="text-sm font-bold text-white">{item.displayName}</p>
-                              <p className="text-[10px] font-mono text-slate-500">{item.itemId}</p>
+                            <ItemIcon item={{ id: item.itemId, accent: 'text-cyan-400' }} />
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-bold text-white" title={item.displayName}>{item.displayName}</p>
+                              <p className="truncate text-[10px] font-mono text-slate-500" title={item.itemId}>{item.itemId}</p>
                             </div>
                           </div>
                         </td>
@@ -491,9 +663,9 @@ export const StorageNetwork = ({
                 </table>
               </div>
 
-              {filteredCraftables.length > 120 ? (
+              {filteredCraftables.length > 500 ? (
                 <div className="border-t border-slate-800 bg-slate-900/20 p-4 text-right text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
-                  {t('storage.crafting.more', { count: filteredCraftables.length - 120 })}
+                  {t('storage.crafting.more', { count: filteredCraftables.length - 500 })}
                 </div>
               ) : null}
             </Card>
@@ -626,6 +798,15 @@ function Legend({ color, label }: { color: string; label: string }) {
     <div className="flex items-center gap-2">
       <div className={`h-3 w-3 rounded-full ${color}`} />
       <span className="text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{label}</span>
+    </div>
+  );
+}
+
+function TooltipMetric({ label, value, tone = 'text-slate-300' }: { label: string; value: string; tone?: string }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-900/70 px-2 py-1.5">
+      <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-slate-600">{label}</p>
+      <p className={`mt-0.5 truncate font-mono font-bold ${tone}`} title={value}>{value}</p>
     </div>
   );
 }

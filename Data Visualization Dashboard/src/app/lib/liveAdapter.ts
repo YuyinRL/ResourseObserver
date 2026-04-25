@@ -112,7 +112,18 @@ function shortenNetwork(id: string): string {
   return tail.length > 24 ? tail.slice(0, 24) + '…' : tail;
 }
 
-function niceItemName(id: string): string {
+function niceItemName(id: string, displayName?: string, translationKey?: string): string {
+  if (displayName && displayName.trim().length > 0) return displayName;
+  if (translationKey) {
+    const last = translationKey.split('.').pop();
+    if (last) {
+      return last
+        .split(/[_\-/]/)
+        .filter(Boolean)
+        .map(s => s.charAt(0).toUpperCase() + s.slice(1))
+        .join(' ');
+    }
+  }
   const tail = id.includes(':') ? id.substring(id.indexOf(':') + 1) : id;
   return tail
     .split(/[_\-/]/)
@@ -198,7 +209,7 @@ export function deriveOverviewKpis(detail: ObserverDetail | null): LiveKpi[] | n
 }
 
 /** 将 AE2 绑定物品映射为 Overview 资源条目。 */
-export function deriveResourceItems(detail: ObserverDetail | null, limit = 30): LiveResourceItem[] | null {
+export function deriveResourceItems(detail: ObserverDetail | null, limit = 500): LiveResourceItem[] | null {
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
   const out: LiveResourceItem[] = [];
@@ -207,7 +218,7 @@ export function deriveResourceItems(detail: ObserverDetail | null, limit = 30): 
     for (const it of b.items) {
       out.push({
         id: it.id,
-        name: niceItemName(it.id),
+        name: niceItemName(it.id, it.displayName, it.translationKey),
         produced: it.production,
         consumed: it.consumption,
         stock: it.amount,

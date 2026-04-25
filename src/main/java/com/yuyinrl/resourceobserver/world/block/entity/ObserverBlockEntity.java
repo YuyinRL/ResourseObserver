@@ -18,6 +18,7 @@ import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
+import com.yuyinrl.resourceobserver.world.history.WebHighPrecisionSampler;
 import com.yuyinrl.resourceobserver.registry.ModBlockEntities;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
@@ -105,6 +106,8 @@ public class ObserverBlockEntity extends BlockEntity {
     private final List<BoundEntry> bindings = new ArrayList<>();
     /** 每个网络 ID 对应的统计数据 */
     private final Map<String, BindingStats> statsMap = new HashMap<>();
+    /** Web detail 图表专用高精度采样的上次采样 tick。 */
+    private long lastWebHighPrecisionSampleTick = -1L;
     /** AE2 网络中每种物品的当前数量快照（networkId -> {itemId -> amount}） */
     private final Map<String, Map<String, Long>> ae2ItemAmounts = new HashMap<>();
     /** AE2 网络中每种物品的数量变化量（networkId -> {itemId -> delta}），瞬时值（每采样间隔） */
@@ -551,9 +554,47 @@ public class ObserverBlockEntity extends BlockEntity {
     public static void tick(Level level, BlockPos pos, BlockState state, ObserverBlockEntity be) {
         if (level.isClientSide || be.bindings.isEmpty()) return;
         long gameTime = level.getGameTime();
-        if (be.lastSampleTick >= 0 && gameTime - be.lastSampleTick < SAMPLE_INTERVAL) return;
+        boolean mainSampleDue = be.lastSampleTick < 0 || gameTime - be.lastSampleTick >= SAMPLE_INTERVAL;
+        if (level instanceof ServerLevel serverLevel) {
+            int webInterval = WebHighPrecisionSampler.requestedInterval(serverLevel, pos);
+            // 高精度采样按自身节奏触发，不再因主采样到期就跳过。
+            // 之前的 !mainSampleDue 约束会让 HP 每隔一个 bucket 漏一次采样，
+            // 导致 detail 档速率被系统性低估约 50%（1920 ≈ 3840/2）。
+            boolean webSampleDue = webInterval > 0
+                    && (be.lastWebHighPrecisionSampleTick < 0
+                    || gameTime - be.lastWebHighPrecisionSampleTick >= webInterval);
+            if (webSampleDue) {
+                be.lastWebHighPrecisionSampleTick = gameTime;
+                be.sampleWebHighPrecision(serverLevel, gameTime);
+            }
+        }
+        if (!mainSampleDue) return;
         be.lastSampleTick = gameTime;
         be.sampleAll();
+    }
+
+    /** Web detail 图表专用的短期高精度采样，不写入持久化历史。 */
+    private void sampleWebHighPrecision(ServerLevel serverLevel, long gameTime) {
+        if (level == null) return;
+        for (BoundEntry binding : bindings) {
+            if (!"AE2_ITEMS".equals(binding.networkType())) {
+                continue;
+            }
+            Map<String, Long> cached = ae2ItemAmounts.get(binding.networkId());
+            if (cached != null && !WebHighPrecisionSampler.allowSnapshotSize(cached.size())) {
+                continue;
+            }
+            BlockPos targetPos = extractPos(binding.networkId());
+            if (targetPos == null || !level.isLoaded(targetPos)) {
+                continue;
+            }
+            Ae2ReadResult readResult = readAe2NetworkItems(targetPos);
+            Map<String, Long> snapshot = readResult.snapshot();
+            if (snapshot == null || !WebHighPrecisionSampler.allowSnapshotSize(snapshot.size())) {
+                continue;
+            }
+            WebHighPrecisionSampler.recordSnapshot(serverLevel, worldPosition, binding.networkId(), gameTime, snapshot);
+        }
     }
 
     /**

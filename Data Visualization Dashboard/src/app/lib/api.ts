@@ -14,6 +14,8 @@ export interface Meta {
     mekanism: boolean;
   };
   endpoints: Record<string, string>;
+  /** 物品图标接口是否可用（仅集成端单机有效；专用服务端为 false） */
+  iconsAvailable?: boolean;
 }
 
 export interface HealthStatus {
@@ -45,6 +47,13 @@ export interface BindingItem {
   production: number;
   consumption: number;
   net: number;
+  capacity?: number;
+  remainingMinutes?: number;
+  networkId?: string;
+  /** 翻译键，如 "item.minecraft.iron_ingot"（后端解析） */
+  translationKey?: string;
+  /** 服务端语言下的显示名，如 "Iron Ingot" / "铁锭" */
+  displayName?: string;
 }
 
 export interface CellCapacity {
@@ -118,6 +127,18 @@ export interface ObserverDetail extends ObserverSummary {
   bindings: ObserverBinding[];
 }
 
+export type ItemSortField = 'amount' | 'production' | 'consumption' | 'net' | 'name' | 'remainingMinutes';
+export type SortDirection = 'asc' | 'desc';
+
+export interface ObserverItemsResponse {
+  total: number;
+  offset: number;
+  limit: number;
+  sort: ItemSortField;
+  dir: SortDirection;
+  items: BindingItem[];
+}
+
 export interface CraftingBinding {
   networkId: string;
   storage: {
@@ -146,6 +167,79 @@ export interface CraftingResponse {
   bindings: CraftingBinding[];
 }
 
+export interface ChartHistoryPoint {
+  /** Bucket 索引（0 = 最早） */
+  t: number;
+  /** 绝对 bucket 编号（服务端 gameTime / bucketTicks） */
+  bucket?: number;
+  /** 图表绝对时间（秒），用于连续滚动窗口 */
+  x?: number;
+  /** 该桶产出（每分钟单位） */
+  produced: number;
+  /** 该桶消耗（每分钟单位） */
+  consumed: number;
+  /** 该桶净变化（每分钟单位） */
+  net?: number;
+  /** 该桶库存快照 */
+  stock?: number;
+  hasFlow?: boolean;
+  hasStock?: boolean;
+  sampleCount?: number;
+  highPrecision?: boolean;
+}
+
+export type HistoryRange = 'detail' | 'short' | 'medium' | 'long';
+
+export interface SamplerDebugRecentBucket {
+  bucket: number;
+  sampleCount: number;
+  observedTicks: number;
+  producedPerMinute: number;
+  consumedPerMinute: number;
+  stock: number;
+}
+
+export interface SamplerDebugNetwork {
+  networkId: string;
+  validBuckets: number;
+  totalSamples: number;
+  lastSampleGameTime: number;
+  previousSnapshotSize: number;
+  recentBuckets: SamplerDebugRecentBucket[];
+}
+
+export interface SamplerDebugResponse {
+  active: boolean;
+  requestedIntervalTicks: number;
+  globalDemandActive: boolean;
+  itemDemandActive: boolean;
+  demandRemainingMs: number;
+  latestBucket: number;
+  bufferBuckets: number;
+  bucketTicks: number;
+  minValidBuckets: number;
+  gameTime: number;
+  serverTimeMs: number;
+  networks: SamplerDebugNetwork[];
+}
+
+export interface ChartHistoryResponse {
+  range: HistoryRange;
+  bucketCount: number;
+  visibleBucketCount?: number;
+  bufferMultiplier?: number;
+  /** 每个 bucket 时长（秒） */
+  bucketSeconds: number;
+  /** 服务端 gameTime（tick），用于前端连续时间轴 */
+  gameTime?: number;
+  latestBucket?: number;
+  serverTimeMs?: number;
+  highPrecision?: boolean;
+  points: ChartHistoryPoint[];
+  scope: 'global' | 'item';
+  itemId?: string;
+}
+
 async function apiGet<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
     ...init,
@@ -165,4 +259,41 @@ export const api = {
     apiGet(`/api/observers/${id}`),
   observerCrafting: (id: string): Promise<CraftingResponse> =>
     apiGet(`/api/observers/${id}/crafting`),
+  observerItems: (
+    id: string,
+    params: {
+      offset?: number;
+      limit?: number;
+      q?: string;
+      sort?: ItemSortField;
+      dir?: SortDirection;
+      alertsOnly?: boolean;
+    } = {},
+  ): Promise<ObserverItemsResponse> => {
+    const qs = new URLSearchParams();
+    if (params.offset != null) qs.set('offset', String(params.offset));
+    if (params.limit != null) qs.set('limit', String(params.limit));
+    if (params.q) qs.set('q', params.q);
+    if (params.sort) qs.set('sort', params.sort);
+    if (params.dir) qs.set('dir', params.dir);
+    if (params.alertsOnly != null) qs.set('alertsOnly', String(params.alertsOnly));
+    const suffix = qs.toString();
+    return apiGet(`/api/observers/${id}/items${suffix ? `?${suffix}` : ''}`);
+  },
+  observerHistory: (id: string, range: HistoryRange, itemId?: string): Promise<ChartHistoryResponse> => {
+    const qs = new URLSearchParams({ range });
+    if (itemId) qs.set('item', itemId);
+    return apiGet(`/api/observers/${id}/history?${qs.toString()}`);
+  },
+  observerSamplerDebug: (id: string): Promise<SamplerDebugResponse> => {
+    return apiGet(`/api/observers/${id}/debug/sampler`);
+  },
+  /** 拼接一个图标 URL；前端可加 onerror 占位 */
+  iconUrl: (itemId: string): string | null => {
+    const idx = itemId.indexOf(':');
+    if (idx < 0) return null;
+    const ns = encodeURIComponent(itemId.substring(0, idx));
+    const path = encodeURIComponent(itemId.substring(idx + 1));
+    return `/api/icon/${ns}/${path}`;
+  },
 };

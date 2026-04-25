@@ -42,11 +42,16 @@ public class ObserverHistorySavedData extends SavedData {
     private static final String TAG_WEEK = "week";
     private static final String TAG_DEBUG_10M = "debug_10m";
     private static final String TAG_HOUR = "hour";
+    private static final String TAG_WEB_DETAIL_BUFFER = "web_detail_buffer";
+    private static final String TAG_WEB_SHORT_BUFFER = "web_short_buffer";
+    private static final String TAG_WEB_MEDIUM_BUFFER = "web_medium_buffer";
+    private static final String TAG_WEB_LONG_BUFFER = "web_long_buffer";
     private static final String TAG_LATEST_BUCKET = "latest_bucket";
     private static final String TAG_SLOT_BUCKETS = "slot_buckets";
     private static final String TAG_PRODUCED = "produced";
     private static final String TAG_CONSUMED = "consumed";
     private static final String TAG_STOCK = "stock";
+    private static final String TAG_SAMPLE_COUNTS = "sample_counts";
     private static final String TAG_ITEM_PRODUCED = "item_produced";
     private static final String TAG_ITEM_CONSUMED = "item_consumed";
     private static final String TAG_FLUID_PRODUCED = "fluid_produced";
@@ -106,14 +111,23 @@ public class ObserverHistorySavedData extends SavedData {
         double[] stock = new double[pointCount];
         boolean[] hasFlow = new boolean[pointCount];   // 标记该数据点是否有流量数据
         boolean[] hasStock = new boolean[pointCount];  // 标记该数据点是否有库存数据
+        int[] sampleCounts = new int[pointCount];
 
-        // 遍历所有网络，将各自的数据累加到聚合数组
+        long latestBucket = Long.MIN_VALUE;
+        for (String key : keys) {
+            NetworkHistory history = histories.get(key);
+            if (history != null) {
+                latestBucket = Math.max(latestBucket, history.latestBucket(window));
+            }
+        }
+
+        // 遍历所有网络，将各自的数据按统一时间锚点累加到聚合数组
         for (String key : keys) {
             NetworkHistory history = histories.get(key);
             if (history == null) {
                 continue;
             }
-            history.accumulate(window, scopeItemId, produced, consumed, stock, hasFlow, hasStock);
+            history.accumulate(window, latestBucket, scopeItemId, produced, consumed, stock, hasFlow, hasStock, sampleCounts);
         }
 
         // 将聚合数组转换为 ChartPoint 列表，net = produced - consumed
@@ -121,7 +135,10 @@ public class ObserverHistorySavedData extends SavedData {
         for (int i = 0; i < pointCount; i++) {
             double p = produced[i];
             double c = consumed[i];
-            result.add(new ObserverDataPayload.ChartPoint(i, p, c, p - c, stock[i], hasFlow[i], hasStock[i]));
+            long bucket = latestBucket == Long.MIN_VALUE ? Long.MIN_VALUE : latestBucket - (pointCount - 1L - i);
+            result.add(new ObserverDataPayload.ChartPoint(
+                    i, bucket, p, c, p - c, stock[i], hasFlow[i], hasStock[i], sampleCounts[i]
+            ));
         }
         return result;
     }
@@ -201,18 +218,25 @@ public class ObserverHistorySavedData extends SavedData {
         /** 从指定时间窗口累加数据到输出数组 */
         private void accumulate(
                 ChartWindow window,
+                long latestBucket,
                 String scopeItemId,
                 double[] produced,
                 double[] consumed,
                 double[] stock,
                 boolean[] hasFlow,
-                boolean[] hasStock
+                boolean[] hasStock,
+                int[] sampleCounts
         ) {
             WindowBuffer buffer = windows.get(window);
             if (buffer == null) {
                 return;
             }
-            buffer.accumulate(scopeItemId, produced, consumed, stock, hasFlow, hasStock);
+            buffer.accumulate(latestBucket, scopeItemId, produced, consumed, stock, hasFlow, hasStock, sampleCounts);
+        }
+
+        private long latestBucket(ChartWindow window) {
+            WindowBuffer buffer = windows.get(window);
+            return buffer == null ? Long.MIN_VALUE : buffer.latestBucket();
         }
 
         private ObserverDataPayload.KpiWindowStats queryWindowStats(ChartWindow window) {
@@ -230,6 +254,10 @@ public class ObserverHistorySavedData extends SavedData {
             tag.put(TAG_WEEK, windows.get(ChartWindow.WEEK_7D_30M).save());
             tag.put(TAG_DEBUG_10M, windows.get(ChartWindow.DEBUG_10M_5S).save());
             tag.put(TAG_HOUR, windows.get(ChartWindow.HOUR_1H_1M).save());
+            tag.put(TAG_WEB_DETAIL_BUFFER, windows.get(ChartWindow.WEB_DETAIL_BUFFER_5M_1S).save());
+            tag.put(TAG_WEB_SHORT_BUFFER, windows.get(ChartWindow.WEB_SHORT_BUFFER_5M_10S).save());
+            tag.put(TAG_WEB_MEDIUM_BUFFER, windows.get(ChartWindow.WEB_MEDIUM_BUFFER_75M_1M).save());
+            tag.put(TAG_WEB_LONG_BUFFER, windows.get(ChartWindow.WEB_LONG_BUFFER_5H_5M).save());
             return tag;
         }
 
@@ -247,6 +275,18 @@ public class ObserverHistorySavedData extends SavedData {
             }
             if (tag.contains(TAG_HOUR, Tag.TAG_COMPOUND)) {
                 history.windows.put(ChartWindow.HOUR_1H_1M, WindowBuffer.load(ChartWindow.HOUR_1H_1M, tag.getCompound(TAG_HOUR)));
+            }
+            if (tag.contains(TAG_WEB_DETAIL_BUFFER, Tag.TAG_COMPOUND)) {
+                history.windows.put(ChartWindow.WEB_DETAIL_BUFFER_5M_1S, WindowBuffer.load(ChartWindow.WEB_DETAIL_BUFFER_5M_1S, tag.getCompound(TAG_WEB_DETAIL_BUFFER)));
+            }
+            if (tag.contains(TAG_WEB_SHORT_BUFFER, Tag.TAG_COMPOUND)) {
+                history.windows.put(ChartWindow.WEB_SHORT_BUFFER_5M_10S, WindowBuffer.load(ChartWindow.WEB_SHORT_BUFFER_5M_10S, tag.getCompound(TAG_WEB_SHORT_BUFFER)));
+            }
+            if (tag.contains(TAG_WEB_MEDIUM_BUFFER, Tag.TAG_COMPOUND)) {
+                history.windows.put(ChartWindow.WEB_MEDIUM_BUFFER_75M_1M, WindowBuffer.load(ChartWindow.WEB_MEDIUM_BUFFER_75M_1M, tag.getCompound(TAG_WEB_MEDIUM_BUFFER)));
+            }
+            if (tag.contains(TAG_WEB_LONG_BUFFER, Tag.TAG_COMPOUND)) {
+                history.windows.put(ChartWindow.WEB_LONG_BUFFER_5H_5M, WindowBuffer.load(ChartWindow.WEB_LONG_BUFFER_5H_5M, tag.getCompound(TAG_WEB_LONG_BUFFER)));
             }
             return history;
         }
@@ -276,6 +316,8 @@ public class ObserverHistorySavedData extends SavedData {
         private final long[] consumed;
         /** 每个槽位的最新库存快照 */
         private final long[] stock;
+        /** 每个槽位内实际采样次数 */
+        private final int[] sampleCounts;
         private final long[] itemProduced;
         private final long[] itemConsumed;
         private final long[] fluidProduced;
@@ -290,6 +332,7 @@ public class ObserverHistorySavedData extends SavedData {
             this.produced = new long[size];
             this.consumed = new long[size];
             this.stock = new long[size];
+            this.sampleCounts = new int[size];
             this.itemProduced = new long[size];
             this.itemConsumed = new long[size];
             this.fluidProduced = new long[size];
@@ -325,6 +368,7 @@ public class ObserverHistorySavedData extends SavedData {
                 produced[slot] = 0L;
                 consumed[slot] = 0L;
                 stock[slot] = 0L;
+                sampleCounts[slot] = 0;
                 itemProduced[slot] = 0L;
                 itemConsumed[slot] = 0L;
                 fluidProduced[slot] = 0L;
@@ -334,6 +378,7 @@ public class ObserverHistorySavedData extends SavedData {
             produced[slot] += Math.max(0L, producedDelta);
             consumed[slot] += Math.max(0L, consumedDelta);
             stock[slot] = Math.max(0L, currentStock);
+            sampleCounts[slot]++;
 
             long itemProducedDelta = 0L;
             long itemConsumedDelta = 0L;
@@ -414,14 +459,16 @@ public class ObserverHistorySavedData extends SavedData {
          * 若指定了 scopeItemId，则仅读取该物品的 ItemSeries 数据。
          */
         private void accumulate(
+                long latestBucket,
                 String scopeItemId,
                 double[] producedOut,
                 double[] consumedOut,
                 double[] stockOut,
                 boolean[] hasFlowOut,
-                boolean[] hasStockOut
+                boolean[] hasStockOut,
+                int[] sampleCountsOut
         ) {
-            if (latestBucket == Long.MIN_VALUE) {
+            if (this.latestBucket == Long.MIN_VALUE || latestBucket == Long.MIN_VALUE) {
                 return; // 无数据
             }
             ItemSeries scoped = scopeItemId == null ? null : itemSeries.get(scopeItemId);
@@ -440,6 +487,7 @@ public class ObserverHistorySavedData extends SavedData {
                     stockOut[i] += stock[slot];
                     hasFlowOut[i] = true;
                     hasStockOut[i] = true;
+                    sampleCountsOut[i] = Math.max(sampleCountsOut[i], sampleCounts[slot]);
                 } else {
                     // 单物品视角：使用物品独立系列数据
                     if (!scoped.hasBucket(bucket)) {
@@ -450,8 +498,13 @@ public class ObserverHistorySavedData extends SavedData {
                     stockOut[i] += scoped.readStock(bucket);
                     hasFlowOut[i] = true;
                     hasStockOut[i] = true;
+                    sampleCountsOut[i] = Math.max(sampleCountsOut[i], scoped.readSampleCount(bucket));
                 }
             }
+        }
+
+        private long latestBucket() {
+            return latestBucket;
         }
 
         /**
@@ -564,6 +617,7 @@ public class ObserverHistorySavedData extends SavedData {
             tag.putLongArray(TAG_PRODUCED, produced);
             tag.putLongArray(TAG_CONSUMED, consumed);
             tag.putLongArray(TAG_STOCK, stock);
+            tag.putIntArray(TAG_SAMPLE_COUNTS, sampleCounts);
             tag.putLongArray(TAG_ITEM_PRODUCED, itemProduced);
             tag.putLongArray(TAG_ITEM_CONSUMED, itemConsumed);
             tag.putLongArray(TAG_FLUID_PRODUCED, fluidProduced);
@@ -587,6 +641,7 @@ public class ObserverHistorySavedData extends SavedData {
             copyInto(tag.getLongArray(TAG_PRODUCED), buffer.produced);
             copyInto(tag.getLongArray(TAG_CONSUMED), buffer.consumed);
             copyInto(tag.getLongArray(TAG_STOCK), buffer.stock);
+            copyInto(tag.getIntArray(TAG_SAMPLE_COUNTS), buffer.sampleCounts);
             copyInto(tag.getLongArray(TAG_ITEM_PRODUCED), buffer.itemProduced);
             copyInto(tag.getLongArray(TAG_ITEM_CONSUMED), buffer.itemConsumed);
             copyInto(tag.getLongArray(TAG_FLUID_PRODUCED), buffer.fluidProduced);
@@ -618,6 +673,7 @@ public class ObserverHistorySavedData extends SavedData {
         private final long[] produced;
         private final long[] consumed;
         private final long[] stock;
+        private final int[] sampleCounts;
 
         private ItemSeries(int size) {
             this.size = size;
@@ -625,6 +681,7 @@ public class ObserverHistorySavedData extends SavedData {
             this.produced = new long[size];
             this.consumed = new long[size];
             this.stock = new long[size];
+            this.sampleCounts = new int[size];
         }
 
         /** 向指定 bucket 添加采样数据（新 bucket 重置，同 bucket 累加） */
@@ -635,10 +692,12 @@ public class ObserverHistorySavedData extends SavedData {
                 produced[slot] = 0L;
                 consumed[slot] = 0L;
                 stock[slot] = 0L;
+                sampleCounts[slot] = 0;
             }
             produced[slot] += producedDelta;
             consumed[slot] += consumedDelta;
             stock[slot] = Math.max(0L, stockValue);
+            sampleCounts[slot]++;
         }
 
         /** 读取指定 bucket 的生产数据 */
@@ -657,6 +716,12 @@ public class ObserverHistorySavedData extends SavedData {
         private long readStock(long bucket) {
             int slot = slotIndex(bucket, size);
             return slotBuckets[slot] == bucket ? stock[slot] : 0L;
+        }
+
+        /** 读取指定 bucket 的实际采样次数 */
+        private int readSampleCount(long bucket) {
+            int slot = slotIndex(bucket, size);
+            return slotBuckets[slot] == bucket ? sampleCounts[slot] : 0;
         }
 
         /** 判断指定 bucket 是否有效（槽位数据未过期） */
@@ -682,6 +747,7 @@ public class ObserverHistorySavedData extends SavedData {
             tag.putLongArray(TAG_PRODUCED, produced);
             tag.putLongArray(TAG_CONSUMED, consumed);
             tag.putLongArray(TAG_STOCK, stock);
+            tag.putIntArray(TAG_SAMPLE_COUNTS, sampleCounts);
             return tag;
         }
 
@@ -692,6 +758,7 @@ public class ObserverHistorySavedData extends SavedData {
             copyInto(tag.getLongArray(TAG_PRODUCED), series.produced);
             copyInto(tag.getLongArray(TAG_CONSUMED), series.consumed);
             copyInto(tag.getLongArray(TAG_STOCK), series.stock);
+            copyInto(tag.getIntArray(TAG_SAMPLE_COUNTS), series.sampleCounts);
             return series;
         }
     }
@@ -712,6 +779,12 @@ public class ObserverHistorySavedData extends SavedData {
 
     /** 安全复制数组内容（处理长度不一致的情况） */
     private static void copyInto(long[] from, long[] to) {
+        int copy = Math.min(from.length, to.length);
+        System.arraycopy(from, 0, to, 0, copy);
+    }
+
+    /** 安全复制 int 数组内容（处理长度不一致的情况） */
+    private static void copyInto(int[] from, int[] to) {
         int copy = Math.min(from.length, to.length);
         System.arraycopy(from, 0, to, 0, copy);
     }

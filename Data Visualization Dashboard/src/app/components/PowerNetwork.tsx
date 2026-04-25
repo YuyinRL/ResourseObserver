@@ -16,13 +16,12 @@ import {
   derivePowerLoadSegments,
   derivePowerSummary,
   formatEnergy,
-  isFlux,
   type LivePowerConsumer,
   type LivePowerExternalGroup,
 } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import {
-  Card, KpiCard, ProgressBar, SectionHeader, StatusPill,
+  Card, KpiCard, SectionHeader, StatusPill,
   ModernDialog, DialogSectionTitle, DialogRow, DialogDivider,
 } from './DashboardPrimitives';
 
@@ -97,23 +96,17 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
     [detail, excludedKeys],
   );
   const summary = useMemo(() => derivePowerSummary(detail), [detail]);
-
-  // Per-network grid loads (right column progress bars)
-  const networks = useMemo(() => {
-    const bindings = detail?.bindings;
-    if (!Array.isArray(bindings)) return [] as { id: string; name: string; input: number; output: number; util: number }[];
-    return bindings.filter(isFlux).map((b) => {
-      const flux: any = (b as any).flux ?? {};
-      const input = Number(flux.totalInputRate ?? 0);
-      const output = Number(flux.totalOutputRate ?? 0);
-      const util = input > 0 ? Math.min(100, (output / input) * 100) : 0;
-      return {
-        id: String((b as any).id ?? flux.networkId ?? Math.random()),
-        name: String((b as any).label ?? flux.networkName ?? t('common.none')),
-        input, output, util,
-      };
-    });
-  }, [detail, t]);
+  const gridLoad = useMemo(() => {
+    if (!effStats) return null;
+    const capacity = effStats.totalInputPerTick > 0 ? effStats.totalInputPerTick : 1;
+    const ratio = Math.min(1, Math.max(0, effStats.totalOutputPerTick / capacity));
+    return {
+      ratio,
+      pct: ratio * 100,
+      critical: ratio > 0.9,
+      warning: ratio > 0.7,
+    };
+  }, [effStats]);
 
   const filteredConsumers = useMemo(() => {
     let list = consumers ?? [];
@@ -230,7 +223,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
         {/* Left column: Donut + External Storage Console */}
         <div className="xl:col-span-5 space-y-6">
           <Card className="p-5">
-            <SectionHeader title={t('power.distribution.title')} subtitle={t('power.distribution.subtitle')} icon={Gauge} />
+            <SectionHeader title={t('power.distribution.title')} icon={Gauge} />
             {/* Switch: 切换两种视图 —— 占总负载 / 占总发电 */}
             <div className="mt-3 inline-flex rounded-lg border border-slate-700 bg-slate-950/60 p-0.5 text-[11px]">
               <button
@@ -282,7 +275,6 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
           <Card className="p-5">
             <SectionHeader
               title={t('power.external.title')}
-              subtitle={t('power.external.subtitle')}
               icon={Battery}
               action={
                 <button
@@ -313,7 +305,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
               </div>
             </div>
             {effectiveGroups.length > 0 && (
-              <div className="mt-3 pt-3 border-t border-slate-800 space-y-1.5 max-h-32 overflow-y-auto">
+              <div className="mt-3 pt-3 border-t border-slate-800 space-y-1.5 max-h-32 overflow-y-auto thin-scrollbar">
                 {effectiveGroups.slice(0, 6).map((g) => (
                   <div key={g.extId} className="flex items-center gap-2 text-xs">
                     {autoDetectedIds.has(g.extId)
@@ -331,48 +323,50 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
         {/* Right column: Grid Load progress bars + Devices table */}
         <div className="xl:col-span-7 space-y-6">
           <Card className="p-5">
-            <SectionHeader title={t('power.loadbar.title')} subtitle={t('power.loadbar.subtitle')} icon={Activity} />
-            <div className="mt-4 space-y-4">
-              {networks.length === 0 ? (
+            <SectionHeader title={t('power.loadbar.title')} icon={Activity} />
+            <div className="mt-4 space-y-3">
+              {!effStats || !gridLoad ? (
                 <p className="text-slate-500 text-sm">{t('common.none')}</p>
-              ) : networks.map((n) => (
-                <div key={n.id} className="space-y-1">
+              ) : (
+                <>
                   <div className="flex items-center justify-between text-xs">
-                    <span className="font-semibold text-slate-300 truncate">{n.name}</span>
-                    <span className="font-mono text-slate-400">{n.util.toFixed(1)}%</span>
+                    <span className="text-slate-500">{t('power.loadbar.generation')}</span>
+                    <span className="font-mono text-emerald-300">{fmtFE(effStats.totalInputPerTick)}</span>
                   </div>
-                  <ProgressBar
-                    value={n.util}
-                    max={100}
-                    colorClass={n.util >= 90 ? 'bg-rose-500' : n.util >= 70 ? 'bg-amber-500' : 'bg-cyan-500'}
-                    height="h-2.5"
-                  />
-                  <div className="flex justify-between text-[10px] text-slate-500 font-mono">
-                    <span>IN {fmtFE(n.input)}</span>
-                    <span>OUT {fmtFE(n.output)}</span>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-slate-500">{t('power.loadbar.peakLoad')}</span>
+                    <span className="font-mono text-cyan-300">{fmtFE(effStats.totalOutputPerTick)}</span>
                   </div>
-                </div>
-              ))}
+                  {rawKpi && effStats.excludedTotalPerTick > 0 ? (
+                    <p className="text-[10px] text-slate-500">
+                      {t('power.loadbar.rawHint', {
+                        input: formatEnergy(rawKpi.inputPerTick),
+                        output: formatEnergy(rawKpi.outputPerTick),
+                        excluded: formatEnergy(effStats.excludedTotalPerTick),
+                      })}
+                    </p>
+                  ) : null}
+                  <div className="relative mt-2 h-2.5 overflow-hidden rounded-full border border-slate-700/80 bg-slate-950 shadow-inner">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        gridLoad.critical ? 'bg-rose-500' : gridLoad.warning ? 'bg-amber-500' : 'bg-cyan-500'
+                      }`}
+                      style={{ width: `${Math.max(gridLoad.pct, effStats.totalOutputPerTick > 0 ? 1 : 0)}%` }}
+                    />
+                    <div className="absolute right-0 top-0 h-full w-px bg-rose-400" />
+                  </div>
+                  <p className="text-[10px] text-slate-500">
+                    {t('power.loadbar.capUtil')} {gridLoad.pct.toFixed(0)}%
+                  </p>
+                </>
+              )}
             </div>
-            {effStats && (
-              <div className="mt-5 pt-4 border-t border-slate-800 grid grid-cols-2 gap-3 text-xs">
-                <div>
-                  <p className="text-slate-500 uppercase tracking-wider">{t('power.loadbar.utilization')}</p>
-                  <p className="mt-1 font-mono text-cyan-300 text-lg">{effStats.utilizationPercent.toFixed(1)}%</p>
-                </div>
-                <div>
-                  <p className="text-slate-500 uppercase tracking-wider">{t('power.loadbar.headroom')}</p>
-                  <p className="mt-1 font-mono text-emerald-300 text-lg">{fmtFE(effStats.reservePerTick)}</p>
-                </div>
-              </div>
-            )}
           </Card>
 
           {/* Power Devices Table */}
           <Card className="p-5">
             <SectionHeader
               title={t('power.lines.title')}
-              subtitle={t('power.lines.subtitle')}
               icon={Cpu}
               action={
                 <div className="flex gap-1">
@@ -389,7 +383,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
                 </div>
               }
             />
-            <div className="mt-3 max-h-96 overflow-y-auto">
+            <div className="mt-3 max-h-96 overflow-y-auto thin-scrollbar">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-slate-900/95 backdrop-blur">
                   <tr className="text-slate-500 uppercase tracking-wider">
@@ -423,7 +417,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
       {/* ========== Network Summary (bottom) ========== */}
       {summary && (
         <Card className="p-5">
-          <SectionHeader title={t('power.summary.title')} subtitle={t('power.summary.subtitle')} icon={Gauge} />
+          <SectionHeader title={t('power.summary.title')} icon={Gauge} />
           <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
             <div>
               <p className="text-slate-500 text-xs uppercase tracking-wider">{t('power.summary.stored')}</p>

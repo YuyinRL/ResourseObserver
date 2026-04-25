@@ -47,6 +47,83 @@ export const SectionHeader: React.FC<{
   </div>
 );
 
+const HOVER_CARD_LAYER_ID = 'resourceobserver-hover-card-layer';
+
+function getHoverCardLayer(): HTMLElement | null {
+  if (typeof document === 'undefined') return null;
+  let layer = document.getElementById(HOVER_CARD_LAYER_ID);
+  if (layer) return layer;
+  layer = document.createElement('div');
+  layer.id = HOVER_CARD_LAYER_ID;
+  layer.style.position = 'fixed';
+  layer.style.inset = '0';
+  layer.style.zIndex = '2147483647';
+  layer.style.pointerEvents = 'none';
+  layer.style.isolation = 'isolate';
+  document.body.appendChild(layer);
+  return layer;
+}
+
+/**
+ * 鼠标悬浮门户卡片：把 tooltip 通过 React Portal 渲染到独立顶层容器，
+ * 用 fixed 定位和最高 z-index 避免父容器裁切或被其它卡片遮挡。
+ */
+export const HoverCard: React.FC<{
+  trigger: (props: {
+    ref: React.Ref<HTMLDivElement>;
+    onMouseEnter: () => void;
+    onMouseLeave: () => void;
+  }) => React.ReactNode;
+  children: () => React.ReactNode;
+  width?: number;
+  className?: string;
+}> = ({ trigger, children, width = 240, className = '' }) => {
+  const ref = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
+
+  const measure = () => {
+    const el = ref.current;
+    if (!el) return;
+    const r = el.getBoundingClientRect();
+    const margin = 8;
+    const estHeight = 160;
+    const flip = r.bottom + estHeight + margin > window.innerHeight;
+    let left = r.left;
+    if (left + width + margin > window.innerWidth) left = window.innerWidth - width - margin;
+    if (left < margin) left = margin;
+    const top = flip ? Math.max(margin, r.top - estHeight - margin) : r.bottom + margin;
+    setPos({ left, top });
+  };
+
+  useEffect(() => {
+    if (!pos) return;
+    const close = () => setPos(null);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [pos]);
+
+  return (
+    <>
+      {trigger({ ref, onMouseEnter: measure, onMouseLeave: () => setPos(null) })}
+      {pos
+        ? createPortal(
+            <div
+              style={{ position: 'fixed', left: pos.left, top: pos.top, width, zIndex: 2147483647 }}
+              className={`pointer-events-none rounded-xl border border-slate-600 bg-slate-950 p-3 shadow-[0_20px_60px_rgba(0,0,0,0.65)] ring-1 ring-cyan-500/20 ${className}`}
+            >
+              {children()}
+            </div>,
+            getHoverCardLayer() ?? ref.current?.ownerDocument.body ?? document.body,
+          )
+        : null}
+    </>
+  );
+};
+
 const toneMap = {
   cyan: 'bg-cyan-500/10 text-cyan-400 border-cyan-500/20',
   amber: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
@@ -126,6 +203,34 @@ export const SegmentedControl: React.FC<{
         {item.label}
       </button>
     ))}
+  </div>
+);
+
+export const IconSegmentedControl: React.FC<{
+  value: string;
+  onChange: (value: string) => void;
+  items: Array<{ value: string; label: string; icon: LucideIcon }>;
+}> = ({ value, onChange, items }) => (
+  <div className="inline-flex rounded-xl border border-slate-800 bg-slate-950/90 p-1 shadow-inner">
+    {items.map((item) => {
+      const Icon = item.icon;
+      const active = value === item.value;
+      return (
+        <button
+          key={item.value}
+          onClick={() => onChange(item.value)}
+          title={item.label}
+          aria-label={item.label}
+          className={`rounded-lg p-2 transition-all ${
+            active
+              ? 'border border-cyan-500/20 bg-cyan-500/10 text-cyan-400'
+              : 'text-slate-500 hover:text-slate-300'
+          }`}
+        >
+          <Icon size={15} />
+        </button>
+      );
+    })}
   </div>
 );
 

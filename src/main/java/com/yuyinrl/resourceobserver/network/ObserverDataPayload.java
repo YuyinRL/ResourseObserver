@@ -248,21 +248,25 @@ public record ObserverDataPayload(
     /**
      * 图表数据点 —— 一个时间桶的聚合数据。
      * @param slotIndex   桶索引（X 轴位置）
+     * @param bucket      服务端绝对 bucket 编号，用于 Web 侧精确对齐时间轴
      * @param production  该桶内的生产总量
      * @param consumption 该桶内的消耗总量
      * @param net         净变化量（production - consumption）
      * @param stock       该桶的库存快照
      * @param hasFlow     是否有流量数据（用于区分"无数据"和"数据为0"）
      * @param hasStock    是否有库存数据
+     * @param sampleCount  该桶内实际采样次数，用于 Web 侧按真实采样时长换算速率
      */
     public record ChartPoint(
             int slotIndex,
+            long bucket,
             double production,
             double consumption,
             double net,
             double stock,
             boolean hasFlow,
-            boolean hasStock
+            boolean hasStock,
+            int sampleCount
     ) {
     }
 
@@ -554,12 +558,14 @@ public record ObserverDataPayload(
                     for (int i = 0; i < count; i++) {
                         points.add(new ChartPoint(
                                 buf.readVarInt(),
+                                buf.readLong(),
                                 buf.readDouble(),
                                 buf.readDouble(),
                                 buf.readDouble(),
                                 buf.readDouble(),
                                 buf.readBoolean(),
-                                buf.readBoolean()
+                                buf.readBoolean(),
+                                buf.readVarInt()
                         ));
                     }
                     return points;
@@ -570,12 +576,14 @@ public record ObserverDataPayload(
                     buf.writeVarInt(chartSeries.size());
                     for (ChartPoint point : chartSeries) {
                         buf.writeVarInt(point.slotIndex());
+                        buf.writeLong(point.bucket());
                         buf.writeDouble(point.production());
                         buf.writeDouble(point.consumption());
                         buf.writeDouble(point.net());
                         buf.writeDouble(point.stock());
                         buf.writeBoolean(point.hasFlow());
                         buf.writeBoolean(point.hasStock());
+                        buf.writeVarInt(point.sampleCount());
                     }
                 }
 
