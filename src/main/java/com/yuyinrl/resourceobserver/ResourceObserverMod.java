@@ -37,6 +37,7 @@ public class ResourceObserverMod {
             ChartRenderShaders.register(modEventBus);
             ClientKeyBindings.register(modEventBus);
             ModItemProperties.register(modEventBus);
+            com.yuyinrl.resourceobserver.client.ClientResourceMirror.register();
         }
     }
 }

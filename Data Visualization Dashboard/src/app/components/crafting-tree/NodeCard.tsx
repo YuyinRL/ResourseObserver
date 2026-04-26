@@ -1,6 +1,5 @@
-import React, { useState } from 'react';
-import { Box } from 'lucide-react';
-import { api } from '../../lib/api';
+import React from 'react';
+import { ItemIcon } from '../ItemIcon';
 import type { CraftingItemNode, CraftingTier } from './types';
 
 interface NodeCardProps {
@@ -45,8 +44,6 @@ const TIER_STYLES: Record<CraftingTier, { ring: string; bg: string; chip: string
  */
 export function NodeCard({ node, depth, onClick }: NodeCardProps) {
   const tier = TIER_STYLES[node.tier];
-  const url = node.icon || api.iconUrl(node.itemId);
-  const [iconFailed, setIconFailed] = useState(false);
 
   return (
     <button
@@ -73,17 +70,11 @@ export function NodeCard({ node, depth, onClick }: NodeCardProps) {
             'repeating-linear-gradient(45deg, rgba(255,255,255,0.02) 0 2px, transparent 2px 4px)',
         }}
       >
-        {url && !iconFailed ? (
-          <img
-            src={url}
-            alt={node.itemId}
-            className="h-full w-full object-contain"
-            style={{ imageRendering: 'pixelated' }}
-            onError={() => setIconFailed(true)}
-          />
-        ) : (
-          <Box className="text-slate-400" size={22} />
-        )}
+        <ItemIcon
+          item={{ id: node.itemId, accent: 'text-slate-400' }}
+          size={22}
+          containerClassName="flex h-full w-full shrink-0 items-center justify-center bg-transparent p-0"
+        />
       </div>
 
       <div className="min-w-0 flex-1">

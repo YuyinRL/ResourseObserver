@@ -106,10 +106,18 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
         for (CraftableEntry e : entries) {
             Map<String, Object> row = new LinkedHashMap<>();
             row.put("itemId", e.itemId());
-            row.put("displayName", e.displayName());
+            row.put("entryType", entryType(e.itemId()));
+            ItemNameResolver.Resolved r = ItemNameResolver.resolve(e.itemId());
+            String dn = r.displayName() != null && !r.displayName().isEmpty() ? r.displayName() : e.displayName();
+            row.put("displayName", dn);
+            if (r.translationKey() != null) row.put("translationKey", r.translationKey());
             out.add(row);
         }
         return out;
+    }
+
+    private static String entryType(String itemId) {
+        return itemId != null && itemId.startsWith("fluid:") ? "FLUID" : "ITEM";
     }
 
     private List<Map<String, Object>> jobsToMaps(List<CraftingJobEntry> jobs) {
@@ -119,7 +127,10 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
             row.put("cpuName", j.cpuName());
             row.put("busy", j.busy());
             row.put("outputItemId", j.outputItemId());
-            row.put("outputDisplayName", j.outputDisplayName());
+            ItemNameResolver.Resolved r = ItemNameResolver.resolve(j.outputItemId());
+            String odn = r.displayName() != null && !r.displayName().isEmpty() ? r.displayName() : j.outputDisplayName();
+            row.put("outputDisplayName", odn);
+            if (r.translationKey() != null) row.put("outputTranslationKey", r.translationKey());
             row.put("totalAmount", j.totalAmount());
             row.put("remainingAmount", j.remainingAmount());
             row.put("jobId", j.jobId());

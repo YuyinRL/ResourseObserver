@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Box,
@@ -294,9 +294,18 @@ export const StorageNetwork = ({
   );
 
   const craftables = useMemo(
-    () => (craftingData?.bindings ?? []).flatMap((binding) =>
-      binding.craftables.map((item) => ({ ...item, networkId: binding.networkId })),
-    ),
+    () => {
+      const unique = new Map<string, { itemId: string; displayName: string; entryType?: 'ITEM' | 'FLUID'; networkId: string }>();
+      for (const binding of craftingData?.bindings ?? []) {
+        for (const item of binding.craftables) {
+          const key = `${binding.networkId}::${item.itemId}`;
+          if (!unique.has(key)) {
+            unique.set(key, { ...item, networkId: binding.networkId });
+          }
+        }
+      }
+      return Array.from(unique.values());
+    },
     [craftingData],
   );
 
@@ -1035,18 +1044,20 @@ export const StorageNetwork = ({
         open={treeDialog !== null}
         onClose={() => setTreeDialog(null)}
         title={treeDialog ? `${treeDialog.title}${treeDialog.finalAmount ? ` ×${treeDialog.finalAmount.toLocaleString()}` : ''}` : ''}
-        width={780}
-        height={620}
+        width={Math.min(1400, typeof window !== 'undefined' ? window.innerWidth - 80 : 1200)}
+        height={Math.min(900, typeof window !== 'undefined' ? window.innerHeight - 80 : 800)}
       >
         {treeDialog ? (
           treeDialog.loading ? (
             <p className="text-xs text-slate-500">{t('common.loading') ?? 'Loading...'}</p>
           ) : treeDialog.root ? (
             <div className="h-full">
-              <CraftingTree
-                root={toCraftingItemNode(treeDialog.root)}
-                onSelect={(n) => console.log('[CraftingTree] node clicked', n)}
-              />
+              <ZoomBox>
+                <CraftingTree
+                  root={toCraftingItemNode(treeDialog.root)}
+                  onSelect={(n) => console.log('[CraftingTree] node clicked', n)}
+                />
+              </ZoomBox>
             </div>
           ) : (
             <CraftingTreeView
@@ -1060,6 +1071,63 @@ export const StorageNetwork = ({
     </div>
   );
 };
+
+/**
+ * 包装合成树用的可缩放容器：按住 Alt + 鼠标滚轮放大/缩小内容（0.4x ~ 2.5x）。
+ * 用 Alt 而不是 Ctrl 是为了避开浏览器的页面缩放快捷键。
+ */
+function ZoomBox({ children }: { children: React.ReactNode }) {
+  const wrapperRef = useRef<HTMLDivElement | null>(null);
+  const [zoom, setZoom] = useState(1);
+  useEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const handler = (e: WheelEvent) => {
+      if (!e.altKey) return;
+      e.preventDefault();
+      setZoom((z) => {
+        const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
+        return Math.max(0.4, Math.min(2.5, z * factor));
+      });
+    };
+    el.addEventListener('wheel', handler, { passive: false });
+    return () => el.removeEventListener('wheel', handler);
+  }, []);
+  return (
+    <div ref={wrapperRef} className="relative h-full w-full overflow-auto">
+      <div style={{ transform: `scale(${zoom})`, transformOrigin: 'top left', display: 'inline-block', minWidth: '100%' }}>
+        {children}
+      </div>
+      <div className="pointer-events-none absolute right-2 top-2 flex items-center gap-1 rounded-md bg-slate-900/85 px-2 py-1 text-[10px] font-mono text-slate-300 shadow-md">
+        <button
+          type="button"
+          onClick={() => setZoom((z) => Math.max(0.4, z / 1.1))}
+          className="pointer-events-auto rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-cyan-300"
+          aria-label="zoom out"
+        >
+          −
+        </button>
+        <span className="px-1">{Math.round(zoom * 100)}%</span>
+        <button
+          type="button"
+          onClick={() => setZoom((z) => Math.min(2.5, z * 1.1))}
+          className="pointer-events-auto rounded border border-slate-700 px-1.5 py-0.5 text-[10px] text-slate-400 hover:text-cyan-300"
+          aria-label="zoom in"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={() => setZoom(1)}
+          className="pointer-events-auto ml-1 rounded border border-slate-700 px-1.5 py-0.5 text-[9px] text-slate-400 hover:text-cyan-300"
+        >
+          重置
+        </button>
+        <span className="ml-1 text-slate-500">Alt+滚轮</span>
+      </div>
+    </div>
+  );
+}
 
 function PlanReview({ plan, selectedCpuIndex, onSelectCpuIndex }: { plan: CraftingPlanResult; selectedCpuIndex: number | null; onSelectCpuIndex: (idx: number | null) => void }) {
   const { t } = useI18n();
@@ -1123,11 +1191,13 @@ function PlanReview({ plan, selectedCpuIndex, onSelectCpuIndex }: { plan: Crafti
             <span className="mr-1.5 inline-block transition-transform group-open:rotate-90">▸</span>
             {t('storage.crafting.orderDialog.viewTree') ?? 'View Tree'}
           </summary>
-          <div className="h-[360px] p-2">
-            <CraftingTree
-              root={toCraftingItemNode(plan.tree)}
-              onSelect={(n) => console.log('[CraftingTree] node clicked', n)}
-            />
+          <div className="h-[60vh] min-h-[420px] p-2 overflow-hidden">
+            <ZoomBox>
+              <CraftingTree
+                root={toCraftingItemNode(plan.tree)}
+                onSelect={(n) => console.log('[CraftingTree] node clicked', n)}
+              />
+            </ZoomBox>
           </div>
         </details>
       ) : null}

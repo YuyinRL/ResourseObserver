@@ -5,20 +5,12 @@ import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.NativeImage;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
+import com.yuyinrl.resourceobserver.client.ui.TerminalSprites;
+import com.yuyinrl.resourceobserver.client.ui.render.RenderUtils;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.MultiBufferSource;
-import net.minecraft.client.renderer.texture.TextureAtlasSprite;
-import net.minecraft.core.registries.BuiltInRegistries;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.inventory.InventoryMenu;
-import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
-import net.minecraft.world.level.material.Fluid;
-import net.minecraft.world.level.material.Fluids;
-import net.neoforged.neoforge.client.extensions.common.IClientFluidTypeExtensions;
-import net.neoforged.neoforge.fluids.FluidStack;
 import org.jetbrains.annotations.Nullable;
 import org.joml.Matrix4f;
 
@@ -39,16 +31,22 @@ public final class IconRenderer {
 
     /** 渲染分辨率 —— 32x32 在 DPI 屏幕上仍然清晰，且文件体积小。 */
     private static final int SIZE = 32;
-    private static final String FLUID_PREFIX = "fluid:";
+    private static final String CACHE_DIR = "resourceobserver-icons-v4";
 
     private IconRenderer() {}
 
     /**
      * 阻塞调用：在客户端线程上渲染物品并写入 PNG，返回缓存文件路径。
      * 若已存在缓存则直接返回；如果物品不存在或渲染失败返回 {@code null}。
+     * <p>
+     * 调用顺序：
+     * <ol>
+     *     <li>磁盘缓存命中 → 直接返回</li>
+     *     <li>离屏真实渲染（与 ModernUI 的 {@code ItemTextureCache} 使用同一绘制入口）</li>
+     * </ol>
      */
     public static @Nullable Path renderToCache(String itemId, String cacheKey) {
-        Path dir = Paths.get("cache", "resourceobserver-icons-v2");
+        Path dir = Paths.get("cache", CACHE_DIR);
         Path file = dir.resolve(cacheKey + ".png");
         try {
             if (Files.exists(file)) {
@@ -60,77 +58,45 @@ public final class IconRenderer {
             return null;
         }
 
-        IconSource icon = resolveIcon(itemId);
-        if (icon == null) return null;
-
         Minecraft mc = Minecraft.getInstance();
         if (mc == null) return null;
+
+        // 防御：如果当前已经在 render 线程，直接放弃离屏渲染（会死锁）
+        if (mc.isSameThread()) {
+            ResourceObserverMod.LOGGER.debug("[IconRenderer] 跳过 {} 离屏渲染：当前在 render 线程", itemId);
+            return null;
+        }
 
         CompletableFuture<NativeImage> future = new CompletableFuture<>();
         mc.execute(() -> {
             try {
-                NativeImage image = renderOnRenderThread(mc, icon);
+                NativeImage image = renderOnRenderThread(mc, itemId);
                 future.complete(image);
             } catch (Throwable t) {
                 future.completeExceptionally(t);
             }
         });
 
-        try (NativeImage image = future.get(2, TimeUnit.SECONDS)) {
+        try (NativeImage image = future.get(5, TimeUnit.SECONDS)) {
             if (image == null) return null;
             image.writeToFile(file);
             return file;
         } catch (Throwable t) {
-            ResourceObserverMod.LOGGER.debug("[IconRenderer] 渲染 {} 失败: {}", itemId, t.toString());
+            ResourceObserverMod.LOGGER.warn("[IconRenderer] 渲染 {} 失败: {}", itemId, t.toString());
             return null;
         }
     }
 
-    /**
-     * 把 ID 解析为可渲染图标源。
-     * <p>支持普通物品 ID、普通流体 ID，以及 {@code fluid:minecraft:water} 形式的显式流体 ID。
-     */
-    private static @Nullable IconSource resolveIcon(String iconId) {
-        if (iconId == null || iconId.isBlank()) return null;
-
-        if (iconId.startsWith(FLUID_PREFIX)) {
-            ResourceLocation fluidId = ResourceLocation.tryParse(iconId.substring(FLUID_PREFIX.length()));
-            Fluid fluid = resolveFluid(fluidId);
-            return fluid != null ? IconSource.fluid(fluid) : null;
-        }
-
-        ResourceLocation rl = ResourceLocation.tryParse(iconId);
-        if (rl == null) return null;
-
-        if (BuiltInRegistries.ITEM.containsKey(rl)) {
-            Item item = BuiltInRegistries.ITEM.get(rl);
-            if (item != null && item != Items.AIR) {
-                ItemStack stack = new ItemStack(item);
-                if (!stack.isEmpty()) return IconSource.item(stack);
-            }
-        }
-
-        Fluid fluid = resolveFluid(rl);
-        if (fluid != null) return IconSource.fluid(fluid);
-
-        return null;
-    }
-
-    private static @Nullable Fluid resolveFluid(@Nullable ResourceLocation rl) {
-        if (rl == null || !BuiltInRegistries.FLUID.containsKey(rl)) return null;
-        Fluid fluid = BuiltInRegistries.FLUID.get(rl);
-        return fluid == null || fluid == Fluids.EMPTY ? null : fluid;
-    }
-
     /** 在 render thread 上完成离屏渲染并下载像素。 */
-    private static NativeImage renderOnRenderThread(Minecraft mc, IconSource icon) {
+    private static NativeImage renderOnRenderThread(Minecraft mc, String itemId) {
         RenderTarget target = new TextureTarget(SIZE, SIZE, true, Minecraft.ON_OSX);
         target.setClearColor(0f, 0f, 0f, 0f);
         target.clear(Minecraft.ON_OSX);
         target.bindWrite(true);
+        RenderSystem.viewport(0, 0, SIZE, SIZE);
 
         RenderSystem.backupProjectionMatrix();
-        Matrix4f ortho = new Matrix4f().setOrtho(0f, 16f, 16f, 0f, 1000f, 21000f);
+        Matrix4f ortho = new Matrix4f().setOrtho(0f, SIZE, SIZE, 0f, 1000f, 21000f);
         RenderSystem.setProjectionMatrix(ortho, com.mojang.blaze3d.vertex.VertexSorting.ORTHOGRAPHIC_Z);
 
         org.joml.Matrix4fStack mv = RenderSystem.getModelViewStack();
@@ -142,17 +108,14 @@ public final class IconRenderer {
         MultiBufferSource.BufferSource bufferSource = mc.renderBuffers().bufferSource();
         GuiGraphics gg = new GuiGraphics(mc, bufferSource);
         try {
-            if (icon.stack() != null) {
-                gg.renderItem(icon.stack(), 0, 0);
-            } else if (icon.fluid() != null) {
-                renderFluidIcon(mc, gg, icon.fluid());
-            }
+            RenderUtils.drawItemIconOrSprite(gg, itemId, 0, 0, SIZE, TerminalSprites.TABLE_ITEM);
             gg.flush();
         } finally {
             mv.popMatrix();
             RenderSystem.applyModelViewMatrix();
             RenderSystem.restoreProjectionMatrix();
             target.unbindWrite();
+            RenderSystem.viewport(0, 0, mc.getWindow().getWidth(), mc.getWindow().getHeight());
         }
 
         NativeImage img = new NativeImage(NativeImage.Format.RGBA, SIZE, SIZE, false);
@@ -162,43 +125,5 @@ public final class IconRenderer {
 
         target.destroyBuffers();
         return img;
-    }
-
-    /** 直接绘制流体 still texture，适配没有桶物品的流体、气体与浆液。 */
-    private static void renderFluidIcon(Minecraft mc, GuiGraphics gg, Fluid fluid) {
-        IClientFluidTypeExtensions fluidExt = IClientFluidTypeExtensions.of(fluid);
-        FluidStack fluidStack = new FluidStack(fluid, 1000);
-        ResourceLocation stillTexture = fluidExt.getStillTexture(fluidStack);
-        if (stillTexture == null) {
-            throw new IllegalStateException("missing fluid still texture: "
-                    + BuiltInRegistries.FLUID.getKey(fluid));
-        }
-
-        TextureAtlasSprite sprite = mc.getTextureAtlas(InventoryMenu.BLOCK_ATLAS).apply(stillTexture);
-        int tintColor = fluidExt.getTintColor(fluidStack);
-        float a = ((tintColor >> 24) & 0xFF) / 255.0f;
-        float r = ((tintColor >> 16) & 0xFF) / 255.0f;
-        float g = ((tintColor >> 8) & 0xFF) / 255.0f;
-        float b = (tintColor & 0xFF) / 255.0f;
-        if (a <= 0.0f) {
-            a = 1.0f;
-        }
-
-        gg.flush();
-        RenderSystem.setShaderTexture(0, InventoryMenu.BLOCK_ATLAS);
-        RenderSystem.setShaderColor(r, g, b, a);
-        gg.blit(0, 0, 0, 16, 16, sprite);
-        gg.flush();
-        RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-    }
-
-    private record IconSource(@Nullable ItemStack stack, @Nullable Fluid fluid) {
-        private static IconSource item(ItemStack stack) {
-            return new IconSource(stack, null);
-        }
-
-        private static IconSource fluid(Fluid fluid) {
-            return new IconSource(null, fluid);
-        }
     }
 }

@@ -105,6 +105,17 @@ public final class WebServerService {
             boolean cors = WebServerConfig.CORS_ALLOW_ALL.get();
             MinecraftServer mc = event.getServer();
             try {
+                // 提前在后台线程扫描 mod jar 资源（lang/textures），不阻塞服务端启动
+                Thread initThread = new Thread(() -> {
+                    try {
+                        com.yuyinrl.resourceobserver.web.handler.ServerAssetIndex.ensureLoaded();
+                    } catch (Throwable t) {
+                        ResourceObserverMod.LOGGER.warn("[Web] ServerAssetIndex 初始化失败：{}", t.toString());
+                    }
+                }, "ResourceObserver-AssetIndex");
+                initThread.setDaemon(true);
+                initThread.start();
+
                 HttpServer httpServer = HttpServer.create(new InetSocketAddress(host, port), 16);
                 WebServerService svc = new WebServerService(httpServer, mc, cors);
                 svc.installRoutes();

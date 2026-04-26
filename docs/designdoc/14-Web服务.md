@@ -31,13 +31,17 @@ com.yuyinrl.resourceobserver.web
 └─ handler/
    ├─ BaseApiHandler    # 主线程切换 + 路径解析工具
    ├─ HealthHandler     # GET /api/health
+   ├─ IconHandler       # GET /api/icon/{namespace}/{path}
    ├─ ObserversHandler  # GET /api/observers[/{dim}/{x}/{y}/{z}]
    ├─ CraftingHandler   # GET /api/observers/{...}/crafting
+   ├─ CraftingOrderHandler # POST /api/observers/{...}/crafting/{plan|confirm|cancel|tree}
+   ├─ ItemNameResolver  # itemId -> translationKey/displayName 解析
+   ├─ ServerAssetIndex  # 预加载 mod jar lang 资源（zh_cn/en_us）
    └─ StaticHandler     # GET / (静态资源 assets/resourceobserver/web/)
 ```
 
-- 合成采集由 `integration.CraftingDataCollector` 以纯反射方式调用
-  AE2 `ICraftingService` → `ICraftingCPU`，隔离 API 版本差异（见 [[07-模组集成]]）。
+- 合成采集由 `integration.CraftingDataCollector` / `CraftingOrderService` 直接调用
+  AE2 API（`ICraftingService`、`ICraftingCPU`、`AEKey`、`AEFluidKey`），支持计划计算、样板过滤与流体键。
 - Observer 枚举通过 `ObserverBlockEntity` 的静态 `LOADED` 注册表，
   在 `onLoad()/setRemoved()` 中自动增删，避免扫描区块。
 
@@ -74,6 +78,8 @@ Dashboard 启动时调用一次，返回 API schema 版本和可用集成列表�
 }
 ```
 
+`iconsAvailable` 现始终对外暴露为可用：集成端可本地渲染，专用服务端则通过在线客户端镜像补图。
+
 ### `GET /api/observers`
 0.4.0 新增 `id` 与 `displayName` 字段，便于前端 Observer Selector 使用：
 ```json
@@ -91,9 +97,47 @@ Dashboard 启动时调用一次，返回 API schema 版本和可用集成列表�
 
 ### `GET /api/observers/{dim}/{x}/{y}/{z}/crafting`
 针对 `AE2_ITEMS` 绑定输出：
-- `craftables`：可合成物品列表（`itemId` + `displayName`），上限 1024 条
-- `cpus`：所有合成 CPU 的任务状态（`busy`、`outputItemId`、`totalAmount`、`remainingAmount`）
+- `craftables`：可合成资源列表（`itemId` + `displayName` + `entryType`），支持普通物品与 `fluid:<namespace>:<path>` 流体键
+- `jobs`：所有合成 CPU 的任务状态（`busy`、`outputItemId`、`remainingAmount`、`progressFraction`、`treeId`）
 - `storage`：`cpuCount`、`busyCpuCount`、`totalStorageBytes`、`totalCoProcessors`、`reliable`
+
+服务端会先对 `AEKey.dropSecondary()` 归一化，再按 `getCraftingFor(key)` / `canEmitFor(key)` 过滤，避免 Web 搜索结果出现“列表里有、下单时却提示没有样板”的无效条目。
+
+### `POST /api/observers/{dim}/{x}/{y}/{z}/crafting/plan`
+
+请求体：
+
+```json
+{"networkId":"...","itemId":"minecraft:iron_ingot","amount":128}
+```
+
+返回 AE2 计划摘要、缺料/用料/副产物、CPU 列表与可选的 `tree` / `treeId`。其中堆栈条目同样支持 `fluid:` 前缀流体键。
+
+### `POST /api/observers/{dim}/{x}/{y}/{z}/crafting/confirm`
+
+请求体：
+
+```json
+{"planId":"...","cpu":"可选 CPU 名"}
+```
+
+使用已缓存的 `planId` 真正提交订单。
+
+### `POST /api/observers/{dim}/{x}/{y}/{z}/crafting/cancel`
+
+主动丢弃已缓存的计划。
+
+### `POST /api/observers/{dim}/{x}/{y}/{z}/crafting/tree`
+
+按 `treeId` 返回完整 `CraftingTreeNode`，供 Review Dialog 与运行中任务详情复用。
+
+### `GET /api/icon/{namespace}/{path}`
+
+统一的物品 / 流体图标入口：
+
+- 集成端：直接调用客户端 `IconRenderer` 真实渲染 `ItemStack` / 流体纹理
+- 专用服务端：缓存未命中时通过 `IconRequestPayload` 请求在线客户端代渲染，再由 `ClientIconUploadPayload` 回传 PNG
+- 浏览器缓存时间较短（`max-age=300`），避免错误旧图长时间驻留
 
 ## ⚙️ 配置（`config/resourceobserver-web.toml`）
 
@@ -124,6 +168,13 @@ npm run build      # 产物落到 mod 资源目录
 | `src/app/hooks/usePolling.ts` | 定时轮询 Hook（默认 5s） |
 | `src/app/hooks/useObservers.ts` | `useObservers` / `useObserverDetail` / `useObserverCrafting` / `useMeta` |
 | `src/app/components/ObserverSelector.tsx` | 当前 Observer 的 Context + 下拉选择器；选择状态持久化到 `localStorage` |
+
+**图标与名称策略（0.7.0+）：**
+
+- 统一通过 `ItemIcon` 组件访问 `/api/icon/...`
+- 专用服务端优先等待客户端真实渲染结果，不再默认回退到服务端直接读取 `textures/*.png`
+- `ItemNameResolver` 优先使用客户端名称镜像，其次使用 `ServerAssetIndex` 从 mod jar 读取 `zh_cn/en_us` 语言文件
+- Crafting 列表在前端按 `networkId + itemId` 再做一层保险去重，统计口径与实际下单入口保持一致
 
 **StaticHandler 能力增强**：
 

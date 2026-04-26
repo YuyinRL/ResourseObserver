@@ -798,15 +798,17 @@ export function deriveCraftingSummary(c: CraftingResponse | null): LiveCraftingS
   if (!Array.isArray(bindings) || bindings.length === 0) return null;
   let cpuCount = 0;
   let busyCpuCount = 0;
-  let craftableCount = 0;
+  const craftableKeys = new Set<string>();
   let activeJobs = 0;
   for (const b of bindings) {
     cpuCount += b.storage.cpuCount;
     busyCpuCount += b.storage.busyCpuCount;
-    craftableCount += b.craftables.length;
+    for (const craftable of b.craftables) {
+      craftableKeys.add(`${b.networkId}::${craftable.itemId}`);
+    }
     activeJobs += b.jobs.filter(j => j.busy).length;
   }
-  return { cpuCount, busyCpuCount, craftableCount, activeJobs };
+  return { cpuCount, busyCpuCount, craftableCount: craftableKeys.size, activeJobs };
 }
 
 export function countBindingsByType(detail: ObserverDetail | null): {

@@ -4,16 +4,13 @@ import appeng.api.networking.IGrid;
 import appeng.api.networking.crafting.CraftingJobStatus;
 import appeng.api.networking.crafting.ICraftingCPU;
 import appeng.api.networking.crafting.ICraftingService;
+import appeng.api.stacks.AEFluidKey;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
 import appeng.api.stacks.GenericStack;
 import appeng.api.storage.AEKeyFilter;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
-import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
-import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
 import org.jetbrains.annotations.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +18,9 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
@@ -98,32 +97,82 @@ public final class CraftingDataCollector {
         }
     }
 
-    /** 可合成物品列表（按 AEItemKey 去重，按显示名稳定排序）。 */
+    /** 可合成资源列表（按 AEKey 去重，按显示名稳定排序）。 */
     public static List<CraftableEntry> collectCraftables(@Nullable IGrid grid) {
         ICraftingService service = getService(grid);
         if (service == null) return Collections.emptyList();
         try {
             // AE2 1.21.1 的 getCraftables 接收 AEKeyFilter，旧实现误用 Predicate 因此始终返回空 —— 修复。
-            AEKeyFilter filter = key -> key instanceof AEItemKey;
+            AEKeyFilter filter = CraftingDataCollector::isSupportedCraftingKey;
             Set<AEKey> raw = service.getCraftables(filter);
             if (raw == null || raw.isEmpty()) return Collections.emptyList();
-            List<CraftableEntry> out = new ArrayList<>(Math.min(raw.size(), MAX_CRAFTABLES));
-            int limit = 0;
+            Map<String, CraftableEntry> unique = new LinkedHashMap<>(Math.min(raw.size(), MAX_CRAFTABLES));
             for (AEKey key : raw) {
-                if (!(key instanceof AEItemKey ik)) continue;
-                Item item = ik.getItem();
-                ResourceLocation id = BuiltInRegistries.ITEM.getKey(item);
-                String itemId = id == null ? "unknown" : id.toString();
-                String name = new ItemStack(item).getHoverName().getString();
-                out.add(new CraftableEntry(itemId, name));
-                if (++limit >= MAX_CRAFTABLES) break;
+                AEKey normalized = normalizeCraftingKey(key);
+                if (!isSupportedCraftingKey(normalized) || !hasCraftingRoute(service, normalized)) continue;
+                String id = keyId(normalized);
+                unique.putIfAbsent(id, new CraftableEntry(id, keyDisplayName(normalized)));
+                if (unique.size() >= MAX_CRAFTABLES) break;
             }
+            List<CraftableEntry> out = new ArrayList<>(unique.values());
             out.sort((a, b) -> a.displayName().compareToIgnoreCase(b.displayName()));
             return out;
         } catch (Throwable t) {
             logOnce("getCraftables", t);
             return Collections.emptyList();
         }
+    }
+
+    private static boolean isSupportedCraftingKey(@Nullable AEKey key) {
+        return key instanceof AEItemKey || key instanceof AEFluidKey;
+    }
+
+    private static @Nullable AEKey normalizeCraftingKey(@Nullable AEKey key) {
+        if (key == null) return null;
+        try {
+            AEKey normalized = key.dropSecondary();
+            return normalized == null ? key : normalized;
+        } catch (Throwable t) {
+            logOnce("dropSecondary.craftables", t);
+            return key;
+        }
+    }
+
+    private static boolean hasCraftingRoute(ICraftingService service, AEKey key) {
+        try {
+            var patterns = service.getCraftingFor(key);
+            if (patterns != null && !patterns.isEmpty()) return true;
+        } catch (Throwable t) {
+            logOnce("getCraftingFor.filter", t);
+        }
+        try {
+            return service.canEmitFor(key);
+        } catch (Throwable t) {
+            logOnce("canEmitFor.filter", t);
+            return false;
+        }
+    }
+
+    private static String keyId(AEKey key) {
+        if (key instanceof AEItemKey itemKey) {
+            return itemKey.getId().toString();
+        }
+        if (key instanceof AEFluidKey fluidKey) {
+            return "fluid:" + fluidKey.getId();
+        }
+        return key.getId().toString();
+    }
+
+    private static String keyDisplayName(AEKey key) {
+        try {
+            Component c = key.getDisplayName();
+            if (c != null) {
+                String s = c.getString();
+                if (s != null && !s.isBlank()) return s;
+            }
+        } catch (Throwable ignored) {
+        }
+        return keyId(key);
     }
 
     /** 活跃合成任务（未忙碌 CPU 也会返回条目，便于 UI 展示总槽位）。 */
@@ -207,10 +256,9 @@ public final class CraftingDataCollector {
             CraftingJobStatus status = cpu.getJobStatus();
             if (status != null) {
                 GenericStack stack = status.crafting();
-                if (stack != null && stack.what() instanceof AEItemKey ik) {
-                    ResourceLocation id = BuiltInRegistries.ITEM.getKey(ik.getItem());
-                    outputItemId = id == null ? "unknown" : id.toString();
-                    outputName = new ItemStack(ik.getItem()).getHoverName().getString();
+                if (stack != null && isSupportedCraftingKey(stack.what())) {
+                    outputItemId = keyId(stack.what());
+                    outputName = keyDisplayName(stack.what());
                 }
                 // status.crafting().amount() 是真实剩余的终产物数量；
                 // status.totalItems()/progress() 是 ElapsedTimeTracker 的 deprecated 方法，

@@ -165,6 +165,7 @@ export interface CraftingBinding {
   craftables: Array<{
     itemId: string;
     displayName: string;
+    entryType?: 'ITEM' | 'FLUID';
   }>;
 }
 
@@ -175,6 +176,7 @@ export interface CraftingResponse {
 export interface CraftingPlanStack {
   itemId: string;
   displayName: string;
+  entryType?: 'ITEM' | 'FLUID';
   amount: number;
 }
 
@@ -188,6 +190,7 @@ export interface CraftingPlanCpu {
 export interface CraftingTreeNode {
   itemId: string;
   displayName: string;
+  entryType?: 'ITEM' | 'FLUID';
   requiredAmount: number;
   perExecOutAmount: number;
   timesExecuted: number;

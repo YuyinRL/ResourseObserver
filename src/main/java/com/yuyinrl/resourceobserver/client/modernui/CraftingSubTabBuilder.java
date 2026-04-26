@@ -2,11 +2,13 @@ package com.yuyinrl.resourceobserver.client.modernui;
 
 import com.yuyinrl.resourceobserver.client.ui.CraftingViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
+import com.yuyinrl.resourceobserver.client.util.ItemNames;
 import com.yuyinrl.resourceobserver.network.UiActionType;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
 import icyllis.modernui.text.Editable;
 import icyllis.modernui.text.TextWatcher;
 import icyllis.modernui.view.Gravity;
+import icyllis.modernui.view.MotionEvent;
 import icyllis.modernui.view.View;
 import icyllis.modernui.view.ViewGroup;
 import icyllis.modernui.widget.EditText;
@@ -924,13 +926,51 @@ final class CraftingSubTabBuilder {
         editLp.rightMargin = dp6;
         container.addView(searchEdit, editLp);
 
+        TextView clearBtn = new TextView(terminal.getContext());
+        clearBtn.setText("×");
+        clearBtn.setTextSize(12 * getTextScale());
+        clearBtn.setTextColor(UiThemeTokens.TEXT_MUTED);
+        clearBtn.setGravity(Gravity.CENTER);
+        clearBtn.setPadding(dp4, 0, dp4, 0);
+        clearBtn.setClickable(true);
+        clearBtn.setFocusable(true);
+        clearBtn.setVisibility(currentQuery.isEmpty() ? View.GONE : View.VISIBLE);
+        clearBtn.setOnClickListener(v -> {
+            searchEdit.setText("");
+            terminal.scheduleSearchUpdate("");
+        });
+        LinearLayout.LayoutParams clearLp = new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        clearLp.rightMargin = dp6;
+        container.addView(clearBtn, clearLp);
+
         searchEdit.addTextChangedListener(new TextWatcher() {
             @Override public void beforeTextChanged(CharSequence s, int start, int count, int after) {}
             @Override public void onTextChanged(CharSequence s, int start, int before, int count) {}
             @Override public void afterTextChanged(Editable s) {
-                terminal.scheduleSearchUpdate(s == null ? "" : s.toString());
+                String text = s == null ? "" : s.toString();
+                clearBtn.setVisibility(text.isEmpty() ? View.GONE : View.VISIBLE);
+                if (!text.equals(terminal.getBridge().getSearchQuery())) {
+                    terminal.scheduleSearchUpdate(text);
+                }
             }
         });
+
+        searchEdit.setOnFocusChangeListener((v, hasFocus) -> {
+            if (hasFocus) {
+                terminal.getBridge().setSearchBoxFocused(true);
+            } else if (!terminal.isRebuilding()) {
+                terminal.getBridge().setSearchBoxFocused(false);
+            }
+        });
+
+        if (terminal.getBridge().isSearchBoxFocused()) {
+            searchEdit.post(() -> {
+                searchEdit.requestFocus();
+                searchEdit.setSelection(searchEdit.getText().length());
+            });
+        }
+
         parent.addView(container);
     }
 
@@ -1000,8 +1040,29 @@ final class CraftingSubTabBuilder {
             container.addView(buildProgressBar(terminal, progressFraction), pbLp);
         }
 
-        // 双向滚动：垂直 -> 水平 -> 树内容
-        ScrollView vScroll = new ScrollView(terminal.getContext());
+        // 双向滚动：垂直 -> 水平 -> 树内容；Ctrl + 滚轮 = 缩放
+        final View tree = buildHorizontalNode(terminal, root, 0);
+        tree.setPivotX(0f);
+        tree.setPivotY(0f);
+        ScrollView vScroll = new ScrollView(terminal.getContext()) {
+            @Override
+            public boolean onGenericMotionEvent(MotionEvent event) {
+                if (event.getAction() == MotionEvent.ACTION_SCROLL
+                        && net.minecraft.client.gui.screens.Screen.hasControlDown()) {
+                    float dy = event.getAxisValue(MotionEvent.AXIS_VSCROLL);
+                    if (dy != 0f) {
+                        float curr = tree.getScaleX();
+                        if (curr <= 0f) curr = 1f;
+                        float factor = dy > 0 ? 1.1f : (1f / 1.1f);
+                        float next = Math.max(0.4f, Math.min(2.5f, curr * factor));
+                        tree.setScaleX(next);
+                        tree.setScaleY(next);
+                        return true;
+                    }
+                }
+                return super.onGenericMotionEvent(event);
+            }
+        };
         ShapeDrawable vbg = new ShapeDrawable();
         vbg.setColor(UiThemeTokens.SECTION_BG);
         vbg.setCornerRadius(terminal.dp(8));
@@ -1009,16 +1070,15 @@ final class CraftingSubTabBuilder {
         vScroll.setBackground(vbg);
         HorizontalScrollView hScroll = new HorizontalScrollView(terminal.getContext());
         hScroll.setPadding(dp12, dp12, dp12, dp12);
-        View tree = buildHorizontalNode(terminal, root, 0);
         hScroll.addView(tree, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         vScroll.addView(hScroll, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         LinearLayout.LayoutParams scrollLp = new LinearLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, terminal.dp(380));
+                ViewGroup.LayoutParams.MATCH_PARENT, terminal.dp(560));
         container.addView(vScroll, scrollLp);
 
-        PopupWindow popup = new PopupWindow(container, terminal.dp(640), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        PopupWindow popup = new PopupWindow(container, terminal.dp(880), ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setElevation(terminal.dp(8));
         terminal.trackPopup(popup);
@@ -1107,7 +1167,8 @@ final class CraftingSubTabBuilder {
         }
         TextView name = new TextView(t.getContext());
         String prefix = node.isMissing() ? "[缺] " : (node.isLoop() ? "[环] " : (node.truncated() ? "[…] " : ""));
-        String dn = node.displayName() == null ? node.itemId() : node.displayName();
+        String dn = ItemNames.localize(node.itemId(),
+                node.displayName() == null ? node.itemId() : node.displayName());
         name.setText(prefix + dn);
         name.setTextSize(10 * getTextScale());
         name.setTextColor(UiThemeTokens.TITLE);

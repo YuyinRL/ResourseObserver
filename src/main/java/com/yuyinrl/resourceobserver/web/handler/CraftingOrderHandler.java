@@ -86,7 +86,11 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
     private static Map<String, Object> treeToMap(com.yuyinrl.resourceobserver.integration.CraftingTreeNode n) {
         Map<String, Object> m = new LinkedHashMap<>();
         m.put("itemId", n.itemId());
-        m.put("displayName", n.displayName());
+        m.put("entryType", entryType(n.itemId()));
+        ItemNameResolver.Resolved r = ItemNameResolver.resolve(n.itemId());
+        String dn = r.displayName() != null && !r.displayName().isEmpty() ? r.displayName() : n.displayName();
+        m.put("displayName", dn);
+        if (r.translationKey() != null) m.put("translationKey", r.translationKey());
         m.put("requiredAmount", n.requiredAmount());
         m.put("perExecOutAmount", n.perExecOutAmount());
         m.put("timesExecuted", n.timesExecuted());
@@ -202,7 +206,12 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
         body.put("simulation", plan.simulation());
         body.put("bytes", plan.bytes());
         body.put("finalOutputItemId", plan.finalOutputItemId() == null ? "" : plan.finalOutputItemId());
-        body.put("finalOutputDisplayName", plan.finalOutputDisplayName() == null ? "" : plan.finalOutputDisplayName());
+        ItemNameResolver.Resolved foRes = ItemNameResolver.resolve(plan.finalOutputItemId());
+        String foDn = foRes.displayName() != null && !foRes.displayName().isEmpty()
+                ? foRes.displayName()
+                : (plan.finalOutputDisplayName() == null ? "" : plan.finalOutputDisplayName());
+        body.put("finalOutputDisplayName", foDn);
+        if (foRes.translationKey() != null) body.put("finalOutputTranslationKey", foRes.translationKey());
         body.put("finalOutputAmount", plan.finalOutputAmount());
         body.put("usedItems", stacksToMaps(plan.usedItems()));
         body.put("missingItems", stacksToMaps(plan.missingItems()));
@@ -219,11 +228,19 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
         for (var s : list) {
             Map<String, Object> m = new LinkedHashMap<>();
             m.put("itemId", s.itemId());
-            m.put("displayName", s.displayName());
+            m.put("entryType", entryType(s.itemId()));
+            ItemNameResolver.Resolved r = ItemNameResolver.resolve(s.itemId());
+            String dn = r.displayName() != null && !r.displayName().isEmpty() ? r.displayName() : s.displayName();
+            m.put("displayName", dn);
+            if (r.translationKey() != null) m.put("translationKey", r.translationKey());
             m.put("amount", s.amount());
             out.add(m);
         }
         return out;
+    }
+
+    private static String entryType(String itemId) {
+        return itemId != null && itemId.startsWith("fluid:") ? "FLUID" : "ITEM";
     }
 
     private static List<Map<String, Object>> cpusToMaps(List<CraftingOrderService.CpuInfo> list) {

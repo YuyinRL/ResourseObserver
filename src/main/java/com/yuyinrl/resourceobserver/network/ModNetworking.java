@@ -87,6 +87,42 @@ public final class ModNetworking {
                 })
         );
 
+        // 客户端 → 服务端：上传本地化名称镜像
+        registrar.playToServer(
+                ClientNameUploadPayload.TYPE,
+                ClientNameUploadPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> {
+                    if (!(context.player() instanceof ServerPlayer)) return;
+                    int n = Math.min(payload.itemIds().size(), payload.displayNames().size());
+                    java.util.Map<String, String> map = new java.util.HashMap<>(n * 2);
+                    for (int i = 0; i < n; i++) {
+                        map.put(payload.itemIds().get(i), payload.displayNames().get(i));
+                    }
+                    com.yuyinrl.resourceobserver.web.handler.ItemNameResolver
+                            .applyOverrides(payload.language(), map);
+                })
+        );
+
+        // 客户端 → 服务端：上传单张图标 PNG
+        registrar.playToServer(
+                ClientIconUploadPayload.TYPE,
+                ClientIconUploadPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> {
+                    if (!(context.player() instanceof ServerPlayer)) return;
+                    com.yuyinrl.resourceobserver.web.handler.IconHandler
+                            .acceptClientUpload(payload.itemId(), payload.pngBytes());
+                })
+        );
+
+        // 服务端 → 客户端：请求客户端代为渲染并上传图标
+        registrar.playToClient(
+                IconRequestPayload.TYPE,
+                IconRequestPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() ->
+                        com.yuyinrl.resourceobserver.client.ClientResourceMirror.handleIconRequest(payload)
+                )
+        );
+
         // 客户端 → 服务端：UI 操作请求（关注/分组/排序/筛选等）
         registrar.playToServer(
                 ObserverUiActionPayload.TYPE,

@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+import com.yuyinrl.resourceobserver.client.util.ItemNames;
 import com.yuyinrl.resourceobserver.client.util.PinyinMatcher;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 
@@ -68,7 +69,7 @@ public final class CraftingViewModelMapper {
                             data.networkId(),
                             job.cpuName(),
                             job.outputItemId(),
-                            job.outputDisplayName(),
+                            ItemNames.localize(job.outputItemId(), job.outputDisplayName()),
                             total,
                             remaining,
                             progress,
@@ -84,13 +85,14 @@ public final class CraftingViewModelMapper {
                 for (ObserverDataPayload.CraftableSnapshot c : data.craftables()) {
                     if (c == null) continue;
                     totalCraftables++;
-                    if (!query.isEmpty() && !PinyinMatcher.matches(c.displayName(), query)) {
+                    String localizedName = ItemNames.localize(c.itemId(), c.displayName());
+                    if (!query.isEmpty() && !PinyinMatcher.matches(localizedName, query)) {
                         continue;
                     }
                     craftablesAll.add(new CraftingViewModel.CraftableRow(
                             data.networkId(),
                             c.itemId(),
-                            c.displayName()
+                            localizedName
                     ));
                 }
             }

@@ -8,7 +8,6 @@ import {
   Cpu,
   Database,
   Factory,
-  GitBranch,
   Search,
   ShieldCheck,
   Truck,
@@ -66,7 +65,6 @@ export const Sidebar = ({
       ],
     },
     { id: 'power', label: t('sidebar.nav.power'), icon: Zap },
-    { id: 'craftingTree', label: t('sidebar.nav.craftingTree'), icon: GitBranch },
   ];
 
   return (

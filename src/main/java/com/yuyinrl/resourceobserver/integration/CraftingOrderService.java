@@ -10,6 +10,7 @@ import appeng.api.networking.crafting.ICraftingSimulationRequester;
 import appeng.api.networking.crafting.ICraftingSubmitResult;
 import appeng.api.crafting.IPatternDetails;
 import appeng.api.networking.security.IActionSource;
+import appeng.api.stacks.AEFluidKey;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.stacks.AEKey;
 import appeng.api.stacks.GenericStack;
@@ -19,8 +20,8 @@ import it.unimi.dsi.fastutil.objects.Object2LongMap;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
-import net.minecraft.world.item.Item;
-import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.level.material.Fluid;
+import net.minecraft.world.level.material.Fluids;
 import net.minecraft.world.level.Level;
 import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.fml.common.EventBusSubscriber;
@@ -164,19 +165,9 @@ public final class CraftingOrderService {
         if (grid == null) {
             return PlanResult.fail(Status.GRID_UNAVAILABLE, "AE2 grid not available");
         }
-        ResourceLocation rl;
-        try {
-            rl = ResourceLocation.parse(itemId);
-        } catch (Exception e) {
-            return PlanResult.fail(Status.ITEM_NOT_FOUND, "invalid item id: " + itemId);
-        }
-        Item item = BuiltInRegistries.ITEM.getOptional(rl).orElse(null);
-        if (item == null) {
-            return PlanResult.fail(Status.ITEM_NOT_FOUND, "unknown item: " + itemId);
-        }
-        AEItemKey key = AEItemKey.of(item);
+        AEKey key = aeKeyFromId(itemId);
         if (key == null) {
-            return PlanResult.fail(Status.ITEM_NOT_FOUND, "cannot wrap as AEItemKey: " + itemId);
+            return PlanResult.fail(Status.ITEM_NOT_FOUND, "unknown craftable key: " + itemId);
         }
 
         ICraftingService service;
@@ -462,8 +453,8 @@ public final class CraftingOrderService {
 
         // 摘要数据
         GenericStack out = plan.finalOutput();
-        String outId = (out != null && out.what() instanceof AEItemKey ik) ? aeItemKeyId(ik) : null;
-        String outName = (out != null && out.what() instanceof AEItemKey ik) ? aeItemKeyDisplayName(ik) : null;
+        String outId = out == null ? null : aeKeyId(out.what());
+        String outName = out == null ? null : aeKeyDisplayName(out.what());
         long outAmt = out == null ? 0L : out.amount();
 
         List<Stack> used = keyCounterToStacks(plan.usedItems());
@@ -525,9 +516,9 @@ public final class CraftingOrderService {
                 IPatternDetails pd = e.getKey();
                 if (pd == null) continue;
                 GenericStack po = pd.getPrimaryOutput();
-                if (po == null || !(po.what() instanceof AEItemKey ik)) continue;
+                if (po == null || !isSupportedCraftingKey(po.what())) continue;
                 long times = e.getValue() == null ? 0L : e.getValue();
-                list.add(new Stack(aeItemKeyId(ik), aeItemKeyDisplayName(ik), times));
+                list.add(new Stack(aeKeyId(po.what()), aeKeyDisplayName(po.what()), times));
             }
             return list;
         } catch (Throwable t) {
@@ -574,25 +565,52 @@ public final class CraftingOrderService {
         for (Object2LongMap.Entry<AEKey> e : kc) {
             if (count++ >= MAX_LIST_ENTRIES) break;
             AEKey key = e.getKey();
-            if (!(key instanceof AEItemKey ik)) continue;
-            list.add(new Stack(aeItemKeyId(ik), aeItemKeyDisplayName(ik), e.getLongValue()));
+            if (!isSupportedCraftingKey(key)) continue;
+            list.add(new Stack(aeKeyId(key), aeKeyDisplayName(key), e.getLongValue()));
         }
         return list;
     }
 
-    private static String aeItemKeyId(AEItemKey ik) {
-        ResourceLocation id = BuiltInRegistries.ITEM.getKey(ik.getItem());
-        return id == null ? "minecraft:air" : id.toString();
+    private static boolean isSupportedCraftingKey(@Nullable AEKey key) {
+        return key instanceof AEItemKey || key instanceof AEFluidKey;
     }
 
-    private static String aeItemKeyDisplayName(AEItemKey ik) {
+    private static @Nullable AEKey aeKeyFromId(String keyId) {
+        if (keyId == null || keyId.isBlank()) return null;
         try {
-            ItemStack stack = ik.toStack(1);
-            Component c = stack.getHoverName();
-            return c == null ? aeItemKeyId(ik) : c.getString();
-        } catch (Throwable ignored) {
-            return aeItemKeyId(ik);
+            if (keyId.startsWith("fluid:")) {
+                ResourceLocation fluidId = ResourceLocation.parse(keyId.substring("fluid:".length()));
+                Fluid fluid = BuiltInRegistries.FLUID.getOptional(fluidId).orElse(null);
+                return fluid == null || fluid == Fluids.EMPTY ? null : AEFluidKey.of(fluid);
+            }
+            ResourceLocation itemId = ResourceLocation.parse(keyId);
+            var item = BuiltInRegistries.ITEM.getOptional(itemId).orElse(null);
+            return item == null ? null : AEItemKey.of(item);
+        } catch (Throwable t) {
+            return null;
         }
+    }
+
+    private static String aeKeyId(AEKey key) {
+        if (key instanceof AEItemKey itemKey) {
+            return itemKey.getId().toString();
+        }
+        if (key instanceof AEFluidKey fluidKey) {
+            return "fluid:" + fluidKey.getId();
+        }
+        return key.getId().toString();
+    }
+
+    private static String aeKeyDisplayName(AEKey key) {
+        try {
+            Component c = key.getDisplayName();
+            if (c != null) {
+                String s = c.getString();
+                if (s != null && !s.isBlank()) return s;
+            }
+        } catch (Throwable ignored) {
+        }
+        return aeKeyId(key);
     }
 
     // ============================================================ tree build
@@ -602,7 +620,7 @@ public final class CraftingOrderService {
      * <p>
      * 算法：
      * <ol>
-     *   <li>用 {@code patternTimes()} 建立 primaryOutput AEItemKey → IPatternDetails 索引；</li>
+     *   <li>用 {@code patternTimes()} 建立 primaryOutput AEKey → IPatternDetails 索引；</li>
      *   <li>从 finalOutput 起递归。当前节点若在索引中找得到样板，则展开为内部节点：
      *       记录每次执行的 primaryOutput 数量（{@code perExecOutAmount}）和总执行次数；
      *       为样板的每个输入构造子节点，子节点 requiredAmount = inputPerExec × times。</li>
@@ -615,10 +633,11 @@ public final class CraftingOrderService {
     static CraftingTreeNode buildTree(ICraftingPlan plan) {
         if (plan == null) return null;
         GenericStack out = plan.finalOutput();
-        if (out == null || !(out.what() instanceof AEItemKey rootKey)) return null;
+        if (out == null || !isSupportedCraftingKey(out.what())) return null;
+        AEKey rootKey = out.what();
 
         // 1) primaryOutput → IPatternDetails 索引
-        Map<AEItemKey, IPatternDetails> patternIdx = new HashMap<>();
+        Map<AEKey, IPatternDetails> patternIdx = new HashMap<>();
         try {
             var ptMap = plan.patternTimes();
             if (ptMap != null) {
@@ -626,8 +645,8 @@ public final class CraftingOrderService {
                     IPatternDetails pd = e.getKey();
                     if (pd == null) continue;
                     GenericStack po = pd.getPrimaryOutput();
-                    if (po == null || !(po.what() instanceof AEItemKey pk)) continue;
-                    patternIdx.putIfAbsent(pk, pd);
+                    if (po == null || !isSupportedCraftingKey(po.what())) continue;
+                    patternIdx.putIfAbsent(po.what(), pd);
                 }
             }
         } catch (Throwable t) {
@@ -640,7 +659,7 @@ public final class CraftingOrderService {
             KeyCounter kc = plan.missingItems();
             if (kc != null) {
                 for (Object2LongMap.Entry<AEKey> e : kc) {
-                    if (e.getKey() instanceof AEItemKey ik) missingIds.add(aeItemKeyId(ik));
+                    if (isSupportedCraftingKey(e.getKey())) missingIds.add(aeKeyId(e.getKey()));
                 }
             }
         } catch (Throwable ignored) {
@@ -660,14 +679,14 @@ public final class CraftingOrderService {
         return buildNode(rootKey, out.amount(), patternIdx, timesMap, missingIds, 0, budget, visiting);
     }
 
-    private static CraftingTreeNode buildNode(AEItemKey key, long requiredAmount,
-                                              Map<AEItemKey, IPatternDetails> patternIdx,
+    private static CraftingTreeNode buildNode(AEKey key, long requiredAmount,
+                                              Map<AEKey, IPatternDetails> patternIdx,
                                               Map<IPatternDetails, Long> timesMap,
                                               java.util.Set<String> missingIds,
                                               int depth, int[] budget,
                                               java.util.Set<String> visiting) {
-        String id = aeItemKeyId(key);
-        String name = aeItemKeyDisplayName(key);
+        String id = aeKeyId(key);
+        String name = aeKeyDisplayName(key);
         if (depth >= TREE_MAX_DEPTH) {
             return CraftingTreeNode.leaf(id, name, requiredAmount, false);
         }
@@ -714,11 +733,11 @@ public final class CraftingOrderService {
                         var inWhat = poss[0].what();
                         long perExecIn = poss[0].amount() * Math.max(1L, in.getMultiplier());
                         long childReq = perExecIn * times;
-                        if (inWhat instanceof AEItemKey ik) {
-                            children.add(buildNode(ik, childReq, patternIdx, timesMap, missingIds,
+                        if (isSupportedCraftingKey(inWhat)) {
+                            children.add(buildNode(inWhat, childReq, patternIdx, timesMap, missingIds,
                                     depth + 1, budget, visiting));
                         } else {
-                            // 流体或其它键暂不递归，作为叶子展示
+                            // 其它 AEKey 暂不递归，作为叶子展示
                             String inId = inWhat == null ? "unknown" : String.valueOf(inWhat.getId());
                             String inName;
                             try {

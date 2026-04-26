@@ -4,7 +4,6 @@ import { Sidebar } from './components/Sidebar';
 import { Overview } from './components/Overview';
 import { PowerNetwork } from './components/PowerNetwork';
 import { StorageNetwork } from './components/StorageNetwork';
-import { CraftingTreePage } from './components/crafting-tree/CraftingTreePage';
 import { I18nProvider, useI18n, type Language } from './lib/i18n';
 import { ObserverSelectionProvider, useSelectedObserver } from './components/ObserverSelector';
 import { useMeta, useObserverDetail } from './hooks/useObservers';
@@ -66,8 +65,6 @@ function AppInner() {
         );
       case 'power':
         return <PowerNetwork searchQuery={searchQuery} />;
-      case 'craftingTree':
-        return <CraftingTreePage />;
       case 'overview':
       default:
         return <Overview searchQuery={searchQuery} />;
