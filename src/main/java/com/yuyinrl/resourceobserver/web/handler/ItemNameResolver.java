@@ -5,6 +5,7 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
+import net.minecraft.world.level.material.Fluid;
 import org.jetbrains.annotations.Nullable;
 
 import java.util.Map;
@@ -48,6 +49,25 @@ public final class ItemNameResolver {
 
     private static Resolved doResolve(String itemId) {
         try {
+            // 流体显式前缀：fluid:<namespace>:<path>
+            if (itemId.startsWith("fluid:")) {
+                String fluidIdRaw = itemId.substring("fluid:".length());
+                ResourceLocation fluidRl = ResourceLocation.tryParse(fluidIdRaw);
+                if (fluidRl == null) return Resolved.EMPTY;
+                Fluid fluid = BuiltInRegistries.FLUID.get(fluidRl);
+                if (fluid == null) return Resolved.EMPTY;
+                String key = fluid.getFluidType().getDescriptionId();
+                String displayName = null;
+                try {
+                    displayName = Component.translatable(key).getString();
+                    if (displayName != null && displayName.equals(key)) {
+                        displayName = humanize(fluidRl.getPath());
+                    }
+                } catch (Throwable t) {
+                    ResourceObserverMod.LOGGER.debug("[Web] 翻译流体名失败 {}: {}", itemId, t.toString());
+                }
+                return new Resolved(key, displayName);
+            }
             ResourceLocation rl = ResourceLocation.tryParse(itemId);
             if (rl == null) return Resolved.EMPTY;
             Item item = BuiltInRegistries.ITEM.get(rl);

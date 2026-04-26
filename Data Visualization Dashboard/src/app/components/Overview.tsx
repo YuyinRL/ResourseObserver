@@ -21,7 +21,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis } fro
 import { useObserverDetail, useObserverHistory, useObserverSamplerDebug } from '../hooks/useObservers';
 import type { HistoryRange } from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import { deriveOverviewKpis, deriveResourceItems, formatBytes, isAe2, isPower } from '../lib/liveAdapter';
+import { deriveAggregatedResourceItems, deriveOverviewKpis, formatBytes, isAe2, isPower } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
 import { ItemIcon } from './ItemIcon';
@@ -291,29 +291,42 @@ function interpolateFlowPoint(points: FlowPoint[], x: number): FlowPoint | null 
   };
 }
 
-function paddedDomain(min: number, max: number): [number, number] {
-  if (!Number.isFinite(min) || !Number.isFinite(max)) {
-    return [0, 1];
-  }
-  if (Math.abs(max - min) < 0.001) {
-    const pad = Math.max(1, Math.abs(max) * 0.2);
-    return [min - pad, max + pad];
-  }
-  const pad = (max - min) * 0.12;
-  return [min - pad, max + pad];
+function niceCeil(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) return 1;
+  const exp = Math.floor(Math.log10(value));
+  const base = Math.pow(10, exp);
+  const norm = value / base;
+  const nice = norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 2.5 ? 2.5 : norm <= 5 ? 5 : 10;
+  return nice * base;
 }
 
-function valueToChartY(value: number, domain: [number, number], height: number): number {
+/**
+ * 鲁棒最大值：用 95 分位压制偶发尖刺，再加 12% 余量并向上取整为漂亮的刻度上限。
+ * 避免单点异常采样把整条 Y 轴撑成 7,9133,498 这种没法读的数字。
+ */
+function robustMax(values: number[]): number {
+  if (values.length === 0) return 1;
+  const sorted = values.slice().sort((a, b) => a - b);
+  const idx = Math.max(0, Math.min(sorted.length - 1, Math.floor(sorted.length * 0.95)));
+  const p95 = sorted[idx];
+  const max = sorted[sorted.length - 1];
+  // 若最大值显著高于 P95（典型尖刺），按 P95 + 20% 取顶；否则用最大值 + 12% 顶。
+  const cap = max > p95 * 3 && p95 > 0 ? p95 * 1.2 : max * 1.12;
+  return niceCeil(Math.max(1, cap));
+}
+
+function valueToChartY(value: number, domain: [number, number], plotTop: number, plotBottom: number): number {
   const span = Math.max(0.001, domain[1] - domain[0]);
   const ratio = (domain[1] - value) / span;
-  return Math.max(8, Math.min(Math.max(8, height - 8), ratio * height));
+  const y = plotTop + ratio * (plotBottom - plotTop);
+  return Math.max(plotTop, Math.min(plotBottom, y));
 }
 
 export const Overview = ({ searchQuery }: { searchQuery: string }) => {
   const { t } = useI18n();
   const { selectedId } = useSelectedObserver();
   const { data: detail } = useObserverDetail(selectedId);
-  const liveItems = useMemo(() => deriveResourceItems(detail, 36), [detail]);
+  const liveItems = useMemo(() => deriveAggregatedResourceItems(detail, 36), [detail]);
   const liveKpis = useMemo(() => deriveOverviewKpis(detail), [detail]);
 
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
@@ -496,38 +509,40 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
   const chartDomains = useMemo(() => {
     const visible = flowSeries.filter((point) => point.x >= chartDomainLeft && point.x <= chartDomainRight);
     if (chartPage === 'stock') {
-      const stocks = visible.map((point) => point.stock).filter((value) => Number.isFinite(value));
+      const stocks = visible.map((point) => point.stock).filter((value) => Number.isFinite(value) && value >= 0);
       return {
-        main: paddedDomain(0, Math.max(1, ...stocks)),
+        main: [0, robustMax(stocks)] as [number, number],
       };
     }
     const throughputValues = visible
       .flatMap((point) => [point.produced, point.consumed])
-      .filter((value) => Number.isFinite(value));
-    const maxThroughput = Math.max(1, ...throughputValues);
+      .filter((value) => Number.isFinite(value) && value >= 0);
     return {
-      main: [0, maxThroughput * 1.12] as [number, number],
+      main: [0, robustMax(throughputValues)] as [number, number],
     };
   }, [flowSeries, chartDomainLeft, chartDomainRight, chartPage]);
   const hoverMarkers = useMemo(() => {
     if (!hoveredFlowPoint || !hoverPosition) return [];
+    // Recharts AreaChart 的 margin top:10 + bottom:0 + 隐藏 XAxis(height=0)；左侧 YAxis 占用 ~60px 由 FLOW_PLOT_LEFT_INSET_PX 估计。
+    const plotTop = 10;
+    const plotBottom = hoverPosition.height;
     if (chartPage === 'stock') {
       return [{
         id: 'stock',
         color: '#3b82f6',
-        y: valueToChartY(hoveredFlowPoint.stock, chartDomains.main, hoverPosition.height),
+        y: valueToChartY(hoveredFlowPoint.stock, chartDomains.main, plotTop, plotBottom),
       }];
     }
     return [
       {
         id: 'produced',
         color: '#06b6d4',
-        y: valueToChartY(hoveredFlowPoint.produced, chartDomains.main, hoverPosition.height),
+        y: valueToChartY(hoveredFlowPoint.produced, chartDomains.main, plotTop, plotBottom),
       },
       {
         id: 'consumed',
         color: '#f59e0b',
-        y: valueToChartY(hoveredFlowPoint.consumed, chartDomains.main, hoverPosition.height),
+        y: valueToChartY(hoveredFlowPoint.consumed, chartDomains.main, plotTop, plotBottom),
       },
     ];
   }, [hoveredFlowPoint, hoverPosition, chartPage, chartDomains]);
@@ -536,7 +551,10 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
     const rect = event.currentTarget.getBoundingClientRect();
     const x = event.clientX - rect.left;
     const y = event.clientY - rect.top;
-    const ratio = x / Math.max(1, rect.width);
+    // 把光标 X 映射到实际绘图区域（去掉左侧 Y 轴 + 右侧 margin），让交叉标记落在曲线上。
+    const plotLeft = FLOW_PLOT_LEFT_INSET_PX;
+    const plotRight = Math.max(plotLeft + 1, rect.width - 10);
+    const ratio = (x - plotLeft) / (plotRight - plotLeft);
     setHoverRatio(Math.max(0, Math.min(1, ratio)));
     setHoverPosition({
       x: Math.max(0, Math.min(rect.width, x)),
@@ -730,7 +748,7 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
               label={label}
               value={row.value}
               suffix={row.unit}
-              helper={`${row.helper} · ${t('overview.kpi.cycle')}`}
+              helper={row.helper}
               icon={kpiIcons[index]}
               tone={kpiTones[index]}
               onClick={() => setKpiDialogIndex(index)}
@@ -810,9 +828,7 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
                               className="flex items-center justify-between gap-3 rounded-md border border-slate-800/80 bg-slate-900/40 px-3 py-2"
                             >
                               <div className="flex min-w-0 items-center gap-2">
-                                <div className={`flex h-7 w-7 items-center justify-center rounded-md border border-slate-800 bg-slate-900 ${resource.accent}`}>
-                                  <resource.icon size={13} />
-                                </div>
+                                <ItemIcon item={{ id: resource.id, icon: resource.icon, accent: resource.accent }} size={14} />
                                 <span className="truncate text-xs font-semibold text-slate-200">{resource.name}</span>
                               </div>
                               <span className={`font-mono text-xs font-bold ${i === 0 ? 'text-cyan-400' : 'text-amber-400'}`}>
@@ -947,26 +963,32 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
                 )}
               </AreaChart>
             </ResponsiveContainer>
-            {hoveredFlowPoint && hoverPosition ? (
-              <div className="pointer-events-none absolute inset-0 z-10">
-                <div
-                  className="absolute top-0 h-full w-px bg-slate-700/80"
-                  style={{ left: hoverPosition.x }}
-                />
-                {hoverMarkers.map((marker) => (
-                  <span
-                    key={marker.id}
-                    className="absolute h-2.5 w-2.5 rounded-full border-2 border-slate-950 shadow-lg"
-                    style={{
-                      left: hoverPosition.x,
-                      top: marker.y,
-                      backgroundColor: marker.color,
-                      transform: 'translate(-50%, -50%)',
-                    }}
+            {hoveredFlowPoint && hoverPosition && hoverRatio != null ? (() => {
+              // 把光标 ratio 重新换算回绘图区像素，确保竖线与圆点落在曲线对应的实际 X 上。
+              const plotLeft = FLOW_PLOT_LEFT_INSET_PX;
+              const plotRight = Math.max(plotLeft + 1, hoverPosition.width - 10);
+              const snappedX = plotLeft + hoverRatio * (plotRight - plotLeft);
+              return (
+                <div className="pointer-events-none absolute inset-0 z-10">
+                  <div
+                    className="absolute top-0 h-full w-px bg-slate-700/80"
+                    style={{ left: snappedX }}
                   />
-                ))}
-              </div>
-            ) : null}
+                  {hoverMarkers.map((marker) => (
+                    <span
+                      key={marker.id}
+                      className="absolute h-2.5 w-2.5 rounded-full border-2 border-slate-950 shadow-lg"
+                      style={{
+                        left: snappedX,
+                        top: marker.y,
+                        backgroundColor: marker.color,
+                        transform: 'translate(-50%, -50%)',
+                      }}
+                    />
+                  ))}
+                </div>
+              );
+            })() : null}
             <div className="pointer-events-none absolute left-3 top-3 z-10 rounded-lg border border-slate-800 bg-slate-950/80 px-3 py-2 shadow-xl">
               <p className="text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300">{chartScopeTitle}</p>
               <p className="mt-0.5 max-w-[260px] truncate text-xs font-semibold text-slate-200">{chartScopeDetail}</p>

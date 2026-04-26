@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpServer;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.web.handler.CraftingHandler;
+import com.yuyinrl.resourceobserver.web.handler.CraftingOrderHandler;
 import com.yuyinrl.resourceobserver.web.handler.HealthHandler;
 import com.yuyinrl.resourceobserver.web.handler.HistoryHandler;
 import com.yuyinrl.resourceobserver.web.handler.IconHandler;
@@ -139,6 +140,7 @@ public final class WebServerService {
         MetaHandler meta = new MetaHandler(this);
         ObserversHandler observers = new ObserversHandler(this);
         CraftingHandler crafting = new CraftingHandler(this);
+        CraftingOrderHandler craftingOrder = new CraftingOrderHandler(this);
         HistoryHandler history = new HistoryHandler(this);
         ItemsHandler items = new ItemsHandler(this);
         IconHandler icon = new IconHandler(this);
@@ -147,12 +149,13 @@ public final class WebServerService {
 
         server.createContext("/api/health", health);
         server.createContext("/api/meta", meta);
-        server.createContext("/api/observers", ex -> dispatchObservers(ex, observers, crafting, history, items, samplerDebug));
+        server.createContext("/api/observers", ex -> dispatchObservers(ex, observers, crafting, craftingOrder, history, items, samplerDebug));
         server.createContext("/api/icon/", icon);
         server.createContext("/", staticHandler);
     }
 
     private void dispatchObservers(HttpExchange ex, ObserversHandler observers, CraftingHandler crafting,
+                                   CraftingOrderHandler craftingOrder,
                                    HistoryHandler history, ItemsHandler items, SamplerDebugHandler samplerDebug)
             throws IOException {
         if ("OPTIONS".equalsIgnoreCase(ex.getRequestMethod())) {
@@ -160,7 +163,9 @@ public final class WebServerService {
             return;
         }
         String path = ex.getRequestURI().getPath();
-        if (path.endsWith("/crafting")) {
+        if (path.endsWith("/crafting/plan") || path.endsWith("/crafting/confirm") || path.endsWith("/crafting/cancel")) {
+            craftingOrder.handle(ex);
+        } else if (path.endsWith("/crafting")) {
             crafting.handle(ex);
         } else if (path.endsWith("/history")) {
             history.handle(ex);

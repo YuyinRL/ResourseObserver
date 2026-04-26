@@ -61,7 +61,11 @@ public record CraftingViewModel(
             long total,
             long remaining,
             double progress,
-            boolean busy
+            boolean busy,
+            long storageBytes,
+            int coProcessors,
+            long elapsedMillis,
+            String treeId
     ) {
     }
 

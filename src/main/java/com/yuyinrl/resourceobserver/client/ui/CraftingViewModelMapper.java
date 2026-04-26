@@ -59,8 +59,8 @@ public final class CraftingViewModelMapper {
                     if (job == null) continue;
                     long total = Math.max(job.totalAmount(), 0L);
                     long remaining = Math.max(job.remainingAmount(), 0L);
-                    double progress = 0.0;
-                    if (total > 0L) {
+                    double progress = Math.max(0.0, Math.min(1.0, job.progressFraction()));
+                    if (progress == 0.0 && total > 0L) {
                         long done = Math.max(total - remaining, 0L);
                         progress = Math.min(1.0, (double) done / (double) total);
                     }
@@ -72,7 +72,11 @@ public final class CraftingViewModelMapper {
                             total,
                             remaining,
                             progress,
-                            job.busy()
+                            job.busy(),
+                            job.storageBytes(),
+                            job.coProcessors(),
+                            job.elapsedMillis(),
+                            job.treeId() == null ? "" : job.treeId()
                     ));
                 }
             }

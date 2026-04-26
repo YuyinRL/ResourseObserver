@@ -83,7 +83,7 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
             net.put("craftables", toMaps(craftables));
 
             List<CraftingJobEntry> jobs = CraftingDataCollector.collectActiveJobs(grid);
-            net.put("cpus", jobsToMaps(jobs));
+            net.put("jobs", jobsToMaps(jobs));
             net.put("activeJobCount", jobs.stream().filter(CraftingJobEntry::busy).count());
 
             CraftingStorageMetrics metrics = CraftingDataCollector.collectStorageMetrics(grid);
@@ -97,7 +97,7 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
 
             networks.add(net);
         }
-        body.put("networks", networks);
+        body.put("bindings", networks);
         return body;
     }
 
@@ -123,6 +123,11 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
             row.put("totalAmount", j.totalAmount());
             row.put("remainingAmount", j.remainingAmount());
             row.put("jobId", j.jobId());
+            row.put("storageBytes", j.storageBytes());
+            row.put("coProcessors", j.coProcessors());
+            row.put("progressFraction", j.progressFraction());
+            row.put("elapsedMillis", j.elapsedMillis());
+            row.put("treeId", j.treeId() == null ? "" : j.treeId());
             out.add(row);
         }
         return out;

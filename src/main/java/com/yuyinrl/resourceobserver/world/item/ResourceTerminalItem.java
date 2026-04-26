@@ -424,7 +424,12 @@ public class ResourceTerminalItem extends Item {
                     j.totalAmount(),
                     j.remainingAmount(),
                     j.busy(),
-                    j.jobId() == null ? "" : j.jobId()
+                    j.jobId() == null ? "" : j.jobId(),
+                    j.storageBytes(),
+                    j.coProcessors(),
+                    j.progressFraction(),
+                    j.elapsedMillis(),
+                    j.treeId() == null ? "" : j.treeId()
             ));
         }
         ObserverDataPayload.CraftingStorageSnapshot storageSnapshot = new ObserverDataPayload.CraftingStorageSnapshot(

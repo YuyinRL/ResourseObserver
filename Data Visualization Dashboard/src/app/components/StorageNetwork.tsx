@@ -12,8 +12,9 @@ import {
   Search,
 } from 'lucide-react';
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
+import { api } from '../lib/api';
 import { useObserverCrafting, useObserverDetail, useObserverItems } from '../hooks/useObservers';
-import type { ItemSortField, SortDirection } from '../lib/api';
+import type { CraftingPlanResult, CraftingTreeNode, ItemSortField, SortDirection } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import {
   countBindingsByType,
@@ -25,6 +26,9 @@ import {
 import { useSelectedObserver } from './ObserverSelector';
 import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
 import { ItemIcon } from './ItemIcon';
+import { CraftingTreeView } from './CraftingTreeView';
+import { CraftingTree } from './crafting-tree/CraftingTree';
+import { toCraftingItemNode } from './crafting-tree/adapters';
 
 interface NodeView {
   id: string;
@@ -80,6 +84,18 @@ function formatDuration(minutes: number) {
   return `${minutes.toFixed(0)}m`;
 }
 
+function formatElapsed(millis: number) {
+  if (!Number.isFinite(millis) || millis <= 0) return '';
+  const s = Math.floor(millis / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rs = s % 60;
+  if (m < 60) return `${m}m${rs.toString().padStart(2, '0')}s`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return `${h}h${rm.toString().padStart(2, '0')}m`;
+}
+
 function normalizeStatusTone(status: 'Healthy' | 'Alert') {
   return status === 'Alert' ? 'rose' : 'emerald';
 }
@@ -107,6 +123,21 @@ export const StorageNetwork = ({
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [filterAlertsOnly, setFilterAlertsOnly] = useState(false);
   const [craftSearch, setCraftSearch] = useState('');
+  const [orderTarget, setOrderTarget] = useState<{ networkId: string; itemId: string; displayName: string } | null>(null);
+  const [orderAmount, setOrderAmount] = useState<string>('1');
+  const [orderState, setOrderState] = useState<{
+    phase: 'input' | 'planning' | 'review' | 'submitting' | 'done';
+    plan?: CraftingPlanResult;
+    result?: { ok: boolean; status: string; message: string };
+  }>({ phase: 'input' });
+  const [selectedCpuIndex, setSelectedCpuIndex] = useState<number | null>(null);
+  const [treeDialog, setTreeDialog] = useState<{
+    title: string;
+    finalAmount?: number;
+    progressFraction?: number;
+    root: CraftingTreeNode | null;
+    loading?: boolean;
+  } | null>(null);
   const [itemOffset, setItemOffset] = useState(0);
   const [itemSort, setItemSort] = useState<ItemSortField>('amount');
   const [itemSortDir, setItemSortDir] = useState<SortDirection>('desc');
@@ -198,6 +229,7 @@ export const StorageNetwork = ({
           net: item.produced - item.consumed,
           capacity: item.capacity,
           remainingMinutes: item.stock / Math.max(item.consumed, 1),
+          networkId: item.networkId,
           icon: iconForIndex(index),
           accent: accentForIndex(index),
         }))
@@ -221,8 +253,14 @@ export const StorageNetwork = ({
       if (filterAlertsOnly && (item.stock / Math.max(item.consumption, 1)) >= 30) {
         return false;
       }
-      if (selectedNode?.itemIds?.length && !selectedNode.itemIds.includes(item.id)) {
-        return false;
+      // 选中节点时按 networkId 精确过滤；同名物品跨网络不再互相串台。
+      // 仅当物品自身没有携带 networkId（极旧的回退路径）时才退回到 itemIds 模糊匹配。
+      if (selectedNode) {
+        if (item.networkId) {
+          if (item.networkId !== selectedNode.id) return false;
+        } else if (selectedNode.itemIds?.length && !selectedNode.itemIds.includes(item.id)) {
+          return false;
+        }
       }
       return true;
     });
@@ -594,23 +632,52 @@ export const StorageNetwork = ({
                   <p className="text-sm text-slate-500">{t('storage.crafting.jobsEmpty')}</p>
                 ) : (
                   craftingJobs.slice(0, 8).map((job) => {
-                    const progress = Math.max(0, (job.totalAmount ?? 0) - (job.remainingAmount ?? 0));
+                    const storageBytes = (job as { storageBytes?: number }).storageBytes ?? 0;
+                    const coProc = (job as { coProcessors?: number }).coProcessors ?? 0;
+                    const progressFraction = (job as { progressFraction?: number }).progressFraction ?? 0;
+                    const elapsedMillis = (job as { elapsedMillis?: number }).elapsedMillis ?? 0;
+                    const treeId = (job as { treeId?: string }).treeId ?? '';
+                    const pct = Math.round(Math.min(1, Math.max(0, progressFraction)) * 100);
+                    const elapsedStr = formatElapsed(elapsedMillis);
+                    const clickable = !!treeId && !!selectedId;
                     return (
-                      <div key={`${job.networkId}-${job.jobId}`} className="rounded-xl border border-slate-800 bg-slate-950/70 p-4">
+                      <div
+                        key={`${job.networkId}-${job.jobId}`}
+                        className={`rounded-xl border border-slate-800 bg-slate-950/70 p-4 ${clickable ? 'cursor-pointer hover:border-cyan-700/60 hover:bg-slate-950' : ''}`}
+                        onClick={async () => {
+                          if (!clickable || !selectedId) return;
+                          setTreeDialog({
+                            title: job.outputDisplayName || job.outputItemId,
+                            finalAmount: job.totalAmount,
+                            progressFraction,
+                            root: null,
+                            loading: true,
+                          });
+                          const root = await api.fetchCraftingTree(selectedId, treeId);
+                          setTreeDialog((prev) => prev ? { ...prev, root, loading: false } : prev);
+                        }}
+                      >
                         <div className="flex items-start justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-bold text-white">{job.outputDisplayName || job.outputItemId}</p>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-bold text-white" title={job.outputDisplayName || job.outputItemId}>{job.outputDisplayName || job.outputItemId || t('status.idle')}</p>
                             <p className="text-[10px] uppercase tracking-[0.18em] text-slate-500">{job.cpuName || 'CPU'}</p>
+                            <p className="mt-1 text-[10px] font-mono text-slate-500">
+                              {formatBytes(storageBytes)} · {coProc} co-proc
+                            </p>
                           </div>
                           <StatusPill tone={job.busy ? 'amber' : 'emerald'}>{job.busy ? t('status.alert') : t('status.idle')}</StatusPill>
                         </div>
-                        <div className="mt-3">
-                          <div className="mb-1.5 flex justify-between text-[10px] font-mono">
-                            <span className="text-slate-400">{progress.toLocaleString()} / {job.totalAmount.toLocaleString()}</span>
-                            <span className="text-slate-600">{t('storage.crafting.left', { count: job.remainingAmount.toLocaleString() })}</span>
+                        {job.busy ? (
+                          <div className="mt-3">
+                            <div className="mb-1.5 flex justify-between text-[10px] font-mono">
+                              <span className="text-slate-400">{pct}%{elapsedStr ? ` · ${elapsedStr}` : ''}</span>
+                              {job.remainingAmount > 0 ? (
+                                <span className="text-slate-600">{t('storage.crafting.left', { count: job.remainingAmount.toLocaleString() })}</span>
+                              ) : null}
+                            </div>
+                            <ProgressBar value={pct} max={100} colorClass="bg-cyan-500" />
                           </div>
-                          <ProgressBar value={progress} max={Math.max(job.totalAmount, 1)} colorClass="bg-cyan-500" />
-                        </div>
+                        ) : null}
                       </div>
                     );
                   })
@@ -642,6 +709,7 @@ export const StorageNetwork = ({
                     <tr className="border-b border-slate-800 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
                       <th className="p-4">{t('storage.table.item')}</th>
                       <th className="p-4">{t('observer.label')}</th>
+                      <th className="p-4 text-right">{t('storage.crafting.order') ?? 'Order'}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-800/50">
@@ -657,6 +725,18 @@ export const StorageNetwork = ({
                           </div>
                         </td>
                         <td className="p-4 text-xs font-mono text-slate-400">{item.networkId}</td>
+                        <td className="p-4 text-right">
+                          <button
+                            onClick={() => {
+                              setOrderTarget({ networkId: item.networkId, itemId: item.itemId, displayName: item.displayName });
+                              setOrderAmount('1');
+                              setOrderState({ phase: 'input' });
+                            }}
+                            className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-3 py-1.5 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300 transition-colors hover:bg-cyan-500/20"
+                          >
+                            {t('storage.crafting.order') ?? 'Order'}
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -789,9 +869,327 @@ export const StorageNetwork = ({
           </button>
         </div>
       </ModernDialog>
+
+      {/* 一键下单 弹窗（plan → review → confirm） */}
+      <ModernDialog
+        open={orderTarget !== null}
+        onClose={async () => {
+          if (selectedId && orderState.plan?.planId && orderState.phase === 'review') {
+            await api.cancelCraftingPlan(selectedId, orderState.plan.planId);
+          }
+          setOrderTarget(null);
+          setOrderState({ phase: 'input' });
+          setSelectedCpuIndex(null);
+        }}
+        title={t('storage.crafting.orderDialog.title') ?? 'Place crafting order'}
+        width={720}
+        height={560}
+      >
+        {orderTarget ? (
+          <div className="space-y-4">
+            <div className="flex items-center gap-3 rounded-lg border border-slate-800 bg-slate-900/60 p-3">
+              <ItemIcon item={{ id: orderTarget.itemId, accent: 'text-cyan-400' }} />
+              <div className="min-w-0">
+                <p className="truncate text-sm font-bold text-white">{orderTarget.displayName}</p>
+                <p className="truncate text-[10px] font-mono text-slate-500">{orderTarget.itemId}</p>
+                <p className="truncate text-[10px] font-mono text-slate-500">{orderTarget.networkId}</p>
+              </div>
+            </div>
+
+            {(orderState.phase === 'input' || orderState.phase === 'planning') ? (
+              <div>
+                <label className="mb-1 block text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">
+                  {t('storage.crafting.orderDialog.amount') ?? 'Amount'}
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  value={orderAmount}
+                  onChange={(e) => setOrderAmount(e.target.value)}
+                  disabled={orderState.phase === 'planning'}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-cyan-500/50"
+                />
+              </div>
+            ) : null}
+
+            {orderState.phase === 'review' && orderState.plan ? (
+              <PlanReview plan={orderState.plan} selectedCpuIndex={selectedCpuIndex} onSelectCpuIndex={setSelectedCpuIndex} />
+            ) : null}
+
+            {orderState.phase === 'done' && orderState.result ? (
+              <div
+                className={
+                  orderState.result.ok
+                    ? 'rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300'
+                    : 'rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300'
+                }
+              >
+                <p className="font-bold">{orderState.result.status}</p>
+                {orderState.result.message ? <p className="mt-1 font-mono">{orderState.result.message}</p> : null}
+              </div>
+            ) : null}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={async () => {
+                  if (selectedId && orderState.plan?.planId && orderState.phase === 'review') {
+                    await api.cancelCraftingPlan(selectedId, orderState.plan.planId);
+                  }
+                  setOrderTarget(null);
+                  setOrderState({ phase: 'input' });
+                  setSelectedCpuIndex(null);
+                }}
+                className="rounded-md border border-slate-700 bg-slate-900 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-slate-300 hover:bg-slate-800"
+              >
+                {t('common.cancel') ?? 'Cancel'}
+              </button>
+
+              {orderState.phase === 'input' || orderState.phase === 'planning' ? (
+                <button
+                  disabled={orderState.phase === 'planning' || !selectedId}
+                  onClick={async () => {
+                    if (!selectedId || !orderTarget) return;
+                    const amt = Number.parseInt(orderAmount, 10);
+                    if (!Number.isFinite(amt) || amt <= 0) {
+                      setOrderState({ phase: 'done', result: { ok: false, status: 'BAD_AMOUNT', message: 'invalid amount' } });
+                      return;
+                    }
+                    setOrderState({ phase: 'planning' });
+                    try {
+                      const plan = await api.planCraftingOrder(selectedId, {
+                        networkId: orderTarget.networkId,
+                        itemId: orderTarget.itemId,
+                        amount: amt,
+                      });
+                      if (!plan.planId) {
+                        setOrderState({ phase: 'done', result: { ok: false, status: plan.status, message: plan.message } });
+                      } else {
+                        setOrderState({ phase: 'review', plan });
+                      }
+                    } catch (e) {
+                      setOrderState({ phase: 'done', result: { ok: false, status: 'NETWORK_ERROR', message: String(e) } });
+                    }
+                  }}
+                  className="rounded-md border border-cyan-500/30 bg-cyan-500/20 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-cyan-200 hover:bg-cyan-500/30 disabled:opacity-50"
+                >
+                  {orderState.phase === 'planning' ? (t('common.loading') ?? '...') : (t('storage.crafting.orderDialog.plan') ?? 'Plan')}
+                </button>
+              ) : null}
+
+              {orderState.phase === 'review' && orderState.plan && orderState.plan.tree ? (
+                <button
+                  onClick={() => {
+                    if (!orderState.plan) return;
+                    setTreeDialog({
+                      title: orderState.plan.finalOutputDisplayName || orderState.plan.finalOutputItemId,
+                      finalAmount: orderState.plan.finalOutputAmount,
+                      root: orderState.plan.tree ?? null,
+                    });
+                  }}
+                  className="rounded-md border border-cyan-500/30 bg-cyan-500/10 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-cyan-200 hover:bg-cyan-500/20"
+                >
+                  {t('storage.crafting.orderDialog.viewTree') ?? 'View Tree'}
+                </button>
+              ) : null}
+
+              {orderState.phase === 'review' && orderState.plan ? (
+                <button
+                  disabled={!orderState.plan.planId}
+                  onClick={async () => {
+                    if (!selectedId || !orderState.plan) return;
+                    const planId = orderState.plan.planId;
+                    setOrderState({ phase: 'submitting', plan: orderState.plan });
+                    try {
+                      const cpuName = selectedCpuIndex !== null && orderState.plan.cpus[selectedCpuIndex]
+                        ? orderState.plan.cpus[selectedCpuIndex].name
+                        : null;
+                      const result = await api.confirmCraftingOrder(selectedId, planId, cpuName);
+                      setOrderState({ phase: 'done', result });
+                    } catch (e) {
+                      setOrderState({ phase: 'done', result: { ok: false, status: 'NETWORK_ERROR', message: String(e) } });
+                    }
+                  }}
+                  className={`rounded-md border px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] disabled:opacity-50 ${
+                    orderState.plan.simulation
+                      ? 'border-amber-500/30 bg-amber-500/20 text-amber-200 hover:bg-amber-500/30'
+                      : 'border-emerald-500/30 bg-emerald-500/20 text-emerald-200 hover:bg-emerald-500/30'
+                  }`}
+                >
+                  {orderState.plan.simulation
+                    ? (t('storage.crafting.orderDialog.submitAnyway') ?? 'Submit anyway')
+                    : (t('storage.crafting.orderDialog.submit') ?? 'Submit')}
+                </button>
+              ) : null}
+
+              {orderState.phase === 'submitting' ? (
+                <button disabled className="rounded-md border border-emerald-500/30 bg-emerald-500/20 px-4 py-2 text-xs font-bold uppercase tracking-[0.18em] text-emerald-200 disabled:opacity-50">
+                  {t('common.loading') ?? '...'}
+                </button>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+      </ModernDialog>
+
+      <ModernDialog
+        open={treeDialog !== null}
+        onClose={() => setTreeDialog(null)}
+        title={treeDialog ? `${treeDialog.title}${treeDialog.finalAmount ? ` ×${treeDialog.finalAmount.toLocaleString()}` : ''}` : ''}
+        width={780}
+        height={620}
+      >
+        {treeDialog ? (
+          treeDialog.loading ? (
+            <p className="text-xs text-slate-500">{t('common.loading') ?? 'Loading...'}</p>
+          ) : treeDialog.root ? (
+            <div className="h-full">
+              <CraftingTree
+                root={toCraftingItemNode(treeDialog.root)}
+                onSelect={(n) => console.log('[CraftingTree] node clicked', n)}
+              />
+            </div>
+          ) : (
+            <CraftingTreeView
+              root={treeDialog.root}
+              progressFraction={treeDialog.progressFraction}
+              emptyHint={t('storage.crafting.orderDialog.treeUnavailable') ?? 'Tree unavailable (external order).'}
+            />
+          )
+        ) : null}
+      </ModernDialog>
     </div>
   );
 };
+
+function PlanReview({ plan, selectedCpuIndex, onSelectCpuIndex }: { plan: CraftingPlanResult; selectedCpuIndex: number | null; onSelectCpuIndex: (idx: number | null) => void }) {
+  const { t } = useI18n();
+  const ok = plan.ok && !plan.simulation;
+  const fmt = (n: number) => n.toLocaleString();
+  const fmtBytes = (n: number) => {
+    if (!Number.isFinite(n) || n <= 0) return '0';
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`;
+    if (n >= 1_000) return `${(n / 1_000).toFixed(2)}k`;
+    return String(n);
+  };
+  return (
+    <div className="space-y-3">
+      <div
+        className={
+          ok
+            ? 'rounded-md border border-emerald-500/30 bg-emerald-500/10 p-3 text-xs text-emerald-300'
+            : plan.simulation
+              ? 'rounded-md border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-300'
+              : 'rounded-md border border-rose-500/30 bg-rose-500/10 p-3 text-xs text-rose-300'
+        }
+      >
+        <p className="font-bold">{plan.status}{plan.simulation ? ` · ${t('storage.crafting.plan.simulationNote')}` : ''}</p>
+        <p className="mt-1 font-mono text-[10px]">{t('storage.crafting.plan.bytes')}: {fmt(plan.bytes)}</p>
+        {plan.message ? <p className="mt-1 font-mono text-[10px]">{plan.message}</p> : null}
+      </div>
+      {plan.finalOutputItemId ? (() => {
+        const root = plan.tree;
+        const patternOut = root && root.timesExecuted > 0 ? root.perExecOutAmount * root.timesExecuted : 0;
+        const displayAmount = patternOut > 0 ? patternOut : plan.finalOutputAmount;
+        const showPatternHint = root && root.timesExecuted > 0 && root.perExecOutAmount > 0;
+        return (
+          <div className="rounded-md border border-cyan-500/30 bg-cyan-500/10 p-3">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300">{t('storage.crafting.plan.outputs')}</p>
+            <div className="flex items-center gap-3">
+              <ItemIcon item={{ id: plan.finalOutputItemId, accent: 'text-cyan-300' }} size={28} />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-bold text-white" title={plan.finalOutputDisplayName || plan.finalOutputItemId}>
+                  {plan.finalOutputDisplayName || plan.finalOutputItemId}
+                </p>
+                <p className="truncate font-mono text-[10px] text-slate-500">{plan.finalOutputItemId}</p>
+                {showPatternHint ? (
+                  <p className="mt-0.5 truncate font-mono text-[10px] text-cyan-200/70">
+                    {fmt(root!.perExecOutAmount)} / {t('storage.crafting.plan.perExec') ?? 'per exec'} × {fmt(root!.timesExecuted)} {t('storage.crafting.plan.execs') ?? 'execs'}
+                  </p>
+                ) : null}
+              </div>
+              <p className="font-mono text-lg font-bold text-cyan-300">×{fmt(displayAmount)}</p>
+            </div>
+          </div>
+        );
+      })() : null}
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <PlanStackBlock title={t('storage.crafting.plan.materials')} stacks={plan.usedItems} accent="text-slate-300" />
+        <PlanStackBlock title={t('storage.crafting.plan.missing')} stacks={plan.missingItems} accent="text-rose-300" />
+        <PlanStackBlock title={t('storage.crafting.plan.byproducts')} stacks={plan.emittedItems} accent="text-emerald-300" />
+      </div>
+      {plan.tree ? (
+        <details className="group rounded-md border border-slate-800 bg-slate-950/40 open:bg-slate-950/60">
+          <summary className="cursor-pointer list-none px-3 py-2 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-400 hover:text-cyan-300">
+            <span className="mr-1.5 inline-block transition-transform group-open:rotate-90">▸</span>
+            {t('storage.crafting.orderDialog.viewTree') ?? 'View Tree'}
+          </summary>
+          <div className="h-[360px] p-2">
+            <CraftingTree
+              root={toCraftingItemNode(plan.tree)}
+              onSelect={(n) => console.log('[CraftingTree] node clicked', n)}
+            />
+          </div>
+        </details>
+      ) : null}
+      {plan.cpus && plan.cpus.length > 0 ? (
+        <div>
+          <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{t('storage.crafting.plan.cpu')}</p>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => onSelectCpuIndex(null)}
+              className={`rounded-md border px-3 py-1 text-[11px] font-mono ${
+                selectedCpuIndex === null
+                  ? 'border-cyan-500/60 bg-cyan-500/20 text-cyan-200'
+                  : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:bg-slate-900'
+              }`}
+            >
+              {t('storage.crafting.plan.cpuAuto')}
+            </button>
+            {plan.cpus.map((c, i) => {
+              const name = c.name || `CPU#${i + 1}`;
+              const isSel = selectedCpuIndex === i;
+              return (
+                <button
+                  key={`cpu-${i}`}
+                  type="button"
+                  onClick={() => onSelectCpuIndex(i)}
+                  className={`rounded-md border px-3 py-1 text-[11px] font-mono ${
+                    isSel
+                      ? 'border-cyan-500/60 bg-cyan-500/20 text-cyan-200'
+                      : 'border-slate-800 bg-slate-950/60 text-slate-400 hover:bg-slate-900'
+                  }`}
+                >
+                  {name} <span className="text-slate-500">({fmtBytes(c.storageBytes)}/{c.coProcessors}{c.busy ? '★' : ''})</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function PlanStackBlock({ title, stacks, accent, amountSuffix = '×' }: { title: string; stacks: { itemId: string; displayName: string; amount: number }[]; accent: string; amountSuffix?: string }) {
+  if (!stacks || stacks.length === 0) return null;
+  return (
+    <div>
+      <p className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-slate-500">{title}</p>
+      <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/60 p-2">
+        {stacks.map((s, i) => (
+          <div key={`${s.itemId}-${i}`} className="flex items-center gap-2">
+            <ItemIcon item={{ id: s.itemId, accent: 'text-slate-400' }} />
+            <p className="min-w-0 flex-1 truncate text-[11px] text-white" title={s.displayName || s.itemId}>
+              {s.displayName || s.itemId}
+            </p>
+            <p className={`font-mono text-[11px] font-bold ${accent}`}>{amountSuffix}{s.amount.toLocaleString()}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
 
 function Legend({ color, label }: { color: string; label: string }) {
   return (

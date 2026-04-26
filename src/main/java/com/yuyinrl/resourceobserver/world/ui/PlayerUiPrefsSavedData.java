@@ -127,6 +127,9 @@ public class PlayerUiPrefsSavedData extends SavedData {
             case DELETE_GROUP -> prefs.deleteGroup(itemId);          // 删除分组
             case CLEAR_ITEM_GROUP -> prefs.clearItemGroup(targets);  // 清除分组
             case RENAME_NETWORK -> prefs.renameNetwork(itemId, actionValue); // 重命名网络节点
+            case PLACE_CRAFT_ORDER -> ActionResult.NO_CHANGE; // 由 ModNetworking 直接处理，不落库
+            case CONFIRM_CRAFT_ORDER -> ActionResult.NO_CHANGE;
+            case CANCEL_CRAFT_PLAN -> ActionResult.NO_CHANGE;
         };
         if (result.changed()) {
             setDirty(); // 标记数据已修改，触发自动保存
@@ -715,7 +718,7 @@ public class PlayerUiPrefsSavedData extends SavedData {
      */
     public record ActionResult(boolean changed, boolean success, String failMessageKey) {
         /** 未修改的成功结果 */
-        private static final ActionResult NO_CHANGE = new ActionResult(false, true, "");
+        public static final ActionResult NO_CHANGE = new ActionResult(false, true, "");
 
         /** 已修改的成功结果 */
         public static ActionResult changedSuccess() {

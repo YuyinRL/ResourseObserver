@@ -300,7 +300,12 @@ public record ObserverDataPayload(
             long totalAmount,
             long remainingAmount,
             boolean busy,
-            String jobId
+            String jobId,
+            long storageBytes,
+            int coProcessors,
+            double progressFraction,
+            long elapsedMillis,
+            String treeId
     ) {
     }
 
@@ -645,6 +650,11 @@ public record ObserverDataPayload(
                                     buf.readLong(),
                                     buf.readLong(),
                                     buf.readBoolean(),
+                                    buf.readUtf(64),
+                                    buf.readLong(),
+                                    buf.readVarInt(),
+                                    buf.readDouble(),
+                                    buf.readVarLong(),
                                     buf.readUtf(64)
                             ));
                         }
@@ -684,6 +694,11 @@ public record ObserverDataPayload(
                             buf.writeLong(job.remainingAmount());
                             buf.writeBoolean(job.busy());
                             buf.writeUtf(nullSafe(job.jobId()), 64);
+                            buf.writeLong(job.storageBytes());
+                            buf.writeVarInt(job.coProcessors());
+                            buf.writeDouble(job.progressFraction());
+                            buf.writeVarLong(job.elapsedMillis());
+                            buf.writeUtf(nullSafe(job.treeId()), 64);
                         }
                         List<CraftableSnapshot> craftables = data.craftables() == null ? List.of() : data.craftables();
                         buf.writeVarInt(craftables.size());

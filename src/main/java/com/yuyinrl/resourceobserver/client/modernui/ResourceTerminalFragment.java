@@ -31,6 +31,7 @@ import icyllis.modernui.view.ViewGroup;
 import icyllis.modernui.view.ViewTreeObserver;
 import icyllis.modernui.widget.FrameLayout;
 import icyllis.modernui.widget.LinearLayout;
+import icyllis.modernui.widget.PopupWindow;
 import icyllis.modernui.widget.ScrollView;
 import icyllis.modernui.widget.TextView;
 import net.minecraft.client.Minecraft;
@@ -113,6 +114,31 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
 
     // Persisted table group expand/collapse state across data rebuilds
     private final Map<String, Boolean> tableExpandedState = new HashMap<>();
+
+    /** 跟踪当前所有打开的 PopupWindow（Dialog/菜单），按 E 关界面时统一关闭。 */
+    private final java.util.List<java.lang.ref.WeakReference<PopupWindow>> trackedPopups = new java.util.ArrayList<>();
+
+    /** 注册一个 PopupWindow 由本 Fragment 生命周期管理。Fragment 暂停/销毁时会自动 dismiss。 */
+    public void trackPopup(PopupWindow popup) {
+        if (popup == null) return;
+        // 清理已失效引用
+        trackedPopups.removeIf(ref -> {
+            PopupWindow p = ref.get();
+            return p == null || !p.isShowing();
+        });
+        trackedPopups.add(new java.lang.ref.WeakReference<>(popup));
+    }
+
+    /** 关闭所有由本 Fragment 跟踪的 PopupWindow。 */
+    public void dismissAllPopups() {
+        for (var ref : trackedPopups) {
+            PopupWindow p = ref.get();
+            if (p != null && p.isShowing()) {
+                try { p.dismiss(); } catch (Throwable ignored) {}
+            }
+        }
+        trackedPopups.clear();
+    }
 
     // 收藏列表当前翻页索引（跨数据刷新保持）
     private int watchlistPageIndex = 0;
@@ -197,6 +223,52 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         this.chartWindow = payload.chartWindow();
         syncScopeFromPayload(payload);
         bridge.applyPayload(payload);
+    }
+
+    /** 当前活跃的合成计划结果回调（由 CraftingSubTabBuilder 在用户点击 Order 时注册）。 */
+    private java.util.function.Consumer<com.yuyinrl.resourceobserver.network.CraftingPlanResultPayload> craftingPlanCallback;
+
+    public void setCraftingPlanCallback(
+            java.util.function.Consumer<com.yuyinrl.resourceobserver.network.CraftingPlanResultPayload> cb) {
+        this.craftingPlanCallback = cb;
+    }
+
+    /** 服务端回传计划摘要时由 ClientPayloadHandler 调用。 */
+    public void applyCraftingPlanResult(com.yuyinrl.resourceobserver.network.CraftingPlanResultPayload payload) {
+        var cb = this.craftingPlanCallback;
+        if (cb != null) {
+            this.craftingPlanCallback = null;
+            View root = getView();
+            if (root != null) {
+                // PopupWindow.showAtLocation 必须在 ModernUI 的 UI 线程；
+                // 网络 payload 在 Minecraft 渲染线程执行，需要 post 切换。
+                root.post(() -> cb.accept(payload));
+            } else {
+                cb.accept(payload);
+            }
+        }
+    }
+
+    /** 当前活跃的合成树响应回调（由 CraftingSubTabBuilder 在用户请求树时注册）。 */
+    private java.util.function.Consumer<com.yuyinrl.resourceobserver.network.CraftingTreeResponsePayload> craftingTreeCallback;
+
+    public void setCraftingTreeCallback(
+            java.util.function.Consumer<com.yuyinrl.resourceobserver.network.CraftingTreeResponsePayload> cb) {
+        this.craftingTreeCallback = cb;
+    }
+
+    /** 服务端回传合成树时由 ClientPayloadHandler 调用。 */
+    public void applyCraftingTreeResponse(com.yuyinrl.resourceobserver.network.CraftingTreeResponsePayload payload) {
+        var cb = this.craftingTreeCallback;
+        if (cb != null) {
+            this.craftingTreeCallback = null;
+            View root = getView();
+            if (root != null) {
+                root.post(() -> cb.accept(payload));
+            } else {
+                cb.accept(payload);
+            }
+        }
     }
 
     public boolean isTextInputActive() { return textInputActive; }
@@ -341,6 +413,8 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         }
         // Dismiss any open popup menus / context menus / input dialogs
         OverviewPageBuilder.dismissActiveMenu(this);
+        // 统一关闭所有跟踪的 Dialog / Popup（合成下单、Review、合成树等）
+        dismissAllPopups();
         View root = getView();
         if (root != null) {
             root.removeCallbacks(refreshRunnable);

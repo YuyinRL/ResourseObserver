@@ -15,7 +15,10 @@ public enum UiActionType {
     RENAME_GROUP(7),          // 重命名已有分组
     DELETE_GROUP(8),          // 删除自定义分组
     CLEAR_ITEM_GROUP(9),      // 清除物品的分组分配（移回未分组）
-    RENAME_NETWORK(10);       // 重命名存储网络节点（自定义显示名称）
+    RENAME_NETWORK(10),       // 重命名存储网络节点（自定义显示名称）
+    PLACE_CRAFT_ORDER(11),    // 请求合成计划（不直接下单，等待审阅）
+    CONFIRM_CRAFT_ORDER(12),  // 确认提交之前缓存的计划（actionValue=planId）
+    CANCEL_CRAFT_PLAN(13);    // 主动取消之前缓存的计划（actionValue=planId）
 
     private final int id;
 

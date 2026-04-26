@@ -156,6 +156,11 @@ export interface CraftingBinding {
     totalAmount: number;
     remainingAmount: number;
     busy: boolean;
+    storageBytes?: number;
+    coProcessors?: number;
+    progressFraction?: number;
+    elapsedMillis?: number;
+    treeId?: string;
   }>;
   craftables: Array<{
     itemId: string;
@@ -165,6 +170,57 @@ export interface CraftingBinding {
 
 export interface CraftingResponse {
   bindings: CraftingBinding[];
+}
+
+export interface CraftingPlanStack {
+  itemId: string;
+  displayName: string;
+  amount: number;
+}
+
+export interface CraftingPlanCpu {
+  name: string;
+  storageBytes: number;
+  coProcessors: number;
+  busy: boolean;
+}
+
+export interface CraftingTreeNode {
+  itemId: string;
+  displayName: string;
+  requiredAmount: number;
+  perExecOutAmount: number;
+  timesExecuted: number;
+  isMissing: boolean;
+  isLoop: boolean;
+  truncated: boolean;
+  children: CraftingTreeNode[];
+}
+
+export interface CraftingPlanResult {
+  ok: boolean;
+  status: string;
+  message: string;
+  planId: string;
+  simulation: boolean;
+  bytes: number;
+  finalOutputItemId: string;
+  finalOutputDisplayName: string;
+  finalOutputAmount: number;
+  usedItems: CraftingPlanStack[];
+  missingItems: CraftingPlanStack[];
+  emittedItems: CraftingPlanStack[];
+  patternTimes: CraftingPlanStack[];
+  cpus: CraftingPlanCpu[];
+  treeId?: string;
+  tree?: CraftingTreeNode | null;
+}
+
+export interface CraftingOrderResult {
+  ok: boolean;
+  status: string;
+  message: string;
+  linkId: string;
 }
 
 export interface ChartHistoryPoint {
@@ -259,6 +315,98 @@ export const api = {
     apiGet(`/api/observers/${id}`),
   observerCrafting: (id: string): Promise<CraftingResponse> =>
     apiGet(`/api/observers/${id}/crafting`),
+  planCraftingOrder: async (
+    id: string,
+    body: { networkId: string; itemId: string; amount: number },
+  ): Promise<CraftingPlanResult> => {
+    const res = await fetch(`/api/observers/${id}/crafting/plan`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const text = await res.text();
+    let parsed: Partial<CraftingPlanResult> = {};
+    try { parsed = text ? JSON.parse(text) : {}; } catch { /* ignore */ }
+    return {
+      ok: parsed.ok ?? false,
+      status: parsed.status ?? (res.ok ? 'SUCCESS' : 'SUBMIT_FAILED'),
+      message: parsed.message ?? '',
+      planId: parsed.planId ?? '',
+      simulation: parsed.simulation ?? false,
+      bytes: parsed.bytes ?? 0,
+      finalOutputItemId: parsed.finalOutputItemId ?? '',
+      finalOutputDisplayName: parsed.finalOutputDisplayName ?? '',
+      finalOutputAmount: parsed.finalOutputAmount ?? 0,
+      usedItems: parsed.usedItems ?? [],
+      missingItems: parsed.missingItems ?? [],
+      emittedItems: parsed.emittedItems ?? [],
+      patternTimes: parsed.patternTimes ?? [],
+      cpus: parsed.cpus ?? [],
+      treeId: parsed.treeId ?? '',
+      tree: parsed.tree ?? null,
+    };
+  },
+  confirmCraftingOrder: async (
+    id: string,
+    planId: string,
+    cpu?: string | null,
+  ): Promise<CraftingOrderResult> => {
+    const res = await fetch(`/api/observers/${id}/crafting/confirm`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: JSON.stringify({ planId, cpu: cpu ?? '' }),
+    });
+    const text = await res.text();
+    let parsed: Partial<CraftingOrderResult> = {};
+    try { parsed = text ? JSON.parse(text) : {}; } catch { /* ignore */ }
+    return {
+      ok: parsed.ok ?? res.ok,
+      status: parsed.status ?? (res.ok ? 'SUCCESS' : 'SUBMIT_FAILED'),
+      message: parsed.message ?? '',
+      linkId: parsed.linkId ?? '',
+    };
+  },
+  cancelCraftingPlan: async (id: string, planId: string): Promise<void> => {
+    if (!planId) return;
+    try {
+      await fetch(`/api/observers/${id}/crafting/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId }),
+      });
+    } catch { /* ignore */ }
+  },
+  fetchCraftingTree: async (id: string, treeId: string): Promise<CraftingTreeNode | null> => {
+    if (!treeId) return null;
+    try {
+      const res = await fetch(`/api/observers/${id}/crafting/tree`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ treeId }),
+      });
+      if (!res.ok) return null;
+      const data = await res.json();
+      return (data?.root ?? null) as CraftingTreeNode | null;
+    } catch {
+      return null;
+    }
+  },
+  placeCraftingOrder: async (
+    id: string,
+    body: { networkId: string; itemId: string; amount: number },
+  ): Promise<CraftingOrderResult> => {
+    // 兼容旧调用：先 plan 后 confirm。即使 simulation 也尝试 confirm（AE2 允许挂起任务）。
+    const plan = await api.planCraftingOrder(id, body);
+    if (!plan.planId) {
+      return {
+        ok: false,
+        status: plan.status || 'SUBMIT_FAILED',
+        message: plan.message || '',
+        linkId: '',
+      };
+    }
+    return api.confirmCraftingOrder(id, plan.planId);
+  },
   observerItems: (
     id: string,
     params: {

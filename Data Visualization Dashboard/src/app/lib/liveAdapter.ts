@@ -104,6 +104,8 @@ export interface LiveResourceItem {
   consumed: number;
   stock: number;
   capacity: number;
+  /** 所属 AE 网络 id；Storage Page 选中节点时按此过滤，避免同名物品跨网络互相串台。 */
+  networkId?: string;
 }
 
 function shortenNetwork(id: string): string {
@@ -124,7 +126,10 @@ function niceItemName(id: string, displayName?: string, translationKey?: string)
         .join(' ');
     }
   }
-  const tail = id.includes(':') ? id.substring(id.indexOf(':') + 1) : id;
+  // 流体 id 形如 "fluid:minecraft:water"——剥掉前缀后再取最末段，避免出现 "Minecraft Water"
+  let raw = id;
+  if (raw.startsWith('fluid:')) raw = raw.substring('fluid:'.length);
+  const tail = raw.includes(':') ? raw.substring(raw.indexOf(':') + 1) : raw;
   return tail
     .split(/[_\-/]/)
     .filter(Boolean)
@@ -223,11 +228,49 @@ export function deriveResourceItems(detail: ObserverDetail | null, limit = 500):
         consumed: it.consumption,
         stock: it.amount,
         capacity: Math.max(it.amount * 1.5, 1000),
+        networkId: b.networkId,
       });
       if (out.length >= limit) return out;
     }
   }
   return out.length > 0 ? out : null;
+}
+
+/**
+ * 聚合版资源条目：按物品 id 合并多个 AE 网络的计量值。
+ * <p>Overview 页跨网络展示，必须按物品 id 合并；Storage 页保留各网络分组用 deriveResourceItems。
+ */
+export function deriveAggregatedResourceItems(
+  detail: ObserverDetail | null,
+  limit = 500,
+): LiveResourceItem[] | null {
+  const bindings = detail?.bindings;
+  if (!Array.isArray(bindings)) return null;
+  const map = new Map<string, LiveResourceItem>();
+  for (const b of bindings) {
+    if (!isAe2(b) || !b.items) continue;
+    for (const it of b.items) {
+      const existing = map.get(it.id);
+      if (existing) {
+        existing.produced += it.production;
+        existing.consumed += it.consumption;
+        existing.stock += it.amount;
+        existing.capacity = Math.max(existing.capacity, Math.max(it.amount * 1.5, 1000));
+      } else {
+        map.set(it.id, {
+          id: it.id,
+          name: niceItemName(it.id, it.displayName, it.translationKey),
+          produced: it.production,
+          consumed: it.consumption,
+          stock: it.amount,
+          capacity: Math.max(it.amount * 1.5, 1000),
+        });
+      }
+    }
+  }
+  if (map.size === 0) return null;
+  const out = Array.from(map.values());
+  return out.length > limit ? out.slice(0, limit) : out;
 }
 
 /** 将每个 AE2 绑定视作一个存储节点。 */

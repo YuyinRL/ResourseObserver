@@ -2,6 +2,7 @@ package com.yuyinrl.resourceobserver.client;
 
 import com.yuyinrl.resourceobserver.client.modernui.ResourceTerminalFragment;
 import com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreen;
+import com.yuyinrl.resourceobserver.network.CraftingPlanResultPayload;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.Minecraft;
@@ -42,5 +43,22 @@ public final class ClientPayloadHandler {
 
         // 3. 打开新的 ModernUI 终端界面
         ResourceTerminalFragment.open(payload);
+    }
+
+    /** 处理服务端推送的合成计划摘要：交给当前活跃的 ModernUI Fragment 弹窗展示。 */
+    public static void handleCraftingPlanResult(CraftingPlanResultPayload payload) {
+        ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
+        if (modernFragment != null) {
+            modernFragment.applyCraftingPlanResult(payload);
+        }
+    }
+
+    /** 处理服务端推送的合成树详情：交给当前活跃的 ModernUI Fragment。 */
+    public static void handleCraftingTreeResponse(
+            com.yuyinrl.resourceobserver.network.CraftingTreeResponsePayload payload) {
+        ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
+        if (modernFragment != null) {
+            modernFragment.applyCraftingTreeResponse(payload);
+        }
     }
 }
