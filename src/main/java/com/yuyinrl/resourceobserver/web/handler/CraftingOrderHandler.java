@@ -5,13 +5,13 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.integration.CraftingOrderService;
 import com.yuyinrl.resourceobserver.integration.CraftingOrderService.PlanResult;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -175,8 +175,8 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
             out.complete(PlanResult.fail(CraftingOrderService.Status.GRID_UNAVAILABLE, "observer chunk not loaded"));
             return out;
         }
-        BlockEntity be = level.getBlockEntity(pos);
-        if (!(be instanceof ObserverBlockEntity observer)) {
+        ObserverBlockEntity observer = ObserverService.findByPos(level, pos).orElse(null);
+        if (observer == null) {
             out.complete(PlanResult.fail(CraftingOrderService.Status.GRID_UNAVAILABLE, "observer not found"));
             return out;
         }

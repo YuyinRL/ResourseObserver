@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.modernui;
 
+import com.yuyinrl.resourceobserver.DevMode;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModel;
@@ -671,9 +672,12 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         tabPower.setOnClickListener(v -> switchPage(TerminalPage.POWER_NETWORK));
         chrome.addView(tabPower, leftGap(dp(4)));
 
-        tabDev = tabButton("Dev", activePage == TerminalPage.DEV_COMPONENTS, tabHeight);
-        tabDev.setOnClickListener(v -> switchPage(TerminalPage.DEV_COMPONENTS));
-        chrome.addView(tabDev, leftGap(dp(4)));
+        // Dev 标签页仅在开发环境下显示
+        if (DevMode.isDev()) {
+            tabDev = tabButton("Dev", activePage == TerminalPage.DEV_COMPONENTS, tabHeight);
+            tabDev.setOnClickListener(v -> switchPage(TerminalPage.DEV_COMPONENTS));
+            chrome.addView(tabDev, leftGap(dp(4)));
+        }
 
         chrome.addView(spacer(chrome), spacerParams());
 
@@ -702,7 +706,9 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         applyTabStyle(tabOverview, activePage == TerminalPage.OVERVIEW);
         applyTabStyle(tabStorage, activePage == TerminalPage.STORAGE_NETWORK);
         applyTabStyle(tabPower, activePage == TerminalPage.POWER_NETWORK);
-        applyTabStyle(tabDev, activePage == TerminalPage.DEV_COMPONENTS);
+        if (tabDev != null) {
+            applyTabStyle(tabDev, activePage == TerminalPage.DEV_COMPONENTS);
+        }
     }
 
     private void applyTabStyle(TextView tab, boolean active) {

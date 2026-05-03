@@ -2,11 +2,12 @@ package com.yuyinrl.resourceobserver.web.handler;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
+import com.yuyinrl.resourceobserver.web.util.QueryUtil;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -49,7 +50,7 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
             sendError(exchange, 404, "not found");
             return;
         }
-        Map<String, String> query = parseQuery(uri.getRawQuery());
+        Map<String, String> query = QueryUtil.parseQuery(uri.getRawQuery());
         Map<String, Object> body = runOnMain(mc -> buildBody(mc, target, query));
         if (body == null) {
             sendError(exchange, 404, "observer not found");
@@ -62,8 +63,8 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
                                                     Map<String, String> query) {
         ServerLevel level = resolveLevel(mc, target.dimension());
         if (level == null) return null;
-        BlockEntity raw = level.getBlockEntity(target.pos());
-        if (!(raw instanceof ObserverBlockEntity observer)) return null;
+        ObserverBlockEntity observer = ObserverService.findByPos(level, target.pos()).orElse(null);
+        if (observer == null) return null;
 
         int offset = Math.max(0, parseInt(query.get("offset"), 0));
         int limit = Math.max(1, Math.min(MAX_LIMIT, parseInt(query.get("limit"), DEFAULT_LIMIT)));
@@ -162,28 +163,6 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
             return raw == null ? fallback : Integer.parseInt(raw);
         } catch (NumberFormatException e) {
             return fallback;
-        }
-    }
-
-    private static Map<String, String> parseQuery(@Nullable String raw) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String pair : raw.split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq < 0) {
-                out.put(urlDecode(pair), "");
-            } else {
-                out.put(urlDecode(pair.substring(0, eq)), urlDecode(pair.substring(eq + 1)));
-            }
-        }
-        return out;
-    }
-
-    private static String urlDecode(String s) {
-        try {
-            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            return s;
         }
     }
 }

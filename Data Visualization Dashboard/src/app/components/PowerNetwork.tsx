@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity, Battery, BatteryCharging, Cpu, Gauge, Zap, ZapOff,
 } from 'lucide-react';
+import { DIALOG } from '../lib/dialogSizes';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { useObserverDetail } from '../hooks/useObservers';
 import { useI18n } from '../lib/i18n';
@@ -374,12 +375,12 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
                     type="button"
                     onClick={() => setFilter('all')}
                     className={`px-2.5 py-1 text-[10px] font-semibold rounded border ${filter === 'all' ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300' : 'border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                  >ALL</button>
+                  >{t('common.filterAll')}</button>
                   <button
                     type="button"
                     onClick={() => setFilter('top')}
                     className={`px-2.5 py-1 text-[10px] font-semibold rounded border ${filter === 'top' ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300' : 'border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                  >TOP 10</button>
+                  >{t('common.filterTop')}</button>
                 </div>
               }
             />
@@ -449,8 +450,8 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
             : kpiDialog === 2 ? t('power.kpi.storage.label')
             : t('power.kpi.excludedRate.label')
         }
-        width={460}
-        height={380}
+        width={DIALOG.MEDIUM.w}
+        height={DIALOG.MEDIUM.h}
       >
         {effStats && rawKpi && (
           <div className="space-y-2">
@@ -462,7 +463,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
             <DialogRow label={t('power.external.excludedOutput')} value={fmtFE(effStats.excludedOutputPerTick)} />
             <DialogDivider />
             <DialogRow label={t('power.kpi.storage.label')} value={`${storedRatio.toFixed(2)}%`} />
-            <DialogRow label="Stored / Capacity" value={storageHelper} />
+            <DialogRow label={t('power.kpi.storedCapacity')} value={storageHelper} />
           </div>
         )}
       </ModernDialog>
@@ -472,8 +473,8 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
         open={extDialogOpen}
         onClose={() => setExtDialogOpen(false)}
         title={t('power.external.dialog.title')}
-        width={560}
-        height={460}
+        width={DIALOG.LARGE.w}
+        height={DIALOG.LARGE.h}
       >
         <div className="space-y-3">
           <p className="text-xs text-slate-400">{t('power.external.dialog.hint')}</p>

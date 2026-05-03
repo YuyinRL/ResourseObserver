@@ -46,7 +46,7 @@ public final class IconRenderer {
      * </ol>
      */
     public static @Nullable Path renderToCache(String itemId, String cacheKey) {
-        Path dir = Paths.get("cache", CACHE_DIR);
+        Path dir = Paths.get("cache", CACHE_DIR).toAbsolutePath();
         Path file = dir.resolve(cacheKey + ".png");
         try {
             if (Files.exists(file)) {

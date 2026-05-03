@@ -24,6 +24,7 @@ import { useI18n } from '../lib/i18n';
 import { deriveAggregatedResourceItems, deriveOverviewKpis, formatBytes, isAe2, isPower } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
+import { DIALOG } from '../lib/dialogSizes';
 import { ItemIcon } from './ItemIcon';
 
 interface ResourceRow {
@@ -769,8 +770,8 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
                 open
                 onClose={() => setKpiDialogIndex(null)}
                 title={t('overview.kpi.detail.title', { label })}
-                width={420}
-                height={380}
+                width={DIALOG.MEDIUM.w}
+                height={DIALOG.MEDIUM.h}
               >
                 <div className="space-y-3">
                   <DialogSectionTitle>{t('overview.kpi.detail.current')}</DialogSectionTitle>
@@ -917,7 +918,7 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
           </div>
 
           <div
-            className={`relative mt-4 h-[320px] w-full select-none overflow-hidden ${isChartDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+            className={`relative mt-4 min-h-[280px] md:h-[40vh] lg:h-[360px] w-full select-none overflow-hidden ${isChartDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
             style={{ touchAction: 'none' }}
             onPointerDown={handleChartPointerDown}
             onPointerMove={handleChartPointerMove}

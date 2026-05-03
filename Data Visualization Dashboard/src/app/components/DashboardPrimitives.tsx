@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { DIALOG } from '../lib/dialogSizes';
 import type { LucideIcon } from 'lucide-react';
 import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
@@ -153,7 +154,7 @@ export const KpiCard: React.FC<{
 }> = ({ label, value, suffix, helper, icon: Icon, tone = 'cyan', onClick }) => {
   // 对齐 ModernUI 的 hover/press 缩放反馈与点击下钻行为
   const interactive = Boolean(onClick);
-  const base = 'p-5 flex flex-col gap-4 relative overflow-hidden group';
+  const base = 'p-4 flex flex-col gap-4 relative overflow-hidden group';
   const hover = interactive
     ? 'cursor-pointer transition-all duration-200 hover:-translate-y-0.5 hover:border-cyan-500/30 hover:shadow-[0_0_0_1px_rgba(34,211,238,0.25)] active:scale-[0.985]'
     : '';
@@ -247,7 +248,7 @@ export const ModernDialog: React.FC<{
   children: React.ReactNode;
   width?: number;
   height?: number;
-}> = ({ open, onClose, title, children, width = 420, height = 340 }) => {
+}> = ({ open, onClose, title, children, width = DIALOG.MEDIUM.w, height = DIALOG.MEDIUM.h }) => {
   const bodyRef = useRef<HTMLDivElement>(null);
   const [edges, setEdges] = useState({ top: false, bottom: false });
 
@@ -329,7 +330,7 @@ export const ModernDialog: React.FC<{
               <div
                 ref={bodyRef}
                 onScroll={updateEdges}
-                className="h-full overflow-y-auto px-4 py-3 text-slate-300"
+                className="h-full overflow-y-auto p-5 text-slate-300"
               >
                 {children}
               </div>

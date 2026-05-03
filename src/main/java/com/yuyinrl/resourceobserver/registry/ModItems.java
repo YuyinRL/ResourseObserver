@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.registry;
 
+import com.yuyinrl.resourceobserver.DevMode;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.world.item.BindingToolItem;
 import com.yuyinrl.resourceobserver.world.item.DebugTerminalItem;
@@ -30,7 +31,10 @@ public final class ModItems {
     public static final DeferredItem<Item> RESOURCE_TERMINAL =
             ITEMS.register("resource_terminal", () -> new ResourceTerminalItem(new Item.Properties().stacksTo(1)));
 
-    /** 调试终端 —— 与资源终端功能相同，但默认打开调试视图，不可堆叠 */
+    /**
+     * 调试终端 —— 与资源终端功能相同，但默认打开调试视图，不可堆叠。
+     * 仅供开发环境使用，玩家发布版本中不显示在创造标签页。
+     */
     public static final DeferredItem<Item> DEBUG_TERMINAL =
             ITEMS.register("debug_terminal", () -> new DebugTerminalItem(new Item.Properties().stacksTo(1)));
 
@@ -40,5 +44,10 @@ public final class ModItems {
     /** 将物品注册器挂载到模组事件总线 */
     public static void register(IEventBus bus) {
         ITEMS.register(bus);
+    }
+
+    /** 调试终端物品是否应对玩家可见（仅在开发环境下） */
+    public static boolean isDebugTerminalVisible() {
+        return DevMode.isDev();
     }
 }

@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.registry;
 
+import com.yuyinrl.resourceobserver.DevMode;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import net.minecraft.core.registries.Registries;
 import net.minecraft.network.chat.Component;
@@ -21,7 +22,7 @@ public final class ModCreativeTabs {
     /**
      * 主标签页 —— 包含模组所有物品。
      * 位于红石方块标签页之后，使用观察者方块物品作为标签图标。
-     * 展示项目：观察者方块、绑定工具、资源终端、调试终端。
+     * 展示项目：观察者方块、绑定工具、资源终端（开发环境下额外包含调试终端）。
      */
     public static final DeferredHolder<CreativeModeTab, CreativeModeTab> MAIN = TABS.register("main", () ->
             CreativeModeTab.builder()
@@ -32,7 +33,10 @@ public final class ModCreativeTabs {
                         output.accept(ModItems.OBSERVER_BLOCK_ITEM.get());
                         output.accept(ModItems.BINDING_TOOL.get());
                         output.accept(ModItems.RESOURCE_TERMINAL.get());
-                        output.accept(ModItems.DEBUG_TERMINAL.get());
+                        // 调试终端仅在开发环境下显示
+                        if (DevMode.isDev()) {
+                            output.accept(ModItems.DEBUG_TERMINAL.get());
+                        }
                     })
                     .build()
     );

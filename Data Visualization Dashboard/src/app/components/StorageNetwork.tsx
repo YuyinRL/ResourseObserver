@@ -25,6 +25,7 @@ import {
 } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
+import { DIALOG } from '../lib/dialogSizes';
 import { ItemIcon } from './ItemIcon';
 import { CraftingTreeView } from './CraftingTreeView';
 import { CraftingTree } from './crafting-tree/CraftingTree';
@@ -773,6 +774,8 @@ export const StorageNetwork = ({
           kpiDialogIndex === 3 ? t('storage.kpi.detail.title', { label: t('storage.kpi.items') }) :
           ''
         }
+        width={DIALOG.MEDIUM.w}
+        height={DIALOG.MEDIUM.h}
       >
         {kpiDialogIndex === 0 || kpiDialogIndex === 1 || kpiDialogIndex === 2 ? (
           <>
@@ -826,7 +829,8 @@ export const StorageNetwork = ({
         open={renameTarget !== null}
         onClose={() => setRenameTarget(null)}
         title={t('storage.node.rename.title')}
-        width={320}
+        width={DIALOG.SMALL.w}
+        height={DIALOG.SMALL.h}
       >
         <input
           type="text"
@@ -891,8 +895,8 @@ export const StorageNetwork = ({
           setSelectedCpuIndex(null);
         }}
         title={t('storage.crafting.orderDialog.title') ?? 'Place crafting order'}
-        width={720}
-        height={560}
+        width={DIALOG.XL.w}
+        height={DIALOG.XL.h}
       >
         {orderTarget ? (
           <div className="space-y-4">

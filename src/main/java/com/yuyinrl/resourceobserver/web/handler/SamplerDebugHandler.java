@@ -2,12 +2,11 @@ package com.yuyinrl.resourceobserver.web.handler;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.history.WebHighPrecisionSampler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -57,8 +56,7 @@ public final class SamplerDebugHandler extends BaseApiHandler implements HttpHan
     private @Nullable Map<String, Object> buildBody(MinecraftServer mc, ObserverTarget target) {
         ServerLevel level = resolveLevel(mc, target.dimension());
         if (level == null) return null;
-        BlockEntity raw = level.getBlockEntity(target.pos());
-        if (!(raw instanceof ObserverBlockEntity)) return null;
+        if (ObserverService.findByPos(level, target.pos()).isEmpty()) return null;
 
         WebHighPrecisionSampler.Diagnostics diag =
                 WebHighPrecisionSampler.diagnostics(level, target.pos());

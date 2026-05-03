@@ -5,13 +5,14 @@ import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
+import com.yuyinrl.resourceobserver.web.util.QueryUtil;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.world.history.WebHighPrecisionSampler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -57,7 +58,7 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
             sendError(exchange, 404, "not found");
             return;
         }
-        Map<String, String> query = parseQuery(uri.getRawQuery());
+        Map<String, String> query = QueryUtil.parseQuery(uri.getRawQuery());
         ChartWindow visibleWindow = mapRange(query.getOrDefault("range", "short"));
         ChartWindow window = bufferWindow(visibleWindow);
         String itemId = query.get("item");
@@ -76,8 +77,8 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
                                                     @Nullable String itemId) {
         ServerLevel level = resolveLevel(mc, target.dimension());
         if (level == null) return null;
-        BlockEntity raw = level.getBlockEntity(target.pos());
-        if (!(raw instanceof ObserverBlockEntity observer)) return null;
+        ObserverBlockEntity observer = ObserverService.findByPos(level, target.pos()).orElse(null);
+        if (observer == null) return null;
 
         List<ObserverBlockEntity.BoundEntry> bindings = itemChartBindings(observer.getBindings());
         if (visibleWindow == ChartWindow.WEB_DETAIL_1M_1S) {
@@ -304,27 +305,5 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
             return 0.0d;
         }
         return (total / observedTicks) * 1200.0d;
-    }
-
-    private static Map<String, String> parseQuery(@Nullable String raw) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String pair : raw.split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq < 0) {
-                out.put(urlDecode(pair), "");
-            } else {
-                out.put(urlDecode(pair.substring(0, eq)), urlDecode(pair.substring(eq + 1)));
-            }
-        }
-        return out;
-    }
-
-    private static String urlDecode(String s) {
-        try {
-            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            return s;
-        }
     }
 }

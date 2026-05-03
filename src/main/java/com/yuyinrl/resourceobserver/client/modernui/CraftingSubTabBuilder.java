@@ -451,7 +451,7 @@ final class CraftingSubTabBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         brLp.topMargin = dp8;
 
-        PopupWindow popup = new PopupWindow(container, terminal.dp(180), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        PopupWindow popup = new PopupWindow(container, terminal.dp(ModernUiTheme.DIALOG_SMALL_W), ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setElevation(terminal.dp(8));
         popup.setOnDismissListener(() -> terminal.setTextInputActive(false));
@@ -543,7 +543,7 @@ final class CraftingSubTabBuilder {
         container.addView(msg, new LinearLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
-        PopupWindow popup = new PopupWindow(container, terminal.dp(220), ViewGroup.LayoutParams.WRAP_CONTENT, false);
+        PopupWindow popup = new PopupWindow(container, terminal.dp(ModernUiTheme.DIALOG_PROGRESS_W), ViewGroup.LayoutParams.WRAP_CONTENT, false);
         popup.setOutsideTouchable(false);
         popup.setElevation(terminal.dp(8));
         terminal.trackPopup(popup);
@@ -758,7 +758,7 @@ final class CraftingSubTabBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT);
         brLp.topMargin = dp8;
 
-        PopupWindow popup = new PopupWindow(container, terminal.dp(620), ViewGroup.LayoutParams.WRAP_CONTENT, true);
+        PopupWindow popup = new PopupWindow(container, terminal.dp(ModernUiTheme.DIALOG_REVIEW_W), ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setOutsideTouchable(true);
         popup.setElevation(terminal.dp(8));
 

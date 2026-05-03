@@ -753,8 +753,8 @@ final class PowerNetworkPageBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // ---------- 对话框卡片 ----------
-        int dialogW = Math.min(terminal.dp(400), cw - terminal.dp(20));
-        int dialogH = Math.min(terminal.dp(320), ch - terminal.dp(20));
+        int dialogW = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_W), cw - terminal.dp(20));
+        int dialogH = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_H), ch - terminal.dp(20));
 
         LinearLayout dialog = new LinearLayout(terminal.getContext());
         dialog.setOrientation(LinearLayout.VERTICAL);

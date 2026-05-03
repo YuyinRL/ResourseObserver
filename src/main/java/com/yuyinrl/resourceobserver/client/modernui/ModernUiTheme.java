@@ -38,6 +38,24 @@ public final class ModernUiTheme {
     /** 布局缩放倍率（应用于图标尺寸、行高等） */
     private static float layoutScale = 1.2f;
 
+    // ===================== 对话框尺寸规范（基准 dp，会经 layoutScale 缩放） =====================
+
+    /** 小型弹窗（输入框 / 确认提示）：200×WRAP */
+    public static final int DIALOG_SMALL_W = 200;
+    /** 进度提示弹窗：240×WRAP */
+    public static final int DIALOG_PROGRESS_W = 240;
+    /** KPI 详情弹窗：420×360 */
+    public static final int DIALOG_KPI_W = 420;
+    public static final int DIALOG_KPI_H = 360;
+    /** 紧凑型 KPI 详情弹窗（单列指标）：360×280 */
+    public static final int DIALOG_KPI_SMALL_W = 360;
+    public static final int DIALOG_KPI_SMALL_H = 280;
+    /** 合成审核弹窗（流程信息密集）：560×WRAP */
+    public static final int DIALOG_REVIEW_W = 560;
+    /** 超大弹窗（合成树详情）：720×560 */
+    public static final int DIALOG_XL_W = 720;
+    public static final int DIALOG_XL_H = 560;
+
     /** 设置全局 UI 缩放（在 size 按钮点击时调用，rebuildUi 前更新） */
     public static void setUiScale(float text, float layout) {
         textScale = text;

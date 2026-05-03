@@ -3,7 +3,7 @@ package com.yuyinrl.resourceobserver.client.ui;
 import java.util.List;
 
 /**
- * Power Network page view model.
+ * 电力网络页面视图模型。
  */
 public record PowerNetworkViewModel(
         List<DeviceEntry> devices,

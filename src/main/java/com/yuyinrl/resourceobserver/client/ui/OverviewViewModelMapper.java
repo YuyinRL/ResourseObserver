@@ -1,5 +1,9 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+import com.yuyinrl.resourceobserver.client.ui.format.FormatUtils;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.yuyinrl.resourceobserver.client.util.PinyinMatcher;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.ui.state.TableSortMode;
@@ -36,6 +40,7 @@ import java.util.Map;
  * 8. 构建关注列表物品数据
  */
 public final class OverviewViewModelMapper {
+    private static final Logger LOGGER = LoggerFactory.getLogger(OverviewViewModelMapper.class);
     private OverviewViewModelMapper() {
     }
 
@@ -77,7 +82,7 @@ public final class OverviewViewModelMapper {
                     mergedRows.put(item.itemId(), new OverviewViewModel.TableRow(
                             existing.itemId(),
                             existing.displayName(),
-                            existing.groupKey(),
+                            FormatUtils.normalizeGroupKey(existing.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED),
                             mergedProd,
                             mergedCons,
                             mergedNet,
@@ -91,7 +96,7 @@ public final class OverviewViewModelMapper {
                     mergedRows.put(item.itemId(), new OverviewViewModel.TableRow(
                             item.itemId(),
                             localizedName,
-                            normalizeGroupKey(item.groupKey()),
+                        FormatUtils.normalizeGroupKey(item.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED),
                             Math.round(production),
                             Math.round(consumption),
                             net,
@@ -135,7 +140,7 @@ public final class OverviewViewModelMapper {
         // 构建分组选项和 UI 状态
         List<OverviewViewModel.GroupOption> groups = buildGroups(payload.groups());
         OverviewViewModel.UiState uiState = new OverviewViewModel.UiState(
-                normalizeGroupFilterKey(payload.tableGroupFilterKey()),
+                FormatUtils.normalizeGroupKey(payload.tableGroupFilterKey(), PlayerUiPrefsSavedData.GROUP_FILTER_ALL),
                 groups,
                 payload.tableSortMode(),
                 payload.tableSortDesc(),
@@ -602,8 +607,8 @@ public final class OverviewViewModelMapper {
         }
         return Component.translatable(
                 "screen.resourceobserver.overview.storage.detail.types_usage",
-                formatCompact(used),
-                formatCompact(total)
+                FormatUtils.formatCompact(used),
+                FormatUtils.formatCompact(total)
         ).getString();
     }
 
@@ -635,8 +640,8 @@ public final class OverviewViewModelMapper {
         }
         return Component.translatable(
                 "screen.resourceobserver.overview.storage.detail.external_item_usage",
-                formatCompact(used),
-                formatCompact(total)
+                FormatUtils.formatCompact(used),
+                FormatUtils.formatCompact(total)
         ).getString();
     }
 
@@ -657,8 +662,8 @@ public final class OverviewViewModelMapper {
         }
         return Component.translatable(
                 "screen.resourceobserver.overview.storage.detail.external_fluid_usage",
-                formatCompact(used),
-                formatCompact(total)
+                FormatUtils.formatCompact(used),
+                FormatUtils.formatCompact(total)
         ).getString();
     }
 
@@ -686,7 +691,7 @@ public final class OverviewViewModelMapper {
                 )
         );
         for (ObserverDataPayload.GroupEntry group : source) {
-            String key = normalizeGroupKey(group.key());
+            String key = FormatUtils.normalizeGroupKey(group.key(), PlayerUiPrefsSavedData.GROUP_UNGROUPED);
             if (key.isBlank() || PlayerUiPrefsSavedData.GROUP_FILTER_ALL.equals(key)) {
                 continue;
             }
@@ -782,7 +787,7 @@ public final class OverviewViewModelMapper {
             grouped.put(group.key(), new ArrayList<>());
         }
         for (OverviewViewModel.TableRow row : rows) {
-            grouped.computeIfAbsent(normalizeGroupKey(row.groupKey()), ignored -> new ArrayList<>()).add(row);
+            grouped.computeIfAbsent(FormatUtils.normalizeGroupKey(row.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED), ignored -> new ArrayList<>()).add(row);
         }
 
         List<OverviewViewModel.TableGroup> result = new ArrayList<>();
@@ -804,7 +809,7 @@ public final class OverviewViewModelMapper {
             return result;
         }
 
-        String key = normalizeGroupKey(groupFilterKey);
+        String key = FormatUtils.normalizeGroupKey(groupFilterKey, PlayerUiPrefsSavedData.GROUP_FILTER_ALL);
         String title = key;
         for (OverviewViewModel.GroupOption group : groupOptions) {
             if (group.key().equals(key)) {
@@ -870,27 +875,13 @@ public final class OverviewViewModelMapper {
                     return translated;
                 }
             }
-        } catch (Exception ignored) {
-            // 当 id 无效或在客户端无法解析时，保留备用名称
+        } catch (Exception e) {
+            LOGGER.debug("localizeEntryName failed for {}: {}", itemId, e.toString());
         }
         return fallbackDisplayName == null || fallbackDisplayName.isBlank() ? itemId : fallbackDisplayName;
     }
 
-    /** 规范化分组键，空值映射到"未分组" */
-    private static String normalizeGroupKey(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return PlayerUiPrefsSavedData.GROUP_UNGROUPED;
-        }
-        return raw;
-    }
-
-    /** 规范化分组筛选键，空值映射到"全部" */
-    private static String normalizeGroupFilterKey(String raw) {
-        if (raw == null || raw.isBlank()) {
-            return PlayerUiPrefsSavedData.GROUP_FILTER_ALL;
-        }
-        return raw;
-    }
+    // Removed: normalizeGroupKey and normalizeGroupFilterKey; usages now rely on FormatUtils.normalizeGroupKey(...)
 
     /** 判断行是否匹配状态筛选条件 */
     private static boolean matchesStatus(OverviewViewModel.TableRow row, TableStatusFilter statusFilter) {
@@ -997,7 +988,7 @@ public final class OverviewViewModelMapper {
      * 例如：1234 → "1.2K"，1234567 → "1.2M"
      */
     private static String formatByteLike(long value) {
-        return formatCompact(value) + " B";
+        return FormatUtils.formatCompact(value) + " B";
     }
 
     private static String formatExactByteLike(long value) {
@@ -1144,17 +1135,5 @@ public final class OverviewViewModelMapper {
         return left + right;
     }
 
-    private static String formatCompact(long value) {
-        long abs = Math.abs(value);
-        if (abs >= 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.1fB", value / 1_000_000_000.0);
-        }
-        if (abs >= 1_000_000L) {
-            return String.format(Locale.ROOT, "%.1fM", value / 1_000_000.0);
-        }
-        if (abs >= 1_000L) {
-            return String.format(Locale.ROOT, "%.1fK", value / 1_000.0);
-        }
-        return Long.toString(value);
-    }
+    // Removed: formatCompact moved to FormatUtils.formatCompact
 }

@@ -1685,8 +1685,8 @@ final class OverviewPageBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // ---------- 对话框卡片 ----------
-        int dialogW = Math.min(terminal.dp(340), cw - terminal.dp(20));
-        int dialogH = Math.min(terminal.dp(230), ch - terminal.dp(20));
+        int dialogW = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_SMALL_W), cw - terminal.dp(20));
+        int dialogH = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_SMALL_H), ch - terminal.dp(20));
 
         LinearLayout dialog = new LinearLayout(terminal.getContext());
         dialog.setOrientation(LinearLayout.VERTICAL);
@@ -1950,8 +1950,8 @@ final class OverviewPageBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // ---------- 对话框外壳 ----------
-        int dialogW = Math.min(terminal.dp(360), cw - terminal.dp(20));
-        int dialogH = Math.min(terminal.dp(280), ch - terminal.dp(20));
+        int dialogW = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_W), cw - terminal.dp(20));
+        int dialogH = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_H), ch - terminal.dp(20));
 
         LinearLayout dialog = new LinearLayout(terminal.getContext());
         dialog.setOrientation(LinearLayout.VERTICAL);

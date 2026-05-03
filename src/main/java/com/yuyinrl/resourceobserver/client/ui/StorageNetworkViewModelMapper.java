@@ -1,5 +1,10 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+import com.yuyinrl.resourceobserver.client.ui.format.FormatUtils;
+import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import com.yuyinrl.resourceobserver.client.util.PinyinMatcher;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import net.minecraft.core.BlockPos;
@@ -28,6 +33,7 @@ import java.util.Map;
  * 5. 构建 KPI 卡片
  */
 public final class StorageNetworkViewModelMapper {
+    private static final Logger LOGGER = LoggerFactory.getLogger(StorageNetworkViewModelMapper.class);
     private StorageNetworkViewModelMapper() {
     }
 
@@ -109,8 +115,8 @@ public final class StorageNetworkViewModelMapper {
                     itemCount,
                     capacityRatio,
                     selected,
-                    formatCompactDecimal(usedValue),
-                    formatCompactDecimal(totalValue),
+                    FormatUtils.formatCompact(usedValue),
+                    FormatUtils.formatCompact(totalValue),
                     statusLabel,
                     statusAlert,
                     parseCoordinatesText(binding.networkId())
@@ -129,7 +135,7 @@ public final class StorageNetworkViewModelMapper {
                 globalMap.put(item.itemId(), new GlobalItemInfo(
                         info.displayName(),
                         info.iconSprite(),
-                        info.groupKey(),
+                        FormatUtils.normalizeGroupKey(info.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED),
                         saturatingAdd(info.globalAmount(), item.amount()),
                         info.globalDelta() + item.delta(),
                         info.globalProductionRate() + item.productionRate(),
@@ -174,7 +180,7 @@ public final class StorageNetworkViewModelMapper {
                             global.globalAmount(),
                             item.delta(),
                             alert,
-                            item.groupKey(),
+                            FormatUtils.normalizeGroupKey(item.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED),
                             burnRate,
                             bufferText,
                             bufferRatio
@@ -210,7 +216,7 @@ public final class StorageNetworkViewModelMapper {
                         info.globalAmount(),
                         info.globalDelta(),
                         alert,
-                        info.groupKey(),
+                        FormatUtils.normalizeGroupKey(info.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED),
                         burnRate,
                         bufferText,
                         bufferRatio
@@ -262,7 +268,7 @@ public final class StorageNetworkViewModelMapper {
                 selectedNodeId,
                 alertFilterActive,
                 kpiCards,
-                items,
+                    items, 
                 usageSegments,
                 items.size(),
                 criticalItemCount,
@@ -356,7 +362,7 @@ public final class StorageNetworkViewModelMapper {
         Map<String, Long> groupTotals = new LinkedHashMap<>();
         long grandTotal = 0L;
         for (StorageNetworkViewModel.ItemRow item : items) {
-            String groupKey = normalizeGroupKey(item.groupKey());
+            String groupKey = FormatUtils.normalizeGroupKey(item.groupKey(), PlayerUiPrefsSavedData.GROUP_UNGROUPED);
             groupTotals.merge(groupKey, Math.max(0, item.localAmount()), Long::sum);
             grandTotal += Math.max(0, item.localAmount());
         }
@@ -409,7 +415,7 @@ public final class StorageNetworkViewModelMapper {
         return List.of(
                 new StorageNetworkViewModel.StorageKpi(
                         "screen.resourceobserver.storage.kpi.total_items",
-                        formatCompact(totalAmount),
+                        FormatUtils.formatCompact(totalAmount),
                         amountStatus
                 ),
                 new StorageNetworkViewModel.StorageKpi(
@@ -419,7 +425,7 @@ public final class StorageNetworkViewModelMapper {
                 ),
                 new StorageNetworkViewModel.StorageKpi(
                         "screen.resourceobserver.storage.kpi.fill_rate",
-                        formatPercent(fillRate),
+                        FormatUtils.formatPercent(fillRate),
                         fillStatus
                 )
         );
@@ -469,14 +475,13 @@ public final class StorageNetworkViewModelMapper {
                     return translated;
                 }
             }
-        } catch (Exception ignored) {
+        } catch (Exception e) {
+            LOGGER.debug("localizeItemName failed for {}: {}", itemId, e.toString());
         }
         return fallback == null || fallback.isBlank() ? itemId : fallback;
     }
 
-    private static String normalizeGroupKey(String raw) {
-        return raw == null || raw.isBlank() ? "ungrouped" : raw;
-    }
+    // Removed: normalizeGroupKey; usages now rely on FormatUtils.normalizeGroupKey(...)
 
     private static String groupDisplayName(String groupKey) {
         return switch (groupKey.toLowerCase(Locale.ROOT)) {
@@ -494,42 +499,6 @@ public final class StorageNetworkViewModelMapper {
             case "finished" -> UiThemeTokens.EMERALD;
             default -> UiThemeTokens.BLUE;
         };
-    }
-
-    private static String formatCompact(long value) {
-        long abs = Math.abs(value);
-        if (abs >= 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.1fB", value / 1_000_000_000.0);
-        }
-        if (abs >= 1_000_000L) {
-            return String.format(Locale.ROOT, "%.1fM", value / 1_000_000.0);
-        }
-        if (abs >= 1_000L) {
-            return String.format(Locale.ROOT, "%.1fK", value / 1_000.0);
-        }
-        return Long.toString(value);
-    }
-
-    /** 格式化带小数的紧凑数值（如 852.0k） */
-    private static String formatCompactDecimal(long value) {
-        long abs = Math.abs(value);
-        if (abs >= 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.1fB", value / 1_000_000_000.0);
-        }
-        if (abs >= 1_000_000L) {
-            return String.format(Locale.ROOT, "%.1fM", value / 1_000_000.0);
-        }
-        if (abs >= 1_000L) {
-            return String.format(Locale.ROOT, "%.1fK", value / 1_000.0);
-        }
-        return Long.toString(value);
-    }
-
-    private static String formatPercent(double ratio) {
-        if (ratio < 0.0) {
-            return "N/A";
-        }
-        return String.format(Locale.ROOT, "%.1f%%", ratio * 100.0);
     }
 
     /**

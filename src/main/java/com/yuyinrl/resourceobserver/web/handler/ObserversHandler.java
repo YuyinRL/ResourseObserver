@@ -4,6 +4,7 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.web.WebServerService;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BindingStats;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
@@ -11,7 +12,6 @@ import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.Ae2Ce
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -47,7 +47,7 @@ public final class ObserversHandler extends BaseApiHandler implements HttpHandle
     private void handleList(HttpExchange exchange) throws IOException {
         List<Map<String, Object>> result = runOnMain(mc -> {
             List<Map<String, Object>> list = new ArrayList<>();
-            for (ObserverBlockEntity be : ObserverBlockEntity.loadedObservers()) {
+            for (ObserverBlockEntity be : ObserverService.listObservers()) {
                 Map<String, Object> row = summarizeObserver(be);
                 if (row != null) list.add(row);
             }
@@ -82,8 +82,8 @@ public final class ObserversHandler extends BaseApiHandler implements HttpHandle
         if (level == null) return null;
         BlockPos pos = target.pos();
         if (!level.isLoaded(pos)) return null;
-        BlockEntity be = level.getBlockEntity(pos);
-        if (!(be instanceof ObserverBlockEntity observer)) return null;
+        ObserverBlockEntity observer = ObserverService.findByPos(level, pos).orElse(null);
+        if (observer == null) return null;
         Map<String, Object> body = summarizeObserver(observer);
         if (body == null) return null;
         body.put("bindings", detailedBindings(observer));

@@ -69,15 +69,18 @@ public final class IconHandler extends BaseApiHandler implements HttpHandler {
         if (cached != null && Files.exists(cached)) {
             file = cached;
         } else {
+            if (cached != null) {
+                ResourceObserverMod.LOGGER.debug("[Web] CACHE 命中但文件不存在: {} -> {}", cacheKey, cached);
+            }
             // 优先查磁盘缓存（专用服务端 + 客户端镜像 都共享此目录）
             Path onDisk = cacheRoot().resolve(cacheKey + ".png");
             if (Files.exists(onDisk)) {
                 file = onDisk;
-                CACHE.put(cacheKey, onDisk);
+                CACHE.put(cacheKey, onDisk.toAbsolutePath());
             } else if (canRenderLocally()) {
                 file = renderToFile(itemId, cacheKey);
                 if (file != null && Files.exists(file)) {
-                    CACHE.put(cacheKey, file);
+                    CACHE.put(cacheKey, file.toAbsolutePath());
                 }
             } else {
                 // 专用服务端无法执行 Minecraft 物品渲染；请求在线客户端代渲染，保持与 ModernUI 一致
@@ -139,7 +142,7 @@ public final class IconHandler extends BaseApiHandler implements HttpHandler {
             Files.createDirectories(dir);
             Path file = dir.resolve(cacheKey + ".png");
             Files.write(file, pngBytes);
-            CACHE.put(cacheKey, file);
+            CACHE.put(cacheKey, file.toAbsolutePath());
             PENDING.remove(cacheKey);
         } catch (Exception e) {
             ResourceObserverMod.LOGGER.warn("[Web] 写入客户端镜像图标失败 {}: {}", itemId, e.toString());
