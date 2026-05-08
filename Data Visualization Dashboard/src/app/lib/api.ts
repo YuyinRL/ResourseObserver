@@ -3,6 +3,8 @@
  * 统一封装后端 REST 端点访问 + TypeScript 类型定义。
  */
 
+import { authHeaders, notifyUnauthorized, WhoAmIResponse } from './auth';
+
 // ===== Types: 与 Java 侧 JsonWriter 输出保持一致 =====
 
 export interface Meta {
@@ -301,18 +303,36 @@ export interface ChartHistoryResponse {
 
 async function apiGet<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
+    credentials: 'include',
     ...init,
-    headers: { Accept: 'application/json', ...(init?.headers ?? {}) },
+    headers: authHeaders({ Accept: 'application/json', ...(init?.headers ?? {}) }),
   });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new Error(`GET ${url} unauthorized`);
+  }
   if (!res.ok) {
     throw new Error(`GET ${url} failed: ${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<T>;
 }
 
+async function authedFetch(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, {
+    credentials: 'include',
+    ...init,
+    headers: authHeaders(init?.headers),
+  });
+  if (res.status === 401) {
+    notifyUnauthorized();
+  }
+  return res;
+}
+
 export const api = {
   health: (): Promise<HealthStatus> => apiGet('/api/health'),
   meta: (): Promise<Meta> => apiGet('/api/meta'),
+  whoami: (): Promise<WhoAmIResponse> => apiGet('/api/auth/whoami'),
   observers: (): Promise<ObserverListResponse> => apiGet('/api/observers'),
   observerDetail: (id: string): Promise<ObserverDetail> =>
     apiGet(`/api/observers/${id}`),
@@ -322,7 +342,7 @@ export const api = {
     id: string,
     body: { networkId: string; itemId: string; amount: number },
   ): Promise<CraftingPlanResult> => {
-    const res = await fetch(`/api/observers/${id}/crafting/plan`, {
+    const res = await authedFetch(`/api/observers/${id}/crafting/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body),
@@ -354,7 +374,7 @@ export const api = {
     planId: string,
     cpu?: string | null,
   ): Promise<CraftingOrderResult> => {
-    const res = await fetch(`/api/observers/${id}/crafting/confirm`, {
+    const res = await authedFetch(`/api/observers/${id}/crafting/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ planId, cpu: cpu ?? '' }),
@@ -372,7 +392,7 @@ export const api = {
   cancelCraftingPlan: async (id: string, planId: string): Promise<void> => {
     if (!planId) return;
     try {
-      await fetch(`/api/observers/${id}/crafting/cancel`, {
+      await authedFetch(`/api/observers/${id}/crafting/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId }),
@@ -382,7 +402,7 @@ export const api = {
   fetchCraftingTree: async (id: string, treeId: string): Promise<CraftingTreeNode | null> => {
     if (!treeId) return null;
     try {
-      const res = await fetch(`/api/observers/${id}/crafting/tree`, {
+      const res = await authedFetch(`/api/observers/${id}/crafting/tree`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ treeId }),

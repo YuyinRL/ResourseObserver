@@ -1,9 +1,11 @@
 package com.yuyinrl.resourceobserver.web.handler;
 
+import appeng.api.networking.IGrid;
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.web.WebServerService;
+import com.yuyinrl.resourceobserver.web.auth.AuthContext;
 import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.block.entity.BindingStats;
@@ -48,9 +50,15 @@ public final class ObserversHandler extends BaseApiHandler implements HttpHandle
     }
 
     private void handleList(HttpExchange exchange) throws IOException {
+        AuthContext ctx = authContext(exchange);
+        boolean legacy = legacyAllowsAnyone();
         List<Map<String, Object>> result = runOnMain(mc -> {
             List<Map<String, Object>> list = new ArrayList<>();
             for (ObserverBlockEntity be : ObserverService.listObservers()) {
+                // 列表过滤：跳过用户无权查看的 Observer
+                if (!be.canView(ctx == null ? null : ctx.viewer(), ctx != null && ctx.admin(), legacy)) {
+                    continue;
+                }
                 Map<String, Object> row = summarizeObserver(be);
                 if (row != null) list.add(row);
             }
@@ -72,21 +80,20 @@ public final class ObserversHandler extends BaseApiHandler implements HttpHandle
             sendError(exchange, 404, "not found");
             return;
         }
-        Map<String, Object> body = runOnMain(mc -> buildDetail(mc, target));
-        if (body == null) {
+        AccessResult<Map<String, Object>> res = runOnMainWithAccess(exchange, target,
+                (mc, observer) -> buildDetailFromObserver(observer));
+        if (res.isForbidden()) {
+            sendError(exchange, 403, "forbidden");
+            return;
+        }
+        if (res.isNotFound()) {
             sendError(exchange, 404, "observer not found");
             return;
         }
-        sendJson(exchange, 200, body);
+        sendJson(exchange, 200, res.body());
     }
 
-    private @Nullable Map<String, Object> buildDetail(MinecraftServer mc, ObserverTarget target) {
-        ServerLevel level = resolveLevel(mc, target.dimension());
-        if (level == null) return null;
-        BlockPos pos = target.pos();
-        if (!level.isLoaded(pos)) return null;
-        ObserverBlockEntity observer = ObserverService.findByPos(level, pos).orElse(null);
-        if (observer == null) return null;
+    private @Nullable Map<String, Object> buildDetailFromObserver(ObserverBlockEntity observer) {
         Map<String, Object> body = summarizeObserver(observer);
         if (body == null) return null;
         body.put("bindings", detailedBindings(observer));

@@ -116,6 +116,9 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
             sendError(exchange, 400, "missing networkId/itemId/amount");
             return;
         }
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         CompletableFuture<PlanResult> fut = runOnMain(mc -> startPlanOnMain(mc, target, networkId, itemId, amount));
         if (fut == null) {
             sendError(exchange, 504, "main thread timeout");

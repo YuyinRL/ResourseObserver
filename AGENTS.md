@@ -169,10 +169,36 @@ ObserverBlockEntity (server tick)
 | `/api/observers/{id}/items` | ItemsHandler | Paginated items |
 | `/api/observers/{id}/history` | HistoryHandler | Chart data |
 | `/api/observers/{id}/crafting/plan` | CraftingOrderHandler | Plan/confirm/cancel |
+| `/api/auth/whoami` | AuthHandler | Returns `{ uuid, name, admin, authMode }` for the current Bearer token |
 | `/api/icon/{item}` | IconHandler | Item icon PNG |
 | `/` | StaticHandler | Web dashboard SPA |
 
 All handlers use `MinecraftServer.execute(Runnable)` for thread safety.
+
+### 4.3.1 Authentication & Access Control
+
+All `/api/**` routes (except `/api/health` and `/api/meta`) are wrapped by `AuthFilter`,
+which expects an `Authorization: Bearer <token>` header. Tokens are minted server-side
+per player and persisted via `PlayerWebTokenSavedData`.
+
+- **Token issuance**: Players obtain a token without typing commands by either:
+  1. Clicking the **🌐** button in the top-right of the in-game Resource Terminal
+     (opens `WebAccessDialog` with copyable URL + regenerate button), or
+  2. Receiving the **first-use chat link** auto-pushed by `WebTokenService` when
+     they first right-click the terminal. The link uses `ClickEvent.OPEN_URL` and
+     embeds `?t=<token>` in the dashboard URL.
+- **Frontend token handling** (`Data Visualization Dashboard/src/app/lib/auth.ts`):
+  on first load, `consumeUrlToken()` reads `?t=<token>` from the URL, persists it in
+  `localStorage["ro.token"]`, and strips the query so the token never lingers in browser
+  history. Every fetch via `apiGet`/`authedFetch` injects `Authorization: Bearer`.
+  A 401 response triggers `notifyUnauthorized()` → clears the token → `LoginGate` shows
+  instructions for re-binding.
+- **Per-observer ACL**: `ObserverBlockEntity.ownerUuid` is set in `ObserverBlock.setPlacedBy`.
+  `BaseApiHandler.AccessResult<T>` and `runOnMainWithAccess()` enforce that non-admin
+  viewers can only see observers they own. Admins (configurable in `WebServerConfig`) see all.
+- **Auth modes**: `WebServerConfig.authMode` accepts `OFF` (legacy open access),
+  `TOKEN` (default, enforced), and `OWNER_ONLY` (combined with `LegacyObserverPolicy`
+  for observers placed before this feature existed).
 
 ### 4.4 Network Protocol
 
@@ -181,6 +207,7 @@ NeoForge packets (version 8). All payloads are Java `record` types with `STREAM_
 - `ObserverRefreshRequestPayload` + `ObserverUiActionPayload`: Client→Server
 - `CraftingPlanResultPayload` + `CraftingTreeRequest/ResponsePayload`: Crafting flow
 - `ClientNameUploadPayload` + `ClientIconUploadPayload`: Client uploads localized names/icons for web use
+- `RequestWebTokenPayload` (C→S, `{ regenerate }`) + `WebTokenPayload` (S→C, `{ url, baseUrl, token, regenerated, reliable }`): Web access token issuance flow
 
 ### 4.5 Web Frontend State
 

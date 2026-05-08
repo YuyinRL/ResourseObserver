@@ -68,6 +68,9 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
         String itemId = query.get("item");
         ChartScope scope = (itemId != null && !itemId.isBlank()) ? ChartScope.ITEM : ChartScope.GLOBAL;
 
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         Map<String, Object> body = runOnMain(mc -> buildBody(mc, target, window, visibleWindow, scope, itemId));
         if (body == null) {
             sendError(exchange, 404, "observer not found");

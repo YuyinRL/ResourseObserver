@@ -12,6 +12,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.ItemInteractionResult;
+import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.BlockPlaceContext;
@@ -29,6 +30,7 @@ import net.minecraft.world.level.block.state.properties.BlockStateProperties;
 import net.minecraft.world.level.block.state.properties.BooleanProperty;
 import net.minecraft.world.level.block.state.properties.DirectionProperty;
 import net.minecraft.world.phys.BlockHitResult;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * 观察者方块 —— 模组的核心功能方块。
@@ -69,6 +71,23 @@ public class ObserverBlock extends BaseEntityBlock {
     @Override
     public BlockState getStateForPlacement(BlockPlaceContext context) {
         return this.defaultBlockState().setValue(FACING, context.getHorizontalDirection().getOpposite());
+    }
+
+    /**
+     * 玩家放置方块后立即写入"放置者"信息到方块实体。
+     * <p>该 UUID 用于 Web Dashboard 的访问控制 —— 默认仅放置者本人 + OP 可看本 Observer。
+     * 由非玩家实体（命令方块、漏斗等）放置时 placer 为 null，方块实体保持无主状态，
+     * 此时其可见性由 legacyObserverPolicy 决定。</p>
+     */
+    @Override
+    public void setPlacedBy(Level level, BlockPos pos, BlockState state, @Nullable LivingEntity placer, ItemStack stack) {
+        super.setPlacedBy(level, pos, state, placer, stack);
+        if (level.isClientSide) return;
+        if (!(placer instanceof Player player)) return;
+        BlockEntity be = level.getBlockEntity(pos);
+        if (be instanceof ObserverBlockEntity observer) {
+            observer.setOwnerUuid(player.getUUID());
+        }
     }
 
     /**

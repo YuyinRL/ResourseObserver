@@ -28,6 +28,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.UUID;
 
 /**
  * 观察者方块实体 —— 模组数据采集的核心逻辑所在。
@@ -52,6 +53,8 @@ public class ObserverBlockEntity extends BlockEntity {
     private static final String TAG_TOTAL_PRODUCED = "total_produced";
     private static final String TAG_TOTAL_CONSUMED = "total_consumed";
     private static final String TAG_PREV_VALUE = "prev_value";
+    /** Observer 放置者 UUID 的 NBT 键（可空：升级前的老存档无此字段）。 */
+    private static final String TAG_OWNER = "owner";
 
     // 常量已收敛到 Ae2Sampler（SAMPLE_INTERVAL 等），容量作用域常量见 Ae2CellProber.AE2_CAPACITY_SCOPE_CELLS_ONLY。
 
@@ -70,6 +73,10 @@ public class ObserverBlockEntity extends BlockEntity {
     private final Ae2Sampler sampler = new Ae2Sampler(dataStore, gridResolver, debugInfoMap);
     /** 上次采样的游戏时间，用于控制采样间隔 */
     private long lastSampleTick = -1;
+
+    /** 放置该 Observer 的玩家 UUID；为空表示老存档迁移过来的"无主"方块。 */
+    @Nullable
+    private UUID ownerUuid = null;
 
     /** Flux Networks 采样数据容器（v0.8.1 模块化：替代原 fluxSampleResults Map）。 */
     final FluxDataStore fluxStore = new FluxDataStore();
@@ -401,9 +408,37 @@ public class ObserverBlockEntity extends BlockEntity {
      * NBT 保存 —— 将所有绑定和统计数据序列化到 CompoundTag。
      * 每个绑定条目包含网络类型、网络ID、目标方块ID 和对应的统计数据。
      */
+    /** 返回放置者 UUID；老存档可能为 {@code null}，调用方需用 legacyObserverPolicy 处理。 */
+    @Nullable
+    public UUID getOwnerUuid() {
+        return ownerUuid;
+    }
+
+    /** 设置放置者 UUID —— 由 {@code ObserverBlock#setPlacedBy} 在玩家放下方块时调用。 */
+    public void setOwnerUuid(@Nullable UUID owner) {
+        if (java.util.Objects.equals(this.ownerUuid, owner)) return;
+        this.ownerUuid = owner;
+        setChanged();
+    }
+
+    /**
+     * 是否允许指定查看者访问本 Observer。
+     * <p>规则：admin 总是允许；ownerUuid 与 viewer 匹配允许；否则按 legacyAllowsAnyone 决定。
+     * 当 ownerUuid 为空（老存档迁移）时使用 legacyAllowsAnyone 决定 —— 由调用方读取
+     * {@link com.yuyinrl.resourceobserver.web.WebServerConfig#LEGACY_OBSERVER_POLICY} 后传入。</p>
+     */
+    public boolean canView(@Nullable UUID viewer, boolean admin, boolean legacyAllowsAnyone) {
+        if (admin) return true;
+        if (this.ownerUuid == null) return legacyAllowsAnyone;
+        return this.ownerUuid.equals(viewer);
+    }
+
     @Override
     protected void saveAdditional(CompoundTag tag, HolderLookup.Provider registries) {
         super.saveAdditional(tag, registries);
+        if (ownerUuid != null) {
+            tag.putUUID(TAG_OWNER, ownerUuid);
+        }
         ListTag listTag = new ListTag();
         for (BoundEntry entry : bindings) {
             CompoundTag entryTag = new CompoundTag();
@@ -436,6 +471,11 @@ public class ObserverBlockEntity extends BlockEntity {
         statsMap.clear();
         dataStore.clearAll();
         fluxStore.clearAll();
+        if (tag.hasUUID(TAG_OWNER)) {
+            ownerUuid = tag.getUUID(TAG_OWNER);
+        } else {
+            ownerUuid = null;
+        }
         if (tag.contains(TAG_BINDINGS, Tag.TAG_LIST)) {
             ListTag listTag = tag.getList(TAG_BINDINGS, Tag.TAG_COMPOUND);
             for (int i = 0; i < listTag.size(); i++) {

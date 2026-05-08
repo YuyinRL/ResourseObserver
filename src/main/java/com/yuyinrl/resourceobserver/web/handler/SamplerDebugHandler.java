@@ -46,6 +46,9 @@ public final class SamplerDebugHandler extends BaseApiHandler implements HttpHan
             sendError(exchange, 404, "not found");
             return;
         }
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         Map<String, Object> body = runOnMain(mc -> buildBody(mc, target));
         if (body == null) {
             sendError(exchange, 404, "observer not found");

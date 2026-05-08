@@ -279,6 +279,31 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         }
     }
 
+    /**
+     * 向服务端请求 Web 访问 Token；服务端回传 {@link com.yuyinrl.resourceobserver.network.WebTokenPayload}
+     * 后由 {@link #applyWebToken} 弹出 {@link WebAccessDialog}。
+     *
+     * @param regenerate true 表示强制重新签发，作废旧 Token
+     */
+    public void requestWebToken(boolean regenerate) {
+        try {
+            PacketDistributor.sendToServer(
+                    new com.yuyinrl.resourceobserver.network.RequestWebTokenPayload(regenerate));
+        } catch (Throwable e) {
+            ResourceObserverMod.LOGGER.debug("Web token request failed", e);
+        }
+    }
+
+    /** 收到服务端推送的 Token 数据后弹出 Web 访问对话框。 */
+    public void applyWebToken(com.yuyinrl.resourceobserver.network.WebTokenPayload payload) {
+        View root = getView();
+        if (root == null) {
+            WebAccessDialog.show(this, payload);
+            return;
+        }
+        root.post(() -> WebAccessDialog.show(this, payload));
+    }
+
     public boolean isTextInputActive() { return textInputActive; }
     public void setTextInputActive(boolean active) { this.textInputActive = active; }
 
@@ -687,6 +712,11 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         }
 
         chrome.addView(spacer(chrome), spacerParams());
+
+        // Web Dashboard 访问 Token 入口
+        TextView webBtn = chromeIconButton(this, "\uD83C\uDF10", false);
+        webBtn.setOnClickListener(v -> requestWebToken(false));
+        chrome.addView(webBtn);
 
         TextView sizeBtn = chromeIconButton(this, SCALE_LABELS[scaleModeIndex], false);
         sizeBtn.setOnClickListener(v -> {

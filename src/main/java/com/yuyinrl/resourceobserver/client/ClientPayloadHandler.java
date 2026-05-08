@@ -4,6 +4,7 @@ import com.yuyinrl.resourceobserver.client.modernui.ResourceTerminalFragment;
 import com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreen;
 import com.yuyinrl.resourceobserver.network.CraftingPlanResultPayload;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import com.yuyinrl.resourceobserver.network.WebTokenPayload;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.client.Minecraft;
 
@@ -59,6 +60,22 @@ public final class ClientPayloadHandler {
         ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
         if (modernFragment != null) {
             modernFragment.applyCraftingTreeResponse(payload);
+        }
+    }
+
+    /**
+     * 处理服务端推送的 Web 访问 Token / 链接：交给当前活跃的 ModernUI Fragment 弹出对话框。
+     * 若 Fragment 未活跃则回退到原生 Screen；都不在则记录日志（玩家未打开终端时不应收到此包）。
+     */
+    public static void handleWebToken(WebTokenPayload payload) {
+        ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
+        if (modernFragment != null) {
+            modernFragment.applyWebToken(payload);
+            return;
+        }
+        Screen current = Minecraft.getInstance().screen;
+        if (current instanceof ResourceTerminalScreen terminalScreen) {
+            terminalScreen.applyWebToken(payload);
         }
     }
 }

@@ -186,6 +186,8 @@ public class ResourceTerminalItem extends Item {
             if (!sendObserverData(serverPlayer, level, pos, debugPreferred, ChartWindow.DAY_24H_5M, ChartScope.GLOBAL, "")) {
                 serverPlayer.sendSystemMessage(Component.translatable("message.resourceobserver.terminal_observer_missing"));
             }
+            // 首次打开终端时推送一条带 ClickEvent 的聊天链接，方便玩家直接进入 Web Dashboard
+            com.yuyinrl.resourceobserver.web.auth.WebTokenService.pushFirstUseChatIfNeeded(serverPlayer);
         }
         return InteractionResultHolder.sidedSuccess(stack, level.isClientSide);
     }

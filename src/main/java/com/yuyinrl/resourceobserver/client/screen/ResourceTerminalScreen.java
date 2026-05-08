@@ -293,6 +293,21 @@ public class ResourceTerminalScreen extends Screen {
         updateButtonStates();
     }
 
+    /**
+     * 应用服务端推送的 Web Token 数据 —— 原生 Screen 回退实现：
+     * 直接把链接拷到剪贴板并在系统聊天提示玩家，避免在原生界面上重新搭建对话框。
+     */
+    public void applyWebToken(com.yuyinrl.resourceobserver.network.WebTokenPayload payload) {
+        try {
+            String url = payload.url() == null || payload.url().isBlank() ? payload.baseUrl() : payload.url();
+            net.minecraft.client.Minecraft.getInstance().keyboardHandler.setClipboard(url);
+            net.minecraft.client.Minecraft.getInstance().player.displayClientMessage(
+                    net.minecraft.network.chat.Component.translatable(
+                            "message.resourceobserver.web_access.copied"), false);
+        } catch (Throwable ignored) {
+        }
+    }
+
     @Override
     protected void init() {
         super.init();
