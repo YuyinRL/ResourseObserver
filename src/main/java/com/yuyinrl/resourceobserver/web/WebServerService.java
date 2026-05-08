@@ -50,14 +50,17 @@ public final class WebServerService {
         this.corsAllowAll = corsAllowAll;
     }
 
+    /** 当前关联的 Minecraft 服务端实例 —— 处理器需要它来切回主线程。 */
     public MinecraftServer minecraftServer() {
         return mcServer;
     }
 
+    /** 是否对 /api/* 响应附加 {@code Access-Control-Allow-Origin: *}。 */
     public boolean corsAllowAll() {
         return corsAllowAll;
     }
 
+    /** 全局唯一实例；服务未启动时返回 {@code null}。 */
     public static @Nullable WebServerService instance() {
         return INSTANCE;
     }
@@ -91,6 +94,12 @@ public final class WebServerService {
         private Lifecycle() {
         }
 
+        /**
+         * Minecraft 服务端启动后启动 HTTP 服务。
+         * <p>
+         * 步骤：①后台扫描 mod jar 资源（lang/textures） ②创建 {@link HttpServer}
+         * ③安装路由 ④用 4 线程 daemon pool 启动监听。配置禁用或端口冲突时记日志后跳过。
+         */
         @SubscribeEvent
         public static void onServerStarted(ServerStartedEvent event) {
             if (INSTANCE != null) {
@@ -132,6 +141,7 @@ public final class WebServerService {
             }
         }
 
+        /** 服务端关停前优雅停止 HTTP 服务，释放端口。 */
         @SubscribeEvent
         public static void onServerStopping(ServerStoppingEvent event) {
             WebServerService svc = INSTANCE;
@@ -146,6 +156,7 @@ public final class WebServerService {
         }
     }
 
+    /** 注册各 endpoint 路由 —— 由 {@link Lifecycle#onServerStarted} 在创建本实例后调用一次。 */
     private void installRoutes() {
         HealthHandler health = new HealthHandler(this);
         MetaHandler meta = new MetaHandler(this);
@@ -165,6 +176,10 @@ public final class WebServerService {
         server.createContext("/", staticHandler);
     }
 
+    /**
+     * /api/observers 路径下的子路由分派 —— 按 URL 末段匹配到对应处理器。
+     * <p>OPTIONS 预检直接返回 204；其它方法交由具体 handler 自行校验 GET/POST。</p>
+     */
     private void dispatchObservers(HttpExchange ex, ObserversHandler observers, CraftingHandler crafting,
                                    CraftingOrderHandler craftingOrder,
                                    HistoryHandler history, ItemsHandler items, SamplerDebugHandler samplerDebug)

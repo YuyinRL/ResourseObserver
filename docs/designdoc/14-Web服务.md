@@ -28,22 +28,31 @@ com.yuyinrl.resourceobserver.web
 ├─ WebServerConfig      # TOML 配置（enabled/host/port/corsAllowAll）
 ├─ WebServerService     # HttpServer 封装，绑定生命周期事件
 ├─ JsonWriter           # 极简 JSON 序列化器（Map/Iterable/Number/String）
+├─ util/
+│   └─ QueryUtil        # HTTP 查询字符串解析（parseQuery / urlDecode）
 └─ handler/
    ├─ BaseApiHandler    # 主线程切换 + 路径解析工具
    ├─ HealthHandler     # GET /api/health
    ├─ IconHandler       # GET /api/icon/{namespace}/{path}
+   ├─ ItemsHandler      # GET /api/observers/{...}/items
+   ├─ HistoryHandler    # GET /api/observers/{...}/history
+   ├─ MetaHandler       # GET /api/meta
    ├─ ObserversHandler  # GET /api/observers[/{dim}/{x}/{y}/{z}]
    ├─ CraftingHandler   # GET /api/observers/{...}/crafting
    ├─ CraftingOrderHandler # POST /api/observers/{...}/crafting/{plan|confirm|cancel|tree}
-   ├─ ItemNameResolver  # itemId -> translationKey/displayName 解析
+   ├─ SamplerDebugHandler  # GET /api/observers/{...}/debug/sampler
+   ├─ ItemNameResolver  # itemId → translationKey/displayName 解析
    ├─ ServerAssetIndex  # 预加载 mod jar lang 资源（zh_cn/en_us）
    └─ StaticHandler     # GET / (静态资源 assets/resourceobserver/web/)
 ```
 
-- 合成采集由 `integration.CraftingDataCollector` / `CraftingOrderService` 直接调用
-  AE2 API（`ICraftingService`、`ICraftingCPU`、`AEKey`、`AEFluidKey`），支持计划计算、样板过滤与流体键。
-- Observer 枚举通过 `ObserverBlockEntity` 的静态 `LOADED` 注册表，
-  在 `onLoad()/setRemoved()` 中自动增删，避免扫描区块。
+另外，`service.ObserverService` 提供 Web 与 BlockEntity 之间的桥接层：
+```java
+ObserverService.listObservers()            // 枚举所有已加载 Observer
+ObserverService.findByPos(level, pos)       // 按坐标查找 ObserverBlockEntity
+ObserverService.buildObserverSummaries()    // 生成 Observer 摘要列表
+```
+Web Handler 通过 `ObserverService.findByPos()` 获取 ObserverBlockEntity 引用，而非直接 `level.getBlockEntity()` + `instanceof` 转型。
 
 ## 🔀 生命周期
 

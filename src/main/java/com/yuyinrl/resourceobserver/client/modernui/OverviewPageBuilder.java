@@ -4,6 +4,13 @@ import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartMath;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import com.yuyinrl.resourceobserver.client.ui.render.RenderUtils;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.UiActionType;
@@ -15,7 +22,6 @@ import icyllis.modernui.animation.ObjectAnimator;
 import icyllis.modernui.animation.PropertyValuesHolder;
 import icyllis.modernui.animation.TimeInterpolator;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
-import icyllis.modernui.graphics.drawable.GradientDrawable;
 import icyllis.modernui.text.Editable;
 import icyllis.modernui.text.TextWatcher;
 import icyllis.modernui.view.Gravity;
@@ -520,7 +526,7 @@ final class OverviewPageBuilder {
         // Line mode button — opens dropdown popup
         state.modeBtn = chartToggleButton(terminal, "", true);
         state.modeBtn.setOnClickListener(v -> {
-            if (terminal.getChartPage() == ChartRenderer.ChartPage.THROUGHPUT) {
+            if (terminal.getChartPage() == ChartPage.THROUGHPUT) {
                 showLineModePopup(terminal, v, state);
             }
         });
@@ -591,12 +597,12 @@ final class OverviewPageBuilder {
         state.dataTypeGroup.addView(state.dataEnergyBtn, energyLp);
 
         // Set initial checked state
-        state.dataTypeGroup.check(terminal.getChartDataType() == ChartRenderer.ChartDataType.ITEMS
+        state.dataTypeGroup.check(terminal.getChartDataType() == ChartDataType.ITEMS
                 ? ID_DATA_ITEMS : ID_DATA_ENERGY);
 
         state.dataTypeGroup.setOnCheckedChangeListener((group, checkedId) -> {
-            ChartRenderer.ChartDataType newType = checkedId == ID_DATA_ENERGY
-                    ? ChartRenderer.ChartDataType.ENERGY : ChartRenderer.ChartDataType.ITEMS;
+            ChartDataType newType = checkedId == ID_DATA_ENERGY
+                    ? ChartDataType.ENERGY : ChartDataType.ITEMS;
             if (terminal.getChartDataType() != newType) {
                 terminal.setChartDataType(newType);
                 refreshChartSection(terminal, state);
@@ -619,10 +625,10 @@ final class OverviewPageBuilder {
         if (state == null || state.chartView == null) return;
 
         ChartWindow chartWindow = terminal.getChartWindow();
-        ChartRenderer.ChartPage chartPage = terminal.getChartPage();
-        ChartRenderer.LineMode lineMode = terminal.getChartLineMode();
-        ChartRenderer.SmoothingMode smoothingMode = terminal.getChartSmoothingMode();
-        ChartRenderer.ChartDataType chartDataType = terminal.getChartDataType();
+        ChartPage chartPage = terminal.getChartPage();
+        LineMode lineMode = terminal.getChartLineMode();
+        SmoothingMode smoothingMode = terminal.getChartSmoothingMode();
+        ChartDataType chartDataType = terminal.getChartDataType();
 
         OverviewViewModel vm = terminal.getBridge().getOverviewViewModel();
         boolean hasEnergy = vm != null && vm.energyChartSeries() != null && !vm.energyChartSeries().isEmpty();
@@ -634,21 +640,21 @@ final class OverviewPageBuilder {
         state.dataEnergyBtn.setEnabled(hasEnergy);
         state.dataEnergyBtn.setTextColor(hasEnergy ? UiThemeTokens.TEXT : UiThemeTokens.TEXT_MUTED);
         // Sync checked state without re-triggering listener
-        int expectedId = chartDataType == ChartRenderer.ChartDataType.ENERGY ? ID_DATA_ENERGY : ID_DATA_ITEMS;
+        int expectedId = chartDataType == ChartDataType.ENERGY ? ID_DATA_ENERGY : ID_DATA_ITEMS;
         if (state.dataTypeGroup.getCheckedId() != expectedId) {
             state.dataTypeGroup.check(expectedId);
         }
 
-        String pageLabel = chartPage == ChartRenderer.ChartPage.THROUGHPUT
+        String pageLabel = chartPage == ChartPage.THROUGHPUT
                 ? tr("screen.resourceobserver.overview.chart.tab.throughput")
                 : tr("screen.resourceobserver.overview.chart.tab.stock");
         state.pageBtn.setText(pageLabel);
 
-        boolean lineModeEnabled = chartPage == ChartRenderer.ChartPage.THROUGHPUT;
+        boolean lineModeEnabled = chartPage == ChartPage.THROUGHPUT;
         state.modeBtn.setText(lineModeLabel(lineMode));
         updateButtonStyle(terminal, state.modeBtn, lineModeEnabled);
 
-        String smoothLabel = smoothingMode == ChartRenderer.SmoothingMode.SMOOTH
+        String smoothLabel = smoothingMode == SmoothingMode.SMOOTH
                 ? tr("screen.resourceobserver.overview.chart.smoothing.smooth")
                 : tr("screen.resourceobserver.overview.chart.smoothing.raw");
         state.smoothBtn.setText(smoothLabel);
@@ -658,14 +664,14 @@ final class OverviewPageBuilder {
         String scopeLabel = (selectedLabel == null || selectedLabel.isBlank())
                 ? tr("screen.resourceobserver.overview.chart.scope.global")
                 : selectedLabel;
-        String subtitle = chartPage == ChartRenderer.ChartPage.STOCK
+        String subtitle = chartPage == ChartPage.STOCK
                 ? tr("screen.resourceobserver.overview.chart.subtitle.stock", scopeLabel, chartWindow.shortLabel())
                 : tr("screen.resourceobserver.overview.chart.subtitle.throughput", scopeLabel, chartWindow.shortLabel());
         state.subtitleTv.setText(subtitle);
 
         // --- Update legend ---
         state.legendLayout.removeAllViews();
-        if (chartPage == ChartRenderer.ChartPage.STOCK) {
+        if (chartPage == ChartPage.STOCK) {
             addText(state.legendLayout, tr("screen.resourceobserver.overview.chart.legend.stock"),
                     UiThemeTokens.BLUE, 9, 0, ViewGroup.LayoutParams.WRAP_CONTENT, false);
         } else {
@@ -693,7 +699,7 @@ final class OverviewPageBuilder {
         // --- Update chart data ---
         if (vm != null) {
             java.util.List<OverviewViewModel.FlowPoint> series =
-                    chartDataType == ChartRenderer.ChartDataType.ENERGY
+                    chartDataType == ChartDataType.ENERGY
                             ? vm.energyChartSeries() : vm.chartSeries();
             if (series != null && !series.isEmpty()) {
                 state.chartView.setChartData(series, chartPage, lineMode, smoothingMode);
@@ -728,7 +734,7 @@ final class OverviewPageBuilder {
         return btn;
     }
 
-    private static String lineModeLabel(ChartRenderer.LineMode mode) {
+    private static String lineModeLabel(LineMode mode) {
         return switch (mode) {
             case ALL -> tr("screen.resourceobserver.overview.chart.mode.all");
             case PRODUCTION -> tr("screen.resourceobserver.overview.chart.mode.production");
@@ -753,8 +759,8 @@ final class OverviewPageBuilder {
                                           ChartSectionState state) {
         PopupMenu popup = new PopupMenu(terminal.getContext(), anchor);
         Menu menu = popup.getMenu();
-        ChartRenderer.LineMode[] modes = ChartRenderer.LineMode.values();
-        ChartRenderer.LineMode current = terminal.getChartLineMode();
+        LineMode[] modes = LineMode.values();
+        LineMode current = terminal.getChartLineMode();
         for (int i = 0; i < modes.length; i++) {
             String label = lineModeLabel(modes[i]);
             if (modes[i] == current) label = "• " + label;
@@ -1873,35 +1879,12 @@ final class OverviewPageBuilder {
     /**
      * 在 FrameLayout 内添加顶部和底部渐隐遮罩（GradientDrawable），
      * 用于暗示 ScrollView 内容可继续滚动。
+     *
+     * @deprecated 已迁移至 {@link DialogChrome#addScrollFadeOverlays}，保留此方法以兼容内部调用。
      */
+    @Deprecated
     private static void addScrollFadeOverlays(ResourceTerminalFragment terminal, FrameLayout wrapper) {
-        int fadeH = terminal.dp(14);
-        int panelBg = UiThemeTokens.PANEL_BG;
-        int transparent = panelBg & 0x00FFFFFF; // 同色，alpha=0
-
-        // 顶部渐隐：不透明 → 透明
-        View topFade = new View(terminal.getContext());
-        GradientDrawable topGrad = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{panelBg, transparent});
-        topGrad.setCornerRadius(0);
-        topFade.setBackground(topGrad);
-        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, fadeH);
-        topLp.gravity = Gravity.TOP;
-        wrapper.addView(topFade, topLp);
-
-        // 底部渐隐：透明 → 不透明
-        View bottomFade = new View(terminal.getContext());
-        GradientDrawable bottomGrad = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{transparent, panelBg});
-        bottomGrad.setCornerRadius(0);
-        bottomFade.setBackground(bottomGrad);
-        FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, fadeH);
-        bottomLp.gravity = Gravity.BOTTOM;
-        wrapper.addView(bottomFade, bottomLp);
+        DialogChrome.addScrollFadeOverlays(terminal, wrapper);
     }
 
     /** 添加详情文本行 */

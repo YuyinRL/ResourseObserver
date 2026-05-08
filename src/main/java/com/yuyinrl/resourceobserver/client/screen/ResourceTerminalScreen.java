@@ -13,6 +13,13 @@ import com.yuyinrl.resourceobserver.client.ui.UiLayoutState;
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import com.yuyinrl.resourceobserver.client.ui.render.HeaderRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.KpiRenderer;
 import com.yuyinrl.resourceobserver.client.ui.render.PowerDebugPanelRenderer;
@@ -168,10 +175,10 @@ public class ResourceTerminalScreen extends Screen {
 
     // ========== 图表状态 ==========
     private ChartWindow chartWindow = ChartWindow.DAY_24H_5M;
-    private ChartRenderer.LineMode chartLineMode = ChartRenderer.LineMode.ALL;
-    private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
-    private ChartRenderer.SmoothingMode smoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
-    private ChartRenderer.ChartDataType chartDataType = ChartRenderer.ChartDataType.ITEMS;
+    private LineMode chartLineMode = LineMode.ALL;
+    private ChartPage chartPage = ChartPage.THROUGHPUT;
+    private SmoothingMode smoothingMode = SmoothingMode.SMOOTH;
+    private ChartDataType chartDataType = ChartDataType.ITEMS;
 
     // ========== 交互状态 ==========
     private int refreshCounter;                          // 刷新计数器
@@ -191,7 +198,7 @@ public class ResourceTerminalScreen extends Screen {
     private UiRect chartWindowButtonHitbox;
     private UiRect chartLineModeButtonHitbox;
     private UiRect chartPlotHitbox;
-    private List<ChartRenderer.ChartHoverPoint> chartHoverPoints = List.of();
+    private List<ChartHoverPoint> chartHoverPoints = List.of();
     private UiRect pageScrollTrackHitbox;
     private UiRect pageScrollThumbHitbox;
     private boolean pageScrollDragging;
@@ -457,7 +464,7 @@ public class ResourceTerminalScreen extends Screen {
             }
 
             if (button == 0 && chartLineModeButtonHitbox != null && chartLineModeButtonHitbox.contains(mouseX, mouseY)) {
-                if (chartPage == ChartRenderer.ChartPage.THROUGHPUT) {
+                if (chartPage == ChartPage.THROUGHPUT) {
                     chartLineMode = chartLineMode.next();
                 }
                 return true;
@@ -770,9 +777,9 @@ public class ResourceTerminalScreen extends Screen {
                 gfx, font, content.kpiArea(), viewModel.kpis(), kpiInteractionState, bgMouseX, bgMouseY
         );
         kpiHitboxes = kpiResult.kpiHitboxes();
-        ChartRenderer.RenderResult chartResult = ChartRenderer.render(
+        RenderResult chartResult = ChartRenderer.render(
                 gfx, font, content.chartArea(),
-                chartDataType == ChartRenderer.ChartDataType.ENERGY
+                chartDataType == ChartDataType.ENERGY
                         ? viewModel.energyChartSeries()
                         : viewModel.chartSeries(),
                 selectedItemDisplayName(), chartWindow, chartLineMode, chartPage, smoothingMode,
@@ -2354,7 +2361,7 @@ public class ResourceTerminalScreen extends Screen {
         if (!chartPlotHitbox.contains(mouseX, mouseY)) {
             return;
         }
-        ChartRenderer.ChartHoverPoint hoverPoint = findNearestChartHoverPoint(mouseX, mouseY);
+        ChartHoverPoint hoverPoint = findNearestChartHoverPoint(mouseX, mouseY);
         if (hoverPoint == null) {
             return;
         }
@@ -2366,11 +2373,11 @@ public class ResourceTerminalScreen extends Screen {
         gfx.renderTooltip(font, lines, Optional.empty(), mouseX, mouseY);
     }
 
-    private ChartRenderer.ChartHoverPoint findNearestChartHoverPoint(int mouseX, int mouseY) {
+    private ChartHoverPoint findNearestChartHoverPoint(int mouseX, int mouseY) {
         double thresholdSqr = CHART_HOVER_RADIUS_PX * CHART_HOVER_RADIUS_PX;
-        ChartRenderer.ChartHoverPoint nearest = null;
+        ChartHoverPoint nearest = null;
         double nearestSqr = thresholdSqr;
-        for (ChartRenderer.ChartHoverPoint point : chartHoverPoints) {
+        for (ChartHoverPoint point : chartHoverPoints) {
             double px = chartPlotHitbox.x() + point.x();
             double py = chartPlotHitbox.y() + point.y();
             double dx = mouseX - px;
@@ -2384,7 +2391,7 @@ public class ResourceTerminalScreen extends Screen {
         return nearest;
     }
 
-    private Component chartSeriesLabel(ChartRenderer.ChartSeriesType seriesType) {
+    private Component chartSeriesLabel(ChartSeriesType seriesType) {
         return switch (seriesType) {
             case PRODUCTION -> Component.translatable("screen.resourceobserver.overview.chart.legend.production");
             case CONSUMPTION -> Component.translatable("screen.resourceobserver.overview.chart.legend.consumption");

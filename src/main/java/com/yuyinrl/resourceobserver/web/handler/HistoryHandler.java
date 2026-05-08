@@ -8,6 +8,7 @@ import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.web.util.QueryUtil;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.world.history.WebHighPrecisionSampler;
@@ -42,6 +43,9 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
         super(server);
     }
 
+    /**
+     * 处理 GET 请求 —— 解析 Observer 路径，切到主线程构造响应。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -72,6 +76,10 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
         sendJson(exchange, 200, body);
     }
 
+    /**
+     * 在主线程上构造响应体；找不到 level 或 observer 时返回 {@code null}（由调用方转为 404）。
+     * <p>detail 档优先走 {@link WebHighPrecisionSampler}（0.25 秒桶 + 3 秒滑窗）；其它档走 {@link HistoryRecorder}。</p>
+     */
     private @Nullable Map<String, Object> buildBody(MinecraftServer mc, ObserverTarget target,
                                                     ChartWindow window, ChartWindow visibleWindow, ChartScope scope,
                                                     @Nullable String itemId) {
@@ -80,7 +88,7 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
         ObserverBlockEntity observer = ObserverService.findByPos(level, target.pos()).orElse(null);
         if (observer == null) return null;
 
-        List<ObserverBlockEntity.BoundEntry> bindings = itemChartBindings(observer.getBindings());
+        List<BoundEntry> bindings = itemChartBindings(observer.getBindings());
         if (visibleWindow == ChartWindow.WEB_DETAIL_1M_1S) {
             WebHighPrecisionSampler.registerDemand(level, target.pos(), itemId);
             WebHighPrecisionSampler.QueryResult highPrecision =
@@ -248,9 +256,9 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
     }
 
     /** Web Overview 的资源曲线只聚合物品/流体网络，避免能源网络污染物品流转曲线。 */
-    private static List<ObserverBlockEntity.BoundEntry> itemChartBindings(List<ObserverBlockEntity.BoundEntry> bindings) {
-        List<ObserverBlockEntity.BoundEntry> out = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : bindings) {
+    private static List<BoundEntry> itemChartBindings(List<BoundEntry> bindings) {
+        List<BoundEntry> out = new ArrayList<>();
+        for (BoundEntry binding : bindings) {
             if (!"FLUX_ENERGY".equals(binding.networkType()) && !"MEK_ENERGY".equals(binding.networkType())) {
                 out.add(binding);
             }

@@ -7,7 +7,6 @@ import icyllis.modernui.animation.ObjectAnimator;
 import icyllis.modernui.text.TextUtils;
 import icyllis.modernui.animation.PropertyValuesHolder;
 import icyllis.modernui.animation.TimeInterpolator;
-import icyllis.modernui.graphics.drawable.GradientDrawable;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
 import icyllis.modernui.view.Gravity;
 import icyllis.modernui.view.View;
@@ -2256,32 +2255,11 @@ final class PowerNetworkPageBuilder {
     /**
      * 在 FrameLayout 内添加顶部和底部渐隐遮罩（GradientDrawable），
      * 用于暗示 ScrollView 内容可继续滚动，并防止内容与标题重叠。
+     *
+     * @deprecated 已迁移至 {@link DialogChrome#addScrollFadeOverlays}，保留此方法以兼容内部调用。
      */
+    @Deprecated
     private static void addScrollFadeOverlays(ResourceTerminalFragment terminal, FrameLayout wrapper) {
-        int fadeH = terminal.dp(14);
-        int panelBg = UiThemeTokens.PANEL_BG;
-        int transparent = panelBg & 0x00FFFFFF;
-
-        View topFade = new View(terminal.getContext());
-        GradientDrawable topGrad = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{panelBg, transparent});
-        topGrad.setCornerRadius(0);
-        topFade.setBackground(topGrad);
-        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, fadeH);
-        topLp.gravity = Gravity.TOP;
-        wrapper.addView(topFade, topLp);
-
-        View bottomFade = new View(terminal.getContext());
-        GradientDrawable bottomGrad = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{transparent, panelBg});
-        bottomGrad.setCornerRadius(0);
-        bottomFade.setBackground(bottomGrad);
-        FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, fadeH);
-        bottomLp.gravity = Gravity.BOTTOM;
-        wrapper.addView(bottomFade, bottomLp);
+        DialogChrome.addScrollFadeOverlays(terminal, wrapper);
     }
 }

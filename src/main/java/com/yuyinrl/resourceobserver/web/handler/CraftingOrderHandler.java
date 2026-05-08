@@ -8,7 +8,7 @@ import com.yuyinrl.resourceobserver.integration.CraftingOrderService.PlanResult;
 import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -40,6 +40,10 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
         super(server);
     }
 
+    /**
+     * /api/observers/{id}/crafting/{plan|confirm|cancel|tree} —— 合成订单四类操作的统一入口。
+     * 解析 URL 末段后路由到对应私有方法。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {

@@ -8,6 +8,13 @@ import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModel;
 import com.yuyinrl.resourceobserver.client.ui.TerminalPage;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
@@ -75,10 +82,10 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
     private final ViewModelBridge bridge;
     private TerminalPage activePage = TerminalPage.OVERVIEW;
     private ChartWindow chartWindow;
-    private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
-    private ChartRenderer.LineMode chartLineMode = ChartRenderer.LineMode.ALL;
-    private ChartRenderer.SmoothingMode chartSmoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
-    private ChartRenderer.ChartDataType chartDataType = ChartRenderer.ChartDataType.ITEMS;
+    private ChartPage chartPage = ChartPage.THROUGHPUT;
+    private LineMode chartLineMode = LineMode.ALL;
+    private SmoothingMode chartSmoothingMode = SmoothingMode.SMOOTH;
+    private ChartDataType chartDataType = ChartDataType.ITEMS;
     private String selectedItemId;
     private final Set<String> selectedItemIds = new LinkedHashSet<>();
 
@@ -306,17 +313,17 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
     public ChartWindow getChartWindow() { return chartWindow; }
     public void setChartWindow(ChartWindow w) { this.chartWindow = w; }
 
-    public ChartRenderer.ChartPage getChartPage() { return chartPage; }
-    public void setChartPage(ChartRenderer.ChartPage p) { this.chartPage = p; }
+    public ChartPage getChartPage() { return chartPage; }
+    public void setChartPage(ChartPage p) { this.chartPage = p; }
 
-    public ChartRenderer.LineMode getChartLineMode() { return chartLineMode; }
-    public void setChartLineMode(ChartRenderer.LineMode m) { this.chartLineMode = m; }
+    public LineMode getChartLineMode() { return chartLineMode; }
+    public void setChartLineMode(LineMode m) { this.chartLineMode = m; }
 
-    public ChartRenderer.SmoothingMode getChartSmoothingMode() { return chartSmoothingMode; }
-    public void setChartSmoothingMode(ChartRenderer.SmoothingMode s) { this.chartSmoothingMode = s; }
+    public SmoothingMode getChartSmoothingMode() { return chartSmoothingMode; }
+    public void setChartSmoothingMode(SmoothingMode s) { this.chartSmoothingMode = s; }
 
-    public ChartRenderer.ChartDataType getChartDataType() { return chartDataType; }
-    public void setChartDataType(ChartRenderer.ChartDataType dt) { this.chartDataType = dt; }
+    public ChartDataType getChartDataType() { return chartDataType; }
+    public void setChartDataType(ChartDataType dt) { this.chartDataType = dt; }
 
     public String getSelectedItemId() { return selectedItemId; }
     public void setSelectedItemId(String id) {

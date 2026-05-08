@@ -24,6 +24,7 @@ public final class MetaHandler extends BaseApiHandler implements HttpHandler {
         super(server);
     }
 
+    /** /api/meta —— 返回 mod 元信息与可选集成可用性。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {

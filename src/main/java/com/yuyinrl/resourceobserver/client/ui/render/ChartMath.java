@@ -1,6 +1,13 @@
 package com.yuyinrl.resourceobserver.client.ui.render;
 
-import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
+
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -35,7 +42,7 @@ public final class ChartMath {
 
     /** 悬停点数据 */
     public record HoverPoint(
-            ChartRenderer.ChartSeriesType seriesType,
+            ChartSeriesType seriesType,
             double x, double y,
             int slotIndex, double value
     ) {}
@@ -222,7 +229,7 @@ public final class ChartMath {
     // ========== 范围计算 ==========
 
     /** 计算吞吐量模式下所有可见系列的数值范围 */
-    public static Range rangeThroughput(ChartRenderer.LineMode mode, double[] p, double[] c, double[] n, boolean[] mask) {
+    public static Range rangeThroughput(LineMode mode, double[] p, double[] c, double[] n, boolean[] mask) {
         double min = Double.POSITIVE_INFINITY;
         double max = Double.NEGATIVE_INFINITY;
         for (int i = 0; i < p.length; i++) {
@@ -337,9 +344,9 @@ public final class ChartMath {
     public static PreparedChart prepareChart(
             int plotWidth, int plotHeight,
             List<OverviewViewModel.FlowPoint> series,
-            ChartRenderer.ChartPage page,
-            ChartRenderer.LineMode lineMode,
-            ChartRenderer.SmoothingMode smoothingMode,
+            ChartPage page,
+            LineMode lineMode,
+            SmoothingMode smoothingMode,
             float curveSubdivision,
             int sampleScale
     ) {
@@ -364,7 +371,7 @@ public final class ChartMath {
             sm[i] = fp.hasStock();
         }
 
-        boolean smooth = smoothingMode == ChartRenderer.SmoothingMode.SMOOTH;
+        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
         RectBounds bounds = new RectBounds(
                 plotMinX(sampleScale), plotMinY(sampleScale),
                 maxCoordX(plotWidth, sampleScale), maxCoordY(plotHeight, sampleScale)
@@ -374,7 +381,7 @@ public final class ChartMath {
         List<HoverPoint> hoverPoints = new ArrayList<>();
         Double zeroAxisY = null;
 
-        if (page == ChartRenderer.ChartPage.THROUGHPUT) {
+        if (page == ChartPage.THROUGHPUT) {
             double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
             double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
             double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
@@ -387,24 +394,24 @@ public final class ChartMath {
                 );
             }
             if (lineMode.showProduction()) {
-                addSeries(preparedSeries, hoverPoints, ChartRenderer.ChartSeriesType.PRODUCTION,
+                addSeries(preparedSeries, hoverPoints, ChartSeriesType.PRODUCTION,
                         series, ps, fm, range, plotWidth, plotHeight, sampleScale, curveSubdivision, smooth,
                         com.yuyinrl.resourceobserver.client.ui.UiThemeTokens.CYAN);
             }
             if (lineMode.showConsumption()) {
-                addSeries(preparedSeries, hoverPoints, ChartRenderer.ChartSeriesType.CONSUMPTION,
+                addSeries(preparedSeries, hoverPoints, ChartSeriesType.CONSUMPTION,
                         series, cs, fm, range, plotWidth, plotHeight, sampleScale, curveSubdivision, smooth,
                         com.yuyinrl.resourceobserver.client.ui.UiThemeTokens.AMBER);
             }
             if (lineMode.showNet()) {
-                addSeries(preparedSeries, hoverPoints, ChartRenderer.ChartSeriesType.NET,
+                addSeries(preparedSeries, hoverPoints, ChartSeriesType.NET,
                         series, ns, fm, range, plotWidth, plotHeight, sampleScale, curveSubdivision, smooth,
                         com.yuyinrl.resourceobserver.client.ui.UiThemeTokens.EMERALD);
             }
         } else {
             double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
             Range range = rangeSingle(ss, sm);
-            addSeries(preparedSeries, hoverPoints, ChartRenderer.ChartSeriesType.STOCK,
+            addSeries(preparedSeries, hoverPoints, ChartSeriesType.STOCK,
                     series, ss, sm, range, plotWidth, plotHeight, sampleScale, curveSubdivision, smooth,
                     com.yuyinrl.resourceobserver.client.ui.UiThemeTokens.BLUE);
         }
@@ -418,7 +425,7 @@ public final class ChartMath {
 
     private static void addSeries(
             List<PreparedSeries> outSeries, List<HoverPoint> outHover,
-            ChartRenderer.ChartSeriesType type,
+            ChartSeriesType type,
             List<OverviewViewModel.FlowPoint> source,
             double[] values, boolean[] valid, Range range,
             int plotWidth, int plotHeight, int sampleScale,
@@ -436,7 +443,7 @@ public final class ChartMath {
     }
 
     private static void appendHoverPoints(
-            List<HoverPoint> out, ChartRenderer.ChartSeriesType type,
+            List<HoverPoint> out, ChartSeriesType type,
             List<OverviewViewModel.FlowPoint> source,
             double[] values, boolean[] valid,
             double min, double max,

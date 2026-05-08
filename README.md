@@ -137,11 +137,22 @@ pnpm build
 ├── src/main/java/          # Java 模组代码
 │   └── com/yuyinrl/resourceobserver/
 │       ├── client/         # 客户端 UI（ModernUI Fragment / Vanilla Screen）
+│       │   ├── modernui/   # ModernUI Canvas 页面
+│       │   ├── ui/         # ViewModel + render/ + format/
+│       │   └── web/        # IconRenderer 客户端图标渲染
 │       ├── integration/    # 模组集成适配器
 │       ├── network/        # 网络 Payload（record 类型）
 │       ├── registry/       # DeferredRegister 注册
+│       ├── service/        # Web ↔ BlockEntity 桥接层（v0.8.0）
 │       ├── web/            # 内置 HTTP 服务
+│       │   ├── handler/    # API 端点处理器
+│       │   └── util/       # QueryUtil 工具
 │       └── world/          # 方块 / 实体 / 物品 / 数据
+│           └── block/entity/
+│               ├── ObserverBlockEntity   # 主实体（1083 行，委托架构）
+│               ├── Ae2DataStore          # 采样数据容器
+│               ├── Ae2Sampler            # AE2 采样器
+│               └── Ae2CellProber         # Cell 反射探测
 ├── src/main/resources/     # 资源文件（纹理、语言、Web 静态文件）
 ├── Data Visualization Dashboard/  # Web 仪表盘前端（Vite + React）
 ├── docs/designdoc/         # 设计文档（Obsidian 兼容）
@@ -154,6 +165,8 @@ pnpm build
 - Java 21 特性（record、模式匹配、密封类）
 - DeferredRegister 注册模式
 - 适配器模式集成可选模组
+- 委托模式分离采样/探测逻辑（Ae2Sampler / Ae2CellProber）
+- 服务桥接层隔离 Web ↔ BlockEntity 耦合（ObserverService）
 - 详见 `docs/designdoc/11-代码规范.md`
 
 ---
@@ -164,7 +177,7 @@ pnpm build
 
 | 依赖 | 版本 | 类型 |
 |------|------|------|
-| NeoForge | 1.21.1-21.1.206 | 平台 |
+| NeoForge | 1.21.1-21.1.206+ | 平台 |
 | AE2 (Applied Energistics 2) | — | 必需 |
 | ModernUI (icyllis) | 3.12.0 | 必需（客户端） |
 | Flux Networks | — | 可选 |

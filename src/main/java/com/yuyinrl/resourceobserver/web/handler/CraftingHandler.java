@@ -10,7 +10,7 @@ import com.yuyinrl.resourceobserver.integration.CraftingDataCollector.CraftingSt
 import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -32,6 +32,7 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
         super(server);
     }
 
+    /** /api/observers/{id}/crafting —— 返回 AE2 合成 CPU 列表与运行中任务快照。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {

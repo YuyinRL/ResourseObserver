@@ -7,6 +7,10 @@ import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.world.block.ObserverBlock;
+import com.yuyinrl.resourceobserver.world.block.entity.NetworkRef;
+import com.yuyinrl.resourceobserver.world.block.entity.Ae2CellCapacityMetrics;
+import com.yuyinrl.resourceobserver.world.block.entity.BindingStats;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
@@ -216,13 +220,7 @@ public class ResourceTerminalItem extends Item {
 
     /** 从 networkId（格式 "blockId@posLong"）中解析目标方块坐标 */
     private static BlockPos extractPosFromNetworkId(String networkId) {
-        int atIdx = networkId.lastIndexOf('@');
-        if (atIdx < 0) return null;
-        try {
-            return BlockPos.of(Long.parseLong(networkId.substring(atIdx + 1)));
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        return NetworkRef.extractPos(networkId);
     }
 
     @Override
@@ -335,13 +333,13 @@ public class ResourceTerminalItem extends Item {
     ) {
         // 获取玩家 UI 偏好快照（关注列表、分组、排序模式等）
         PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs = PlayerUiPrefsSavedData.get(level).getSnapshot(player.getUUID());
-        List<ObserverBlockEntity.BoundEntry> effectiveBindings = deduplicateBindingsForPayload(observer);
+        List<BoundEntry> effectiveBindings = deduplicateBindingsForPayload(observer);
 
         // 构建各绑定网络的数据条目
         List<ObserverDataPayload.BindingEntry> entries = new ArrayList<>();
         List<ObserverDataPayload.CraftingBindingData> craftingBindings = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : effectiveBindings) {
-            ObserverBlockEntity.BindingStats stats = observer.getStatsFor(binding.networkId());
+        for (BoundEntry binding : effectiveBindings) {
+            BindingStats stats = observer.getStatsFor(binding.networkId());
             List<ObserverDataPayload.ItemDeltaEntry> itemDeltas = buildItemDeltas(binding, observer, uiPrefs);
             ObserverDataPayload.KpiWindowStats kpiWindowStats = observer.getKpiStats(binding.networkId());
             entries.add(new ObserverDataPayload.BindingEntry(
@@ -453,14 +451,14 @@ public class ResourceTerminalItem extends Item {
     private static ChartSeriesResult buildChartSeries(
             ServerLevel level,
             BlockPos observerPos,
-            List<ObserverBlockEntity.BoundEntry> effectiveBindings,
+            List<BoundEntry> effectiveBindings,
             ChartWindow chartWindow,
             ChartScope chartScope,
             String scopeItemId
     ) {
-        List<ObserverBlockEntity.BoundEntry> itemBindings = new ArrayList<>();
-        List<ObserverBlockEntity.BoundEntry> energyBindings = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : effectiveBindings) {
+        List<BoundEntry> itemBindings = new ArrayList<>();
+        List<BoundEntry> energyBindings = new ArrayList<>();
+        for (BoundEntry binding : effectiveBindings) {
             if ("FLUX_ENERGY".equals(binding.networkType())) {
                 energyBindings.add(binding);
             } else {
@@ -492,7 +490,7 @@ public class ResourceTerminalItem extends Item {
      * AE2_ITEMS：从观察者读取库存和速率数据；FLUX_ENERGY：从采样结果构建能量指标。
      */
     private static List<ObserverDataPayload.ItemDeltaEntry> buildItemDeltas(
-            ObserverBlockEntity.BoundEntry binding,
+            BoundEntry binding,
             ObserverBlockEntity observer,
             PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
     ) {
@@ -506,7 +504,7 @@ public class ResourceTerminalItem extends Item {
 
     /** 构建 AE2 物品存储网络的每种物品增量数据 */
     private static List<ObserverDataPayload.ItemDeltaEntry> buildAe2ItemDeltas(
-            ObserverBlockEntity.BoundEntry binding,
+            BoundEntry binding,
             ObserverBlockEntity observer,
             PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
     ) {
@@ -561,7 +559,7 @@ public class ResourceTerminalItem extends Item {
 
     /** 构建 Flux Networks 能量网络的能量指标和设备级增量数据 */
     private static List<ObserverDataPayload.ItemDeltaEntry> buildFluxEnergyDeltas(
-            ObserverBlockEntity.BoundEntry binding,
+            BoundEntry binding,
             ObserverBlockEntity observer
     ) {
         List<ObserverDataPayload.ItemDeltaEntry> itemDeltas = new ArrayList<>();
@@ -710,7 +708,7 @@ public class ResourceTerminalItem extends Item {
     }
 
     /** 根据网络类型返回绑定的显示名称 */
-    private static String bindingDisplayName(ObserverBlockEntity.BoundEntry binding) {
+    private static String bindingDisplayName(BoundEntry binding) {
         if ("AE2_ITEMS".equals(binding.networkType())) {
             return "Storage Network";     // AE2 物品存储网络
         }
@@ -721,7 +719,7 @@ public class ResourceTerminalItem extends Item {
     }
 
     /** 优先使用玩家自定义名称，无自定义名称时回退到默认名称 */
-    private static String resolveBindingDisplayName(ObserverBlockEntity.BoundEntry binding,
+    private static String resolveBindingDisplayName(BoundEntry binding,
                                                      PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs) {
         String custom = uiPrefs.customNameForNetwork(binding.networkId());
         if (custom != null && !custom.isBlank()) {
@@ -731,7 +729,7 @@ public class ResourceTerminalItem extends Item {
     }
 
     /** 根据网络类型返回对应的图标精灵路径 */
-    private static String bindingIcon(ObserverBlockEntity.BoundEntry binding) {
+    private static String bindingIcon(BoundEntry binding) {
         if ("AE2_ITEMS".equals(binding.networkType())) {
             return "resourceobserver:terminal/kpi_storage";
         }
@@ -741,15 +739,15 @@ public class ResourceTerminalItem extends Item {
         return "resourceobserver:terminal/kpi_efficiency";
     }
 
-    private static List<ObserverBlockEntity.BoundEntry> deduplicateBindingsForPayload(ObserverBlockEntity observer) {
-        List<ObserverBlockEntity.BoundEntry> source = observer.getBindings();
+    private static List<BoundEntry> deduplicateBindingsForPayload(ObserverBlockEntity observer) {
+        List<BoundEntry> source = observer.getBindings();
         if (source.size() <= 1) {
             return source;
         }
 
         Set<IGrid> seenAe2Grids = Collections.newSetFromMap(new IdentityHashMap<>());
-        List<ObserverBlockEntity.BoundEntry> deduped = new ArrayList<>(source.size());
-        for (ObserverBlockEntity.BoundEntry binding : source) {
+        List<BoundEntry> deduped = new ArrayList<>(source.size());
+        for (BoundEntry binding : source) {
             if (!"AE2_ITEMS".equals(binding.networkType())) {
                 deduped.add(binding);
                 continue;
@@ -764,12 +762,12 @@ public class ResourceTerminalItem extends Item {
 
     private static ObserverDataPayload.CellCapacityMetrics toCellCapacityMetrics(
             ObserverBlockEntity observer,
-            ObserverBlockEntity.BoundEntry binding
+            BoundEntry binding
     ) {
         if (!"AE2_ITEMS".equals(binding.networkType())) {
             return ObserverDataPayload.CellCapacityMetrics.unavailable();
         }
-        ObserverBlockEntity.Ae2CellCapacityMetrics metrics = observer.getAe2CellCapacityMetricsFor(binding.networkId());
+        Ae2CellCapacityMetrics metrics = observer.getAe2CellCapacityMetricsFor(binding.networkId());
         return new ObserverDataPayload.CellCapacityMetrics(
                 metrics.itemUsedBytes(),
                 metrics.itemTotalBytes(),

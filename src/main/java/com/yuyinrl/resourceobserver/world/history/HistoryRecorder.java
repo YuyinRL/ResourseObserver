@@ -3,6 +3,7 @@ package com.yuyinrl.resourceobserver.world.history;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.resources.ResourceLocation;
@@ -33,7 +34,7 @@ public final class HistoryRecorder {
     public static void recordSample(
             ServerLevel level,
             BlockPos observerPos,
-            ObserverBlockEntity.BoundEntry binding,
+            BoundEntry binding,
             long producedDelta,
             long consumedDelta,
             long currentStock,
@@ -60,14 +61,14 @@ public final class HistoryRecorder {
     public static List<ObserverDataPayload.ChartPoint> querySeries(
             ServerLevel level,
             BlockPos observerPos,
-            List<ObserverBlockEntity.BoundEntry> bindings,
+            List<BoundEntry> bindings,
             ChartWindow window,
             ChartScope scope,
             String scopeItemId
     ) {
         // 为所有绑定生成对应的历史键
         List<String> keys = new ArrayList<>(bindings.size());
-        for (ObserverBlockEntity.BoundEntry binding : bindings) {
+        for (BoundEntry binding : bindings) {
             keys.add(historyKey(level, observerPos, binding.networkId()));
         }
         // 根据作用域确定是否查询单物品数据
@@ -80,7 +81,7 @@ public final class HistoryRecorder {
     public static ObserverDataPayload.KpiWindowStats queryWindowStats(
             ServerLevel level,
             BlockPos observerPos,
-            ObserverBlockEntity.BoundEntry binding,
+            BoundEntry binding,
             ChartWindow window
     ) {
         String key = historyKey(level, observerPos, binding.networkId());

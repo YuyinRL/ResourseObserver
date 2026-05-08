@@ -40,6 +40,7 @@ public final class IconHandler extends BaseApiHandler implements HttpHandler {
         return FMLEnvironment.dist == Dist.CLIENT;
     }
 
+    /** /api/icon/{itemId} —— 渲染物品图标 PNG 并强缓存返回。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {

@@ -6,9 +6,9 @@ import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BindingStats;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.Ae2CellCapacityMetrics;
+import com.yuyinrl.resourceobserver.world.block.entity.BindingStats;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
+import com.yuyinrl.resourceobserver.world.block.entity.Ae2CellCapacityMetrics;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -30,6 +30,9 @@ public final class ObserversHandler extends BaseApiHandler implements HttpHandle
         super(server);
     }
 
+    /**
+     * /api/observers 与 /api/observers/{id} —— 列表与详情统一入口，按路径段决定走哪条分支。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {

@@ -9,8 +9,9 @@ import java.util.Map;
 /**
  * AE2 采样数据容器 —— 从 ObserverBlockEntity 中提取，集中管理所有采样状态 Map 和速率计算。
  * <p>
- * 所有 Map 字段使用包级可见性，ObserverBlockEntity 在 Phase 1 仍可通过
- * {@code dataStore.xxxField} 直接访问。未来 Phase 2 将收紧为封装访问。
+ * 字段使用包级可见性，仅在同一包内的 {@link Ae2Sampler} 可直接读写；包外（OBE / FluxSampler /
+ * Web Handler 等）必须通过本类的访问器/领域方法（{@link #getCellCapacityMetrics}、
+ * {@link #cachedSnapshotSize}、{@link #clearCellCapacityMetrics} 等）来读写。
  */
 public class Ae2DataStore {
 
@@ -42,8 +43,7 @@ public class Ae2DataStore {
 
     // ===================== 容量 / 调试 =====================
 
-    final Map<String, ObserverBlockEntity.Ae2CellCapacityMetrics> cellCapacityMetrics = new HashMap<>();
-    final Map<String, String> debugInfoMap = new HashMap<>();
+    final Map<String, Ae2CellCapacityMetrics> cellCapacityMetrics = new HashMap<>();
 
     // ===================== 只读访问器 =====================
 
@@ -70,6 +70,22 @@ public class Ae2DataStore {
     public Map<String, Double> getItemConsRatesPerMin(String networkId) {
         Map<String, Double> d = itemConsRatesPerMin.get(networkId);
         return d == null ? Map.of() : Collections.unmodifiableMap(d);
+    }
+
+    /** 返回指定网络的存储单元（Cell）容量指标；缺失时返回 {@link Ae2CellCapacityMetrics#unavailable()}。 */
+    public Ae2CellCapacityMetrics getCellCapacityMetrics(String networkId) {
+        return cellCapacityMetrics.getOrDefault(networkId, Ae2CellCapacityMetrics.unavailable());
+    }
+
+    /** 返回指定网络上次缓存的物品快照大小（用于 Web 高精度采样的快照规模阈值判断）。 */
+    public int cachedSnapshotSize(String networkId) {
+        Map<String, Long> cached = itemAmounts.get(networkId);
+        return cached == null ? 0 : cached.size();
+    }
+
+    /** 移除指定网络的容量指标记录（FluxSampler 在切换网络类型时调用）。 */
+    public void clearCellCapacityMetrics(String networkId) {
+        cellCapacityMetrics.remove(networkId);
     }
 
     /**
@@ -125,7 +141,6 @@ public class Ae2DataStore {
         kpiAccumCurrent.remove(networkId);
         kpiAccumPrev.remove(networkId);
         cellCapacityMetrics.remove(networkId);
-        debugInfoMap.remove(networkId);
     }
 
     /** 清空所有数据 */
@@ -147,6 +162,5 @@ public class Ae2DataStore {
         kpiAccumCurrent.clear();
         kpiAccumPrev.clear();
         cellCapacityMetrics.clear();
-        debugInfoMap.clear();
     }
 }

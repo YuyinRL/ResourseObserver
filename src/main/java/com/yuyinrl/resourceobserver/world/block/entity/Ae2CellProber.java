@@ -105,7 +105,7 @@ public final class Ae2CellProber {
 
     // ===================== 主入口 =====================
 
-    private static final String AE2_CAPACITY_SCOPE_CELLS_ONLY = "AE2_CELLS_ONLY";
+    static final String AE2_CAPACITY_SCOPE_CELLS_ONLY = "AE2_CELLS_ONLY";
 
     /** AE2 网络 Cell 容量指标采集 —— 从 ObserverBlockEntity.readAe2CellCapacityMetrics 完整迁移 */
     static ObserverBlockEntity.Ae2CapacityReadResult readCellCapacityMetrics(IGrid grid) {
@@ -187,7 +187,7 @@ public final class Ae2CellProber {
         }
 
         ExternalCapacityReadResult externalCapacity = readExternalCapacityMetrics(grid);
-        ObserverBlockEntity.Ae2CellCapacityMetrics metrics = new ObserverBlockEntity.Ae2CellCapacityMetrics(
+        Ae2CellCapacityMetrics metrics = new Ae2CellCapacityMetrics(
                 itemUsedBytes, itemTotalBytes, itemUsedTypes, itemTotalTypes, itemUsedUnits, itemMaxUnits,
                 fluidUsedBytes, fluidTotalBytes, fluidUsedTypes, fluidTotalTypes, fluidUsedUnits, fluidMaxUnits,
                 externalCapacity.itemUsedUnits(), externalCapacity.itemTotalUnits(),
@@ -222,12 +222,17 @@ public final class Ae2CellProber {
         return new ObserverBlockEntity.Ae2CapacityReadResult(metrics, debugSuffix);
     }
 
+    /** long 加法饱和上限，避免聚合时溢出。 */
     private static long saturatingAdd(long left, long right) {
         return Ae2Sampler.saturatingAdd(left, right);
     }
 
     // ===================== 反射工具 =====================
 
+    /**
+     * 解析（并缓存）某个 cell 类的容量读取访问器集合。
+     * 若该类型已知不支持容量查询则直接返回 {@code null}。
+     */
     static @Nullable CellMetricsAccessors resolveCellMetricsAccessors(Class<?> cellClass) {
         if (CELL_METRICS_ACCESSORS.containsKey(cellClass)) return CELL_METRICS_ACCESSORS.get(cellClass);
         if (CELL_METRICS_UNSUPPORTED.contains(cellClass)) return null;
@@ -254,30 +259,35 @@ public final class Ae2CellProber {
         } catch (Exception e) { CELL_METRICS_UNSUPPORTED.add(cellClass); return null; }
     }
 
+    /** 反射调用并强转 long 返回值，包装非法返回值为异常。 */
     static long invokeLong(Method method, Object target) throws ReflectiveOperationException {
         Object result = method.invoke(target);
         if (result instanceof Number n) return n.longValue();
         throw new ReflectiveOperationException("bad return: " + result);
     }
 
+    /** 必需的 long 返回值方法查找；缺失时抛 {@link NoSuchMethodException}。 */
     static Method findCellMetricMethod(Class<?> cellClass, String name) throws ReflectiveOperationException {
         Method m = findOptionalMethod(cellClass, name);
         if (m == null) throw new ReflectiveOperationException("not found: " + cellClass.getName() + "#" + name);
         return m;
     }
 
+    /** 可选方法查找 —— 不存在直接返回 {@code null} 而非抛异常。 */
     static @Nullable Method findOptionalMethod(Class<?> cellClass, String name) {
         try { return cellClass.getMethod(name); } catch (NoSuchMethodException ignored) {}
         try { return cellClass.getDeclaredMethod(name); } catch (NoSuchMethodException ignored) {}
         return null;
     }
 
+    /** 可选字段查找 —— 不存在返回 {@code null}。 */
     static @Nullable Field findOptionalField(Class<?> cls, String name) {
         try { return cls.getField(name); } catch (NoSuchFieldException ignored) {}
         try { return cls.getDeclaredField(name); } catch (NoSuchFieldException ignored) {}
         return null;
     }
 
+    /** 静默调用 —— 无该方法或反射失败均返回 {@code null}。 */
     static @Nullable Object invokeOptional(Object target, String methodName) {
         if (target == null) return null;
         Method m = findOptionalMethod(target.getClass(), methodName);
@@ -285,6 +295,7 @@ public final class Ae2CellProber {
         try { m.setAccessible(true); return m.invoke(target); } catch (Exception ignored) { return null; }
     }
 
+    /** 静默读取字段 —— 字段缺失或访问失败返回 {@code null}。 */
     static @Nullable Object readOptionalField(Object target, String name) {
         if (target == null) return null;
         Field f = findOptionalField(target.getClass(), name);
@@ -293,6 +304,7 @@ public final class Ae2CellProber {
     }
 
     @SuppressWarnings("unchecked")
+    /** 按字段类型在所有声明字段中查找首个赋值；用于在混淆/重命名场景下定位 delegate。 */
     static <T> @Nullable T readFieldByType(Object target, Class<T> expectedType) {
         if (target == null || expectedType == null) return null;
         Class<?> c = target.getClass();
@@ -310,6 +322,7 @@ public final class Ae2CellProber {
 
     // ===================== Cell 探测 =====================
 
+    /** 解析 ME Drive/Chest 单个槽位上 cell 物品所对应的存储通道（item/fluid/unknown）。 */
     static SlotCellProbe detectChannelFromCellItem(IChestOrDrive machine, int slot) {
         try {
             Item cellItem = machine.getCellItem(slot);
@@ -328,14 +341,17 @@ public final class Ae2CellProber {
         }
     }
 
+    /** 探测槽位是否处于工作状态；在线返回 {@code true}。 */
     static boolean probeCellStatus(IChestOrDrive machine, int slot) {
         try { machine.getCellStatus(slot); return true; } catch (Exception ignored) { return false; }
     }
 
+    /** 静默判定设备是否通电，反射异常视为未通电。 */
     static boolean safeIsPowered(IChestOrDrive machine) {
         try { return machine.isPowered(); } catch (Exception ignored) { return false; }
     }
 
+    /** 通过 cell 自身的 channel 标识对象推断通道类型。 */
     static @Nullable CellChannel parseChannelFromObject(@Nullable Object channelObject) {
         if (channelObject == null) return null;
         String s = channelObject.toString().toLowerCase(Locale.ROOT);
@@ -344,6 +360,7 @@ public final class Ae2CellProber {
         return null;
     }
 
+    /** 通过 keyType 实例（AE2 物品/流体 KeyType）推断通道。 */
     static @Nullable CellChannel parseChannelFromKeyType(@Nullable Object keyTypeObject) {
         if (keyTypeObject == null) return null;
         String s = keyTypeObject.toString().toLowerCase(Locale.ROOT);
@@ -352,6 +369,7 @@ public final class Ae2CellProber {
         return null;
     }
 
+    /** 通过 cell 物品 id 关键字（{@code item_cell}/{@code fluid_cell}/{@code mana_cell}）推断通道。 */
     static @Nullable CellChannel parseChannelFromItemId(@Nullable String itemId) {
         if (itemId == null || itemId.isBlank()) return null;
         String s = itemId.toLowerCase(Locale.ROOT);
@@ -362,6 +380,7 @@ public final class Ae2CellProber {
 
     // ===================== 容量收集 =====================
 
+    /** 收集 AE2 网络里所有可读容量的设备（Drive/Chest 等），按服务接口归类。 */
     static CapacityMachineCollection collectCapacityMachines(IGrid grid) {
         Set<IChestOrDrive> result = Collections.newSetFromMap(new IdentityHashMap<>());
         int fromChestOrDrive = 0, fromStorageP = 0, fromOwner = 0, fromService = 0, scanned = 0;
@@ -378,6 +397,7 @@ public final class Ae2CellProber {
         return new CapacityMachineCollection(result, fromChestOrDrive, fromStorageP, fromOwner, fromService, scanned);
     }
 
+    /** 收集所有 IStorageProvider，分离储存总线与其它 provider。 */
     static StorageProviderCollection collectStorageProviders(IGrid grid) {
         Set<IStorageProvider> providers = Collections.newSetFromMap(new IdentityHashMap<>());
         int fromMachines = 0, fromOwner = 0, fromService = 0, scanned = 0;
@@ -393,6 +413,10 @@ public final class Ae2CellProber {
 
     // ===================== 外储容量探测 =====================
 
+    /**
+     * 通过 IStorageProvider/IItemHandler/IFluidHandler 三层 fallback 读取外部存储容量。
+     * 与 {@link #readCellCapacityMetrics} 互补：前者读 cell，本方法读储存总线接出的外部容器。
+     */
     static ExternalCapacityReadResult readExternalCapacityMetrics(IGrid grid) {
         StorageProviderCollection providerCollection = collectStorageProviders(grid);
         if (providerCollection.providers().isEmpty()) return ExternalCapacityReadResult.empty();
@@ -478,10 +502,12 @@ public final class Ae2CellProber {
 
     // ===================== 外储探测辅助 =====================
 
+    /** 判定一个 IStorageProvider 是否为储存总线（按类名/字段启发式识别）。 */
     static boolean isStorageBusProvider(IStorageProvider p) {
         return p != null && p.getClass().getName().toLowerCase(Locale.ROOT).contains("storagebus");
     }
 
+    /** 取储存总线内部缓存的 storage 对象（用于进一步读出 IItemHandler/IFluidHandler）。 */
     static @Nullable Object extractStorageBusInternalStorage(IStorageProvider p) {
         Object o = invokeOptional(p, "getInternalHandler");
         if (o != null) return o;
@@ -489,6 +515,7 @@ public final class Ae2CellProber {
         return o != null ? o : readOptionalField(p, "handler");
     }
 
+    /** 把 root 拆成多分支（如多面 storage bus），不可拆则返回单元素列表。 */
     static List<Object> extractStorageBranches(Object root) {
         List<Object> branches = new ArrayList<>();
         if (root == null) return branches;
@@ -501,6 +528,7 @@ public final class Ae2CellProber {
         return branches;
     }
 
+    /** 将任意对象解包为 {@link IItemHandler}，包括穿透常见 delegate 链。 */
     static @Nullable IItemHandler unwrapItemHandler(@Nullable Object c) {
         if (c == null) return null;
         Object dc = unwrapDelegateChain(c, IItemHandler.class);
@@ -511,6 +539,7 @@ public final class Ae2CellProber {
         return fc instanceof IItemHandler h ? h : fm;
     }
 
+    /** 将任意对象解包为 {@link IFluidHandler}，包括穿透常见 delegate 链。 */
     static @Nullable IFluidHandler unwrapFluidHandler(@Nullable Object c) {
         if (c == null) return null;
         Object dc = unwrapDelegateChain(c, IFluidHandler.class);
@@ -521,6 +550,7 @@ public final class Ae2CellProber {
         return fc instanceof IFluidHandler h ? h : fm;
     }
 
+    /** 启发式读取常见 delegate 字段名（{@code delegate}/{@code wrapped}/{@code internal}/...）。 */
     static @Nullable Object readLikelyDelegate(Object t) {
         Object v = readOptionalField(t, "handler"); if (v != null) return v;
         v = readOptionalField(t, "delegate"); if (v != null) return v;
@@ -528,6 +558,7 @@ public final class Ae2CellProber {
         return invokeOptional(t, "getDelegate");
     }
 
+    /** 持续解包 delegate 链直到拿到 {@code expectedType} 实例或链路中断。带循环检测。 */
     static @Nullable Object unwrapDelegateChain(@Nullable Object c, Class<?> expectedType) {
         if (c == null || expectedType == null) return null;
         Set<Object> visited = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -543,6 +574,7 @@ public final class Ae2CellProber {
 
     // ===================== 物品探测 =====================
 
+    /** 收集若干用于模拟插入探测的代表性物品栈（覆盖 stackable/non-stackable）。 */
     static List<ItemStack> collectItemProbeCandidates(IItemHandler h, int slotCount) {
         List<ItemStack> cands = new ArrayList<>(MAX_ITEM_PROBE_CANDIDATES);
         for (int s = 0; s < slotCount; s++) {
@@ -559,6 +591,7 @@ public final class Ae2CellProber {
         return cands;
     }
 
+    /** 估计单槽位能容纳的最大单位数（结合槽位 limit 与模拟插入结果给出可靠/不可靠标记）。 */
     static ItemSlotCapacityEstimate estimateItemSlotCapacity(IItemHandler h, int slot,
             ItemStack stackInSlot, List<ItemStack> probeCands, int[] probeBudget) {
         int stackMax = Math.max(0, stackInSlot.isEmpty() ? 64 : stackInSlot.getMaxStackSize());
@@ -579,10 +612,12 @@ public final class Ae2CellProber {
         return new ItemSlotCapacityEstimate(baseTotal, true);
     }
 
+    /** 计算探测插入数量 —— 槽位上限减去当前数量，必要时夹紧到合理范围。 */
     static int computeItemProbeRequestCount(int rawSlotLimit, int currentAmount) {
         return Math.max(1, Math.min(64, rawSlotLimit - currentAmount));
     }
 
+    /** 执行 {@code simulate=true} 的插入探测，返回成功插入数量与可靠性标记。 */
     static SimulatedInsertProbe probeSimulatedInsert(IItemHandler h, int slot, ItemStack probe, int count) {
         ItemStack ps = probe.copy(); ps.setCount(count);
         try { ItemStack rem = h.insertItem(slot, ps, true); return new SimulatedInsertProbe(count - Math.max(0, rem.getCount()), true); }
@@ -593,6 +628,7 @@ public final class Ae2CellProber {
 
     static void incrementCount(Map<String, Integer> counts, String key) { counts.merge(key, 1, Integer::sum); }
 
+    /** 把失败类型计数 map 汇总成日志友好的字符串（如 {@code [foo:3, bar:1]}）。 */
     static String summarizeFailureClasses(Map<String, Integer> counts) {
         if (counts.isEmpty()) return "none";
         StringBuilder sb = new StringBuilder();
@@ -603,6 +639,7 @@ public final class Ae2CellProber {
         return sb.toString();
     }
 
+    /** 取类全限定名末段以缩短日志输出。 */
     static String simpleClassName(String className) {
         int dot = className.lastIndexOf('.'); return dot >= 0 ? className.substring(dot + 1) : className;
     }

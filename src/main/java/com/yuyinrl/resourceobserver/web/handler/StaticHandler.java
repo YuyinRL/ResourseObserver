@@ -23,6 +23,7 @@ public final class StaticHandler implements HttpHandler {
         this.server = server;
     }
 
+    /** 静态资源回退入口 —— SPA 单页路由不存在的路径回落到 index.html。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {

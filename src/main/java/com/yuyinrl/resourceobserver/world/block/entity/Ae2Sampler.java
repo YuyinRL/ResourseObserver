@@ -13,10 +13,8 @@ import java.util.Map;
 /**
  * AE2 网络采样器 —— 从 ObserverBlockEntity 中提取的 AE2 采样逻辑。
  * <p>
- * Phase 1: 提取静态工具方法（toEntryId, computeDeltas 等）<br>
- * Phase 2: 迁移 sampleAe2Network() 核心逻辑至实例方法，ObserverBlockEntity 委托调用<br>
- * <p>
- * 与 ObserverBlockEntity 同包，可访问其 package-private 成员（dataStore, readAe2NetworkItems 等）。
+ * Phase 6：改为有状态对象，持有 {@link Ae2DataStore} / {@link Ae2GridResolver} 引用与
+ * 共享的 debugInfoMap，移除对 ObserverBlockEntity 的反向回调（不再有 {@code be.xxx}）。
  */
 public final class Ae2Sampler {
 
@@ -33,26 +31,62 @@ public final class Ae2Sampler {
     /** 服务端速率 EMA α */
     static final double SERVER_RATE_EMA_ALPHA = 0.10;
 
-    Ae2Sampler() {}
+    private final Ae2DataStore dataStore;
+    private final Ae2GridResolver gridResolver;
+    private final Map<String, String> debugInfoMap;
+
+    /**
+     * 构造 AE2 采样器。
+     *
+     * @param dataStore     共享的 AE2 数据存储（snapshot/deltas/rates 等）
+     * @param gridResolver  Grid 解析器（同时承担容量异常告警）
+     * @param debugInfoMap  共享的调试信息表（networkId → 单行 debug 串）
+     */
+    Ae2Sampler(Ae2DataStore dataStore, Ae2GridResolver gridResolver, Map<String, String> debugInfoMap) {
+        this.dataStore = dataStore;
+        this.gridResolver = gridResolver;
+        this.debugInfoMap = debugInfoMap;
+    }
 
     // ===================== Key 转换工具 =====================
 
+    /**
+     * 把 AE2 的 {@link AEKey} 转为我们 Web/快照层使用的字符串 ID。
+     * <ul>
+     *   <li>{@link AEItemKey} → {@code "<namespace>:<path>"}</li>
+     *   <li>{@link AEFluidKey} → {@code "fluid:<namespace>:<path>"}</li>
+     * </ul>
+     *
+     * @param key AE2 原始 key（item / fluid）
+     * @return 字符串 ID；未知类型返回 {@code null}
+     */
     public static String toEntryId(AEKey key) {
         if (key instanceof AEItemKey itemKey) return itemKey.getId().toString();
         if (key instanceof AEFluidKey fluidKey) return FLUID_KEY_PREFIX + fluidKey.getId();
         return null;
     }
 
+    /** 判断给定 entryId 是否为流体（带 {@code "fluid:"} 前缀）。 */
     public static boolean isFluidEntryId(String entryId) {
         return entryId != null && entryId.startsWith(FLUID_KEY_PREFIX);
     }
 
+    /** 与 {@link #isFluidEntryId} 互斥；{@code null} 视为物品。 */
     public static boolean isItemEntryId(String entryId) {
         return !isFluidEntryId(entryId);
     }
 
     // ===================== 增量计算 =====================
 
+    /**
+     * 比较两次快照求每个 entryId 的存量增量。
+     * <p>
+     * 同时考虑 current 中新增、previous 中消失（视为变成 0）的条目；增量为 0 的不放入结果。
+     *
+     * @param previous 上一次快照（entryId → 数量）
+     * @param current  本次快照
+     * @return 仅包含非零增量的 map：正数=生产，负数=消耗
+     */
     public static Map<String, Long> computeDeltas(Map<String, Long> previous, Map<String, Long> current) {
         Map<String, Long> deltas = new HashMap<>();
         for (Map.Entry<String, Long> entry : current.entrySet()) {
@@ -70,6 +104,13 @@ public final class Ae2Sampler {
 
     // ===================== 安全加法 =====================
 
+    /**
+     * 饱和加法 —— 防止 long 累计溢出回卷。
+     *
+     * @param left  当前累计值（应为 ≥0）
+     * @param right 增量（≤0 时直接返回 left，避免做减法）
+     * @return {@code min(Long.MAX_VALUE, left + right)}
+     */
     public static long saturatingAdd(long left, long right) {
         if (right <= 0L) return left;
         if (Long.MAX_VALUE - left < right) return Long.MAX_VALUE;
@@ -80,39 +121,33 @@ public final class Ae2Sampler {
 
     /**
      * 对指定 AE2 网络执行一次采样。
-     * <p>
-     * 读取网络中所有物品的当前数量，与上次快照对比计算每种物品的增量，
-     * 正增量累加到生产量，负增量绝对值累加到消耗量。
-     * 同时更新双缓冲滑动窗口速率计算和 KPI 聚合。
-     * <p>
-     * ObserverBlockEntity.sampleAe2Network() 委托至此方法。
      */
-    ObserverBlockEntity.BindingStats sampleAe2Network(
-            ObserverBlockEntity be, String networkId, net.minecraft.core.BlockPos targetPos,
-            ObserverBlockEntity.BindingStats oldStats
+    BindingStats sample(
+            net.minecraft.world.level.Level level, String networkId,
+            net.minecraft.core.BlockPos targetPos, BindingStats oldStats
     ) {
-        ObserverBlockEntity.Ae2ReadResult readResult = be.readAe2NetworkItems(targetPos);
-        be.debugInfoMap.put(networkId, readResult.debugInfo());
-        be.dataStore.cellCapacityMetrics.put(networkId, readResult.cellCapacityMetrics());
-        be.reportAe2CapacityIssue(networkId, targetPos, readResult);
+        ObserverBlockEntity.Ae2ReadResult readResult = readAe2NetworkItems(level, targetPos);
+        debugInfoMap.put(networkId, readResult.debugInfo());
+        dataStore.cellCapacityMetrics.put(networkId, readResult.cellCapacityMetrics());
+        gridResolver.reportCapacityIssue(networkId, targetPos, readResult);
 
         Map<String, Long> snapshot = readResult.snapshot();
         if (snapshot == null) {
-            be.dataStore.itemDeltas.put(networkId, Map.of());
+            dataStore.itemDeltas.put(networkId, Map.of());
             return oldStats;
         }
 
-        Map<String, Long> previous = be.dataStore.itemAmounts.getOrDefault(networkId, Map.of());
+        Map<String, Long> previous = dataStore.itemAmounts.getOrDefault(networkId, Map.of());
 
         // ── 启动预热保护 ──
         boolean warmingUp;
         if (previous.isEmpty()) {
-            be.dataStore.warmupRemaining.put(networkId, WARMUP_SAMPLES);
+            dataStore.warmupRemaining.put(networkId, WARMUP_SAMPLES);
             warmingUp = true;
         } else {
-            int remaining = be.dataStore.warmupRemaining.getOrDefault(networkId, 0);
+            int remaining = dataStore.warmupRemaining.getOrDefault(networkId, 0);
             if (remaining > 0) {
-                be.dataStore.warmupRemaining.put(networkId, remaining - 1);
+                dataStore.warmupRemaining.put(networkId, remaining - 1);
                 warmingUp = true;
             } else {
                 warmingUp = false;
@@ -120,14 +155,14 @@ public final class Ae2Sampler {
         }
 
         Map<String, Long> deltas = warmingUp ? Map.of() : computeDeltas(previous, snapshot);
-        be.dataStore.itemAmounts.put(networkId, snapshot);
-        be.dataStore.itemDeltas.put(networkId, deltas);
+        dataStore.itemAmounts.put(networkId, snapshot);
+        dataStore.itemDeltas.put(networkId, deltas);
 
         // ── 双缓冲滑动窗口速率计算 + KPI 聚合 ──
         if (!warmingUp) {
-            Map<String, Long> curCons = be.dataStore.itemConsCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
-            Map<String, Long> curProd = be.dataStore.itemProdCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
-            long[] kpiCur = be.dataStore.kpiAccumCurrent.computeIfAbsent(networkId, k -> new long[4]);
+            Map<String, Long> curCons = dataStore.itemConsCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
+            Map<String, Long> curProd = dataStore.itemProdCurrent.computeIfAbsent(networkId, k -> new HashMap<>());
+            long[] kpiCur = dataStore.kpiAccumCurrent.computeIfAbsent(networkId, k -> new long[4]);
 
             for (Map.Entry<String, Long> entry : deltas.entrySet()) {
                 long d = entry.getValue();
@@ -142,12 +177,12 @@ public final class Ae2Sampler {
                 }
             }
 
-            int curSamples = be.dataStore.itemWindowSampleCount.merge(networkId, 1, Integer::sum);
+            int curSamples = dataStore.itemWindowSampleCount.merge(networkId, 1, Integer::sum);
 
             // 合并当前窗口 + 上一完整窗口，计算组合平均速率
-            Map<String, Long> prevCons = be.dataStore.itemConsPrev.getOrDefault(networkId, Map.of());
-            Map<String, Long> prevProd = be.dataStore.itemProdPrev.getOrDefault(networkId, Map.of());
-            int prevSamples = be.dataStore.itemPrevWindowSampleCount.getOrDefault(networkId, 0);
+            Map<String, Long> prevCons = dataStore.itemConsPrev.getOrDefault(networkId, Map.of());
+            Map<String, Long> prevProd = dataStore.itemProdPrev.getOrDefault(networkId, Map.of());
+            int prevSamples = dataStore.itemPrevWindowSampleCount.getOrDefault(networkId, 0);
             int totalSamples = Math.max(1, curSamples + prevSamples);
             final double toPerMin = 20.0 * 60.0 / SAMPLE_INTERVAL;
 
@@ -159,8 +194,8 @@ public final class Ae2Sampler {
             allItems.addAll(prevCons.keySet());
             allItems.addAll(prevProd.keySet());
 
-            Map<String, Double> prevProdEma = be.dataStore.itemProdRateEma.computeIfAbsent(networkId, k -> new HashMap<>());
-            Map<String, Double> prevConsEma = be.dataStore.itemConsRateEma.computeIfAbsent(networkId, k -> new HashMap<>());
+            Map<String, Double> prevProdEma = dataStore.itemProdRateEma.computeIfAbsent(networkId, k -> new HashMap<>());
+            Map<String, Double> prevConsEma = dataStore.itemConsRateEma.computeIfAbsent(networkId, k -> new HashMap<>());
 
             for (String itemId : allItems) {
                 long consumed = curCons.getOrDefault(itemId, 0L) + prevCons.getOrDefault(itemId, 0L);
@@ -179,19 +214,20 @@ public final class Ae2Sampler {
                 if (smoothCons > 0.001) consRates.put(itemId, smoothCons);
             }
 
-            be.dataStore.itemRatesPerMin.put(networkId, rates);
-            be.dataStore.itemProdRatesPerMin.put(networkId, prodRates);
-            be.dataStore.itemConsRatesPerMin.put(networkId, consRates);
+            dataStore.itemRatesPerMin.put(networkId, rates);
+            dataStore.itemProdRatesPerMin.put(networkId, prodRates);
+            dataStore.itemConsRatesPerMin.put(networkId, consRates);
 
             // 窗口满后滚动
             if (curSamples >= RATE_WINDOW_SAMPLES) {
-                be.dataStore.itemConsPrev.put(networkId, new HashMap<>(curCons));
-                be.dataStore.itemProdPrev.put(networkId, new HashMap<>(curProd));
-                be.dataStore.itemPrevWindowSampleCount.put(networkId, curSamples);
+                dataStore.itemConsPrev.put(networkId, new HashMap<>(curCons));
+                dataStore.itemProdPrev.put(networkId, new HashMap<>(curProd));
+                dataStore.itemPrevWindowSampleCount.put(networkId, curSamples);
                 curCons.clear();
                 curProd.clear();
-                be.dataStore.itemWindowSampleCount.put(networkId, 0);
-                kpiAccumPrevRoll(be, networkId, kpiCur);
+                dataStore.itemWindowSampleCount.put(networkId, 0);
+                dataStore.kpiAccumPrev.put(networkId, kpiCur.clone());
+                dataStore.kpiAccumCurrent.put(networkId, new long[4]);
                 logWindowRotation(networkId, curSamples, prevSamples);
             }
         }
@@ -216,24 +252,25 @@ public final class Ae2Sampler {
 
         logSampleSummary(networkId, snapshot.size(), deltas.size(),
                 totalAmount, produced, consumed,
-                be.dataStore.itemRatesPerMin.getOrDefault(networkId, Map.of()).size(), warmingUp);
+                dataStore.itemRatesPerMin.getOrDefault(networkId, Map.of()).size(), warmingUp);
 
         return oldStats.withDelta(totalAmount, itemTypeCount, produced, consumed);
     }
 
-    // ===================== AE2 网络读取（Phase 3: 从 ObserverBlockEntity 迁移） =====================
+    // ===================== AE2 网络读取 =====================
 
     /**
      * 读取 AE2 网络中所有物品的当前快照及容量指标。
-     * ObserverBlockEntity.readAe2NetworkItems() 委托至此方法。
      */
-    ObserverBlockEntity.Ae2ReadResult readAe2NetworkItems(ObserverBlockEntity be, net.minecraft.core.BlockPos targetPos) {
-        appeng.api.networking.IGrid grid = be.resolveAe2GridAt(targetPos);
+    ObserverBlockEntity.Ae2ReadResult readAe2NetworkItems(
+            net.minecraft.world.level.Level level, net.minecraft.core.BlockPos targetPos
+    ) {
+        appeng.api.networking.IGrid grid = gridResolver.resolveAt(level, targetPos);
         if (grid == null) {
             return new ObserverBlockEntity.Ae2ReadResult(
                     null,
                     "channel=ae2.grid;status=unavailable;target=" + targetPos.toShortString(),
-                    ObserverBlockEntity.Ae2CellCapacityMetrics.unavailable()
+                    Ae2CellCapacityMetrics.unavailable()
             );
         }
 
@@ -252,8 +289,8 @@ public final class Ae2Sampler {
             snapshot.merge(entryId, amount, Long::sum);
         }
 
-        ObserverBlockEntity.Ae2CapacityReadResult capacityReadResult = be.readAe2CellCapacityMetrics(grid);
-        ObserverBlockEntity.Ae2CellCapacityMetrics capacityMetrics = capacityReadResult.metrics();
+        ObserverBlockEntity.Ae2CapacityReadResult capacityReadResult = Ae2CellProber.readCellCapacityMetrics(grid);
+        Ae2CellCapacityMetrics capacityMetrics = capacityReadResult.metrics();
         String debug = "channel=ae2.cached_inventory;status=ok;types="
                 + snapshot.size() + ";item_types=" + itemTypeCount + ";fluid_types=" + fluidTypeCount
                 + ";cells=" + (capacityMetrics.available() ? "present" : "none")
@@ -262,13 +299,21 @@ public final class Ae2Sampler {
         return new ObserverBlockEntity.Ae2ReadResult(snapshot, debug, capacityMetrics);
     }
 
-    private static void kpiAccumPrevRoll(ObserverBlockEntity be, String networkId, long[] kpiCur) {
-        be.dataStore.kpiAccumPrev.put(networkId, kpiCur.clone());
-        be.dataStore.kpiAccumCurrent.put(networkId, new long[4]);
-    }
-
     // ===================== 日志 =====================
 
+    /**
+     * 输出"本次采样汇总"调试日志。
+     * <p>仅在 DEBUG 级别启用时执行字符串拼装，避免热点路径 GC 压力。</p>
+     *
+     * @param networkId       AE2 网络 ID
+     * @param snapshotSize    本次快照中的 entry 数（含物品+流体）
+     * @param deltaCount      本次非零增量的 entry 数
+     * @param totalAmount     物品总数累计
+     * @param totalProduced   本 tick 总生产
+     * @param totalConsumed   本 tick 总消耗
+     * @param rateCount       当前活跃速率条目数
+     * @param warmingUp       是否处于启动预热阶段
+     */
     public static void logSampleSummary(
             String networkId, int snapshotSize, int deltaCount,
             long totalAmount, long totalProduced, long totalConsumed,
@@ -281,6 +326,13 @@ public final class Ae2Sampler {
         }
     }
 
+    /**
+     * 输出"双缓冲滑动窗口滚动"调试日志。
+     *
+     * @param networkId   AE2 网络 ID
+     * @param curSamples  当前窗口积累的采样数（即将被滚动到 prev）
+     * @param prevSamples 上一窗口的采样数（即将被丢弃）
+     */
     public static void logWindowRotation(String networkId, int curSamples, int prevSamples) {
         if (LOG.isDebugEnabled()) {
             LOG.debug("[Ae2Sample] WINDOW_ROTATE net={} curSmp={} prevSmp={}", networkId, curSamples, prevSamples);

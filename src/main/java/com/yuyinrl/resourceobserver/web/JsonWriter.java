@@ -15,12 +15,19 @@ public final class JsonWriter {
     private JsonWriter() {
     }
 
+    /**
+     * 把任意值序列化为 JSON 字符串。
+     *
+     * @param value 待序列化对象（支持 Map/Iterable/Number/Boolean/CharSequence/null）
+     * @return 标准 JSON 文本
+     */
     public static String write(@Nullable Object value) {
         StringBuilder sb = new StringBuilder(256);
         writeValue(sb, value);
         return sb.toString();
     }
 
+    /** 通用值分派 —— 根据运行时类型路由到对应序列化方法。 */
     private static void writeValue(StringBuilder sb, @Nullable Object value) {
         if (value == null) {
             sb.append("null");
@@ -39,6 +46,7 @@ public final class JsonWriter {
         }
     }
 
+    /** 写数字；NaN/Infinity 退化为 {@code null} 以保证 JSON 合法。 */
     private static void writeNumber(StringBuilder sb, Number n) {
         double d = n.doubleValue();
         if (Double.isNaN(d) || Double.isInfinite(d)) {
@@ -48,6 +56,7 @@ public final class JsonWriter {
         sb.append(n);
     }
 
+    /** 写对象；仅按插入顺序遍历 entrySet（{@link java.util.LinkedHashMap} 友好）。 */
     private static void writeMap(StringBuilder sb, Map<?, ?> map) {
         sb.append('{');
         boolean first = true;
@@ -61,6 +70,7 @@ public final class JsonWriter {
         sb.append('}');
     }
 
+    /** 写数组。 */
     private static void writeArray(StringBuilder sb, Iterable<?> it) {
         sb.append('[');
         boolean first = true;
@@ -72,6 +82,7 @@ public final class JsonWriter {
         sb.append(']');
     }
 
+    /** 写字符串；按 RFC 8259 转义控制字符与引号、反斜杠。 */
     private static void writeString(StringBuilder sb, String s) {
         sb.append('"');
         for (int i = 0, n = s.length(); i < n; i++) {

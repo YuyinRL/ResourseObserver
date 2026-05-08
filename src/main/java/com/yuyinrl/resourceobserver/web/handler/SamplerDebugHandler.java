@@ -28,6 +28,7 @@ public final class SamplerDebugHandler extends BaseApiHandler implements HttpHan
         super(server);
     }
 
+    /** /api/sampler/debug —— 暴露 AE2/Flux 采样器最近一次的调试快照（仅开发环境使用）。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {

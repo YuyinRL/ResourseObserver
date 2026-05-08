@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.web.util.QueryUtil;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -34,6 +35,10 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
         super(server);
     }
 
+    /**
+     * /api/observers/{id}/items —— 物品分页/排序/筛选入口。
+     * 解析 query 参数后切到主线程读取 Observer 数据并构造响应。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -74,7 +79,7 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
         boolean alertsOnly = Boolean.parseBoolean(query.getOrDefault("alertsOnly", "false"));
 
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : observer.getBindings()) {
+        for (BoundEntry binding : observer.getBindings()) {
             if (!"AE2_ITEMS".equals(binding.networkType())) {
                 continue;
             }

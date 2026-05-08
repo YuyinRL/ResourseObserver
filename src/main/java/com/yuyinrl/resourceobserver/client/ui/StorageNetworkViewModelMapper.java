@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 
 import com.yuyinrl.resourceobserver.client.util.PinyinMatcher;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import com.yuyinrl.resourceobserver.world.block.entity.NetworkRef;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
@@ -679,16 +680,9 @@ public final class StorageNetworkViewModelMapper {
 
     /** 从 networkId（格式 "blockId@posLong"）解析坐标文本 */
     private static String parseCoordinatesText(String networkId) {
-        if (networkId == null) return null;
-        int at = networkId.lastIndexOf('@');
-        if (at < 0 || at + 1 >= networkId.length()) return null;
-        try {
-            long encoded = Long.parseLong(networkId.substring(at + 1));
-            BlockPos pos = BlockPos.of(encoded);
-            return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
-        } catch (NumberFormatException e) {
-            return null;
-        }
+        BlockPos pos = NetworkRef.extractPos(networkId);
+        if (pos == null) return null;
+        return pos.getX() + ", " + pos.getY() + ", " + pos.getZ();
     }
 
     private record GlobalItemInfo(
