@@ -6,6 +6,7 @@
   "item.resourceobserver.debug_terminal": "Debug Terminal",
   "key.categories.resourceobserver": "Resource Observer",
   "key.resourceobserver.modernui_preview": "Open ModernUI Overview Preview",
+  "key.resourceobserver.open_terminal_v2": "Open Resource Terminal V2 (debug)",
   "screen.resourceobserver.modernui.preview.title": "ModernUI Overview Preview",
   "message.resourceobserver.selected_observer": "Selected observer at (%s, %s, %s). Right-click a supported network target.",
   "message.resourceobserver.no_observer_selected": "No observer selected. Right-click an Observer Block first.",

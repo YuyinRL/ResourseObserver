@@ -6,6 +6,7 @@
   "item.resourceobserver.debug_terminal": "调试终端",
   "key.categories.resourceobserver": "资源观察者",
   "key.resourceobserver.modernui_preview": "打开 ModernUI 总览预览",
+  "key.resourceobserver.open_terminal_v2": "打开资源终端 V2（调试）",
   "screen.resourceobserver.modernui.preview.title": "ModernUI 总览预览",
   "message.resourceobserver.selected_observer": "已选中观察者方块（%s, %s, %s），请右键一个受支持的网络目标。",
   "message.resourceobserver.no_observer_selected": "尚未选中观察者方块，请先右键观察者方块。",
