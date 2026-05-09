@@ -1,19 +1,16 @@
 package com.yuyinrl.resourceobserver.client;
 
 import com.yuyinrl.resourceobserver.client.modernui.ResourceTerminalFragment;
-import com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreen;
 import com.yuyinrl.resourceobserver.network.CraftingPlanResultPayload;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.network.WebTokenPayload;
-import net.minecraft.client.gui.screens.Screen;
-import net.minecraft.client.Minecraft;
 
 /**
  * 客户端数据包处理器 —— 处理服务端发来的观察者数据负载。
  * 仅在客户端逻辑侧加载，在渲染线程执行。
  * <p>
- * 优先检查 ModernUI 终端 Fragment 是否活跃，然后检查原生 Screen，
- * 若都不匹配则打开 ModernUI 版终端界面。
+ * 当前唯一的终端 UI 实现是 ModernUI Fragment；老的原生 {@code ResourceTerminalScreen}
+ * 已于 v0.10.0-alpha 退役，{@link ResourceTerminalFragment} 是统一入口。
  */
 public final class ClientPayloadHandler {
 
@@ -22,27 +19,14 @@ public final class ClientPayloadHandler {
 
     /**
      * 处理收到的观察者数据负载。
-     * 优先级：ModernUI Fragment > 原生 Screen > 打开新 ModernUI 终端
+     * 若 ModernUI Fragment 已活跃且匹配同一个 Observer 则就地刷新，否则打开新终端。
      */
     public static void handleObserverData(ObserverDataPayload payload) {
-        Minecraft mc = Minecraft.getInstance();
-
-        // 1. 检查 ModernUI 终端 Fragment 是否活跃
         ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
         if (modernFragment != null && modernFragment.matchesObserver(payload.observerPos())) {
             modernFragment.applyPayload(payload);
             return;
         }
-
-        // 2. 检查原生 Screen 是否活跃（兼容模式）
-        Screen current = mc.screen;
-        if (current instanceof ResourceTerminalScreen terminalScreen
-                && terminalScreen.matchesObserver(payload.observerPos())) {
-            terminalScreen.applyPayload(payload);
-            return;
-        }
-
-        // 3. 打开新的 ModernUI 终端界面
         ResourceTerminalFragment.open(payload);
     }
 
@@ -65,17 +49,12 @@ public final class ClientPayloadHandler {
 
     /**
      * 处理服务端推送的 Web 访问 Token / 链接：交给当前活跃的 ModernUI Fragment 弹出对话框。
-     * 若 Fragment 未活跃则回退到原生 Screen；都不在则记录日志（玩家未打开终端时不应收到此包）。
+     * 玩家未打开终端时不应收到此包；若收到则静默丢弃。
      */
     public static void handleWebToken(WebTokenPayload payload) {
         ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
         if (modernFragment != null) {
             modernFragment.applyWebToken(payload);
-            return;
-        }
-        Screen current = Minecraft.getInstance().screen;
-        if (current instanceof ResourceTerminalScreen terminalScreen) {
-            terminalScreen.applyWebToken(payload);
         }
     }
 }

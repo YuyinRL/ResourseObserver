@@ -52,6 +52,13 @@ repositories {
             includeGroup "icyllis.modernui"
         }
     }
+    maven {
+        name "BlameJared Maven (JEI)"
+        url "https://maven.blamejared.com/"
+        content {
+            includeGroup "mezz.jei"
+        }
+    }
     // 如需额外的依赖仓库，请在此添加
     mavenCentral()
 }
@@ -174,6 +181,13 @@ dependencies {
     // JEC (Just Enough Characters) — 可选，用于中文拼音搜索集成
     compileOnly "curse.maven:just-enough-characters-250702:6681787"
     localRuntime "curse.maven:just-enough-characters-250702:6681787"
+    // JEI (Just Enough Items) —— 可选集成
+    //   common API：跨平台插件接口（IModPlugin 等，编译期使用）
+    //   neoforge-api：NeoForge 平台特化 API（如有需要）
+    //   neoforge：完整运行时 mod，仅用于开发环境
+    compileOnly "mezz.jei:jei-${minecraft_version}-common-api:${jei_version}"
+    compileOnly "mezz.jei:jei-${minecraft_version}-neoforge-api:${jei_version}"
+    localRuntime "mezz.jei:jei-${minecraft_version}-neoforge:${jei_version}"
 
     // 单元测试 —— 仅用于纯逻辑类（JsonWriter / QueryUtil / ChartWindow / 数据容器等）
     // 不依赖 Minecraft / NeoForge 运行时
