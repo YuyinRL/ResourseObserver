@@ -1,6 +1,8 @@
 package com.yuyinrl.resourceobserver.client.modernui;
 
 import com.yuyinrl.resourceobserver.client.PowerExternalSelectionCache;
+import com.yuyinrl.resourceobserver.client.screen.v2.LatestSnapshotProvider;
+import com.yuyinrl.resourceobserver.client.ui.snapshot.ClientOverviewLocalizer;
 import com.yuyinrl.resourceobserver.client.ui.CraftingViewModel;
 import com.yuyinrl.resourceobserver.client.ui.CraftingViewModelMapper;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
@@ -10,6 +12,10 @@ import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModelMapper;
 import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModel;
 import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModelMapper;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import com.yuyinrl.resourceobserver.service.snapshot.overview.OverviewSnapshot;
+import com.yuyinrl.resourceobserver.service.snapshot.overview.OverviewSnapshotBuilder;
+import com.yuyinrl.resourceobserver.service.snapshot.power.PowerSnapshot;
+import com.yuyinrl.resourceobserver.service.snapshot.power.PowerSnapshotBuilder;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.multiplayer.ServerData;
 import net.minecraft.core.BlockPos;
@@ -104,6 +110,7 @@ public final class ViewModelBridge {
         this.storageAlertFilterActive = alertFilterActive;
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
                 payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
+        publishLatestSnapshot();
         notifyListeners();
     }
 
@@ -118,6 +125,7 @@ public final class ViewModelBridge {
         overviewViewModel = OverviewViewModelMapper.fromPayload(payload, searchQuery);
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
                 payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
+        publishLatestSnapshot();
         craftingViewModel = CraftingViewModelMapper.fromPayload(payload, searchQuery);
         notifyListeners();
     }
@@ -138,8 +146,30 @@ public final class ViewModelBridge {
         overviewViewModel = OverviewViewModelMapper.fromPayload(payload, searchQuery);
         storageViewModel = StorageNetworkViewModelMapper.fromPayload(
                 payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery);
+        publishLatestSnapshot();
         powerViewModel = PowerNetworkViewModelMapper.fromPayload(payload);
         craftingViewModel = CraftingViewModelMapper.fromPayload(payload, searchQuery);
+    }
+
+    private void publishLatestSnapshot() {
+        LatestSnapshotProvider.set(payload, bufferEma);
+        if (payload != null) {
+            OverviewSnapshot snapshot = OverviewSnapshotBuilder.fromPayload(payload, ClientOverviewLocalizer.INSTANCE);
+            LatestSnapshotProvider.setOverviewSnapshot(snapshot);
+            LatestSnapshotProvider.setOverviewViewModel(
+                    OverviewViewModelMapper.fromPayload(payload, searchQuery));
+            LatestSnapshotProvider.setStorageNetworkViewModel(StorageNetworkViewModelMapper.fromPayload(
+                    payload, storageSelectedNodeId, storageAlertFilterActive, bufferEma, searchQuery));
+            PowerSnapshot powerSnap = PowerSnapshotBuilder.fromPayload(payload);
+            LatestSnapshotProvider.setPowerSnapshot(powerSnap);
+            LatestSnapshotProvider.setPowerNetworkViewModel(PowerNetworkViewModelMapper.fromPayload(payload));
+        } else {
+            LatestSnapshotProvider.setOverviewSnapshot(null);
+            LatestSnapshotProvider.setOverviewViewModel(null);
+            LatestSnapshotProvider.setStorageNetworkViewModel(null);
+            LatestSnapshotProvider.setPowerSnapshot(null);
+            LatestSnapshotProvider.setPowerNetworkViewModel(null);
+        }
     }
 
     // ===================== Getters =====================
@@ -293,3 +323,5 @@ public final class ViewModelBridge {
         }
     }
 }
+
+

@@ -73,6 +73,7 @@ public class ScrollView extends BaseWidget {
         g.enableScissor(b.x(), b.y(), b.right(), b.bottom());
         try {
             if (child != null && child.isVisible()) child.render(g, mx, my, pt);
+            g.flush();
         } finally {
             g.disableScissor();
         }

@@ -10,12 +10,13 @@ import static org.junit.jupiter.api.Assertions.*;
 class PowerKpiBuilderTest {
 
     @Test
-    void buildsThreeCards() {
+    void buildsFourCards() {
         List<PowerSnapshot.KpiSnapshot> kpis = PowerKpiBuilder.build(100L, 50L, 500L, 1000L);
-        assertEquals(3, kpis.size());
-        assertEquals(PowerKpiBuilder.KEY_TOTAL_INPUT, kpis.get(0).labelKey());
-        assertEquals(PowerKpiBuilder.KEY_TOTAL_OUTPUT, kpis.get(1).labelKey());
+        assertEquals(4, kpis.size());
+        assertEquals(PowerKpiBuilder.KEY_EFFECTIVE_INPUT, kpis.get(0).labelKey());
+        assertEquals(PowerKpiBuilder.KEY_EFFECTIVE_OUTPUT, kpis.get(1).labelKey());
         assertEquals(PowerKpiBuilder.KEY_STORED, kpis.get(2).labelKey());
+        assertEquals(PowerKpiBuilder.KEY_EXTERNAL_EXCLUDED, kpis.get(3).labelKey());
     }
 
     @Test
@@ -87,6 +88,7 @@ class PowerKpiBuilderTest {
         var kpis = PowerKpiBuilder.build(1000L, 500L, 5000L, 10000L);
         assertTrue(kpis.get(0).value().endsWith("FE/t"));
         assertTrue(kpis.get(1).value().endsWith("FE/t"));
-        assertTrue(kpis.get(2).value().endsWith("%"));
+        assertTrue(kpis.get(2).value().endsWith("FE"));
+        assertTrue(kpis.get(3).value().endsWith("FE/t"));
     }
 }

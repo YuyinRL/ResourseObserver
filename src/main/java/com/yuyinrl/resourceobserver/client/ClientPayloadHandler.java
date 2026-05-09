@@ -19,9 +19,20 @@ public final class ClientPayloadHandler {
 
     /**
      * 处理收到的观察者数据负载。
-     * 若 ModernUI Fragment 已活跃且匹配同一个 Observer 则就地刷新，否则打开新终端。
+     *
+     * <p>路由优先级：</p>
+     * <ol>
+     *   <li>若 V2 终端（{@code ResourceTerminalScreenV2}）当前活跃，写入
+     *       {@link com.yuyinrl.resourceobserver.client.screen.v2.LatestSnapshotProvider}
+     *       让 V2 自行刷新（避免在 V2 之上误开 ModernUI）。</li>
+     *   <li>若 ModernUI Fragment 已活跃且匹配同一个 Observer 则就地刷新。</li>
+     *   <li>否则打开 ModernUI 终端（首次右键终端物品的默认行为）。</li>
+     * </ol>
      */
     public static void handleObserverData(ObserverDataPayload payload) {
+        if (com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreenV2.applyPayloadIfActive(payload)) {
+            return;
+        }
         ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
         if (modernFragment != null && modernFragment.matchesObserver(payload.observerPos())) {
             modernFragment.applyPayload(payload);
@@ -35,6 +46,17 @@ public final class ClientPayloadHandler {
         ResourceTerminalFragment modernFragment = ResourceTerminalFragment.getActiveInstance();
         if (modernFragment != null) {
             modernFragment.applyCraftingPlanResult(payload);
+            return;
+        }
+        // V2 路径：若 V2 终端打开且有等待回调，路由进去
+        java.util.function.Consumer<CraftingPlanResultPayload> cb =
+                com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreenV2.v2PlanCallback;
+        if (cb != null) {
+            try {
+                cb.accept(payload);
+            } finally {
+                com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreenV2.v2PlanCallback = null;
+            }
         }
     }
 

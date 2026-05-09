@@ -65,7 +65,7 @@ public class ButtonWidget extends BaseWidget {
             int tx = b.x() + (b.width() - tw) / 2;
             int ty = b.y() + (b.height() - VanillaTheme.FONT_HEIGHT) / 2;
             int color = enabled ? textColor : VanillaTheme.COLOR_TEXT_DISABLED;
-            g.drawString(font, label, tx, ty, color, true);
+            g.drawString(font, label, tx, ty, color, false);
         }
     }
 

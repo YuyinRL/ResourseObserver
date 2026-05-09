@@ -713,8 +713,9 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
 
         chrome.addView(spacer(chrome), spacerParams());
 
-        // Web Dashboard 访问 Token 入口
-        TextView webBtn = chromeIconButton(this, "\uD83C\uDF10", false);
+        // Web Dashboard 访问 Token 入口（预渲染 emoji PNG，ModernUI 字体不支持 emoji）
+        GlobeIconView globeIcon = new GlobeIconView(getContext());
+        View webBtn = chromeDrawableButton(this, globeIcon, false);
         webBtn.setOnClickListener(v -> requestWebToken(false));
         chrome.addView(webBtn);
 

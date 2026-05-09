@@ -1,14 +1,30 @@
 package com.yuyinrl.resourceobserver.service.snapshot.overview;
 
+import appeng.api.networking.IGrid;
+import com.yuyinrl.resourceobserver.integration.FluxNetworksIntegration;
+import com.yuyinrl.resourceobserver.network.ChartScope;
+import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
 import com.yuyinrl.resourceobserver.service.snapshot.format.SnapshotFormatters;
+import com.yuyinrl.resourceobserver.world.block.entity.Ae2CellCapacityMetrics;
+import com.yuyinrl.resourceobserver.world.block.entity.BindingStats;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
+import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
+import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
+import com.yuyinrl.resourceobserver.world.ui.PlayerUiPrefsSavedData;
+import net.minecraft.core.BlockPos;
+import net.minecraft.server.level.ServerLevel;
 
 import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.Collections;
+import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Overview 主装配器 —— 把 {@link ObserverDataPayload} 折叠成一个 {@link OverviewSnapshot}。
@@ -131,6 +147,23 @@ public final class OverviewSnapshotBuilder {
                 watchlist,
                 tableGroups
         );
+    }
+
+    /** Web / 服务端入口：直接从 Observer 当前状态构造 OverviewSnapshot。 */
+    public static OverviewSnapshot fromObserver(ObserverBlockEntity observer, OverviewLocalizer localizer) {
+        return fromObserver(observer, localizer, PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot.defaults());
+    }
+
+    /** Web / 服务端入口（可注入 UI 偏好）。 */
+    public static OverviewSnapshot fromObserver(
+            ObserverBlockEntity observer,
+            OverviewLocalizer localizer,
+            PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
+    ) {
+        PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot prefs = uiPrefs == null
+                ? PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot.defaults()
+                : uiPrefs;
+        return fromPayload(buildPayloadFromObserver(observer, prefs), localizer);
     }
 
     // ===== 表格行聚合 =====
@@ -490,7 +523,316 @@ public final class OverviewSnapshotBuilder {
         };
     }
 
+    // ===== Observer → Payload 适配 =====
+
+    private static ObserverDataPayload buildPayloadFromObserver(
+            ObserverBlockEntity observer,
+            PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
+    ) {
+        List<BoundEntry> effectiveBindings = deduplicateBindings(observer);
+        List<ObserverDataPayload.BindingEntry> entries = new ArrayList<>();
+        for (BoundEntry binding : effectiveBindings) {
+            BindingStats stats = observer.getStatsFor(binding.networkId());
+            entries.add(new ObserverDataPayload.BindingEntry(
+                    binding.networkType(),
+                    binding.networkId(),
+                    binding.targetBlockId(),
+                    resolveBindingDisplayName(binding, uiPrefs),
+                    bindingIcon(binding),
+                    stats.currentValue(),
+                    stats.capacity(),
+                    toCellCapacityMetrics(observer, binding),
+                    stats.totalProduced(),
+                    stats.totalConsumed(),
+                    observer.getKpiStats(binding.networkId()),
+                    buildItemDeltas(binding, observer, uiPrefs),
+                    observer.getDebugInfoFor(binding.networkId())
+            ));
+        }
+
+        ChartSeriesResult chartResult = buildChartSeries(observer, effectiveBindings);
+        return new ObserverDataPayload(
+                observer.getBlockPos(),
+                observer.isBound(),
+                false,
+                ChartWindow.WEB_DETAIL_BUFFER_5M_1S,
+                ChartScope.GLOBAL,
+                "",
+                chartResult.itemSeries(),
+                chartResult.energySeries(),
+                uiPrefs.groupFilterKey(),
+                uiPrefs.sortMode(),
+                uiPrefs.sortDesc(),
+                uiPrefs.statusFilter(),
+                PlayerUiPrefsSavedData.WATCHLIST_LIMIT,
+                uiPrefs.watchlistItemIds(),
+                buildGroupEntries(uiPrefs),
+                entries,
+                List.of()
+        );
+    }
+
+    private static ChartSeriesResult buildChartSeries(
+            ObserverBlockEntity observer,
+            List<BoundEntry> effectiveBindings
+    ) {
+        if (!(observer.getLevel() instanceof ServerLevel level)) {
+            return new ChartSeriesResult(List.of(), List.of());
+        }
+        BlockPos observerPos = observer.getBlockPos();
+        List<BoundEntry> itemBindings = new ArrayList<>();
+        List<BoundEntry> energyBindings = new ArrayList<>();
+        for (BoundEntry binding : effectiveBindings) {
+            if ("FLUX_ENERGY".equals(binding.networkType())) {
+                energyBindings.add(binding);
+            } else {
+                itemBindings.add(binding);
+            }
+        }
+        return new ChartSeriesResult(
+                HistoryRecorder.querySeries(
+                        level,
+                        observerPos,
+                        itemBindings,
+                        ChartWindow.WEB_DETAIL_BUFFER_5M_1S,
+                        ChartScope.GLOBAL,
+                        null),
+                HistoryRecorder.querySeries(
+                        level,
+                        observerPos,
+                        energyBindings,
+                        ChartWindow.WEB_DETAIL_BUFFER_5M_1S,
+                        ChartScope.GLOBAL,
+                        null)
+        );
+    }
+
+    private static List<ObserverDataPayload.GroupEntry> buildGroupEntries(
+            PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
+    ) {
+        List<ObserverDataPayload.GroupEntry> groups = new ArrayList<>();
+        for (PlayerUiPrefsSavedData.GroupDefinition group : uiPrefs.groups()) {
+            groups.add(new ObserverDataPayload.GroupEntry(group.key(), group.displayName(), group.systemGroup()));
+        }
+        return groups;
+    }
+
+    private static List<ObserverDataPayload.ItemDeltaEntry> buildItemDeltas(
+            BoundEntry binding,
+            ObserverBlockEntity observer,
+            PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
+    ) {
+        if ("AE2_ITEMS".equals(binding.networkType())) {
+            return buildAe2ItemDeltas(binding, observer, uiPrefs);
+        }
+        if ("FLUX_ENERGY".equals(binding.networkType())) {
+            return buildFluxEnergyDeltas(binding, observer);
+        }
+        return List.of();
+    }
+
+    private static List<ObserverDataPayload.ItemDeltaEntry> buildAe2ItemDeltas(
+            BoundEntry binding,
+            ObserverBlockEntity observer,
+            PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
+    ) {
+        List<ObserverDataPayload.ItemDeltaEntry> itemDeltas = new ArrayList<>();
+        Map<String, Long> amounts = observer.getAe2ItemAmountsFor(binding.networkId());
+        Map<String, Double> rates = observer.getAe2ItemRatesPerMinFor(binding.networkId());
+        Map<String, Double> prodRates = observer.getAe2ItemProdRatesPerMinFor(binding.networkId());
+        Map<String, Double> consRates = observer.getAe2ItemConsRatesPerMinFor(binding.networkId());
+        for (Map.Entry<String, Long> entry : amounts.entrySet()) {
+            String itemId = entry.getKey();
+            ObserverDataPayload.EntryType entryType = entryTypeForId(itemId);
+            itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                    entryType,
+                    itemId,
+                    toDisplayName(itemId, entryType),
+                    uiPrefs.groupKeyForItem(itemId),
+                    iconSpriteForEntryType(entryType),
+                    entry.getValue(),
+                    rates.getOrDefault(itemId, 0.0d),
+                    prodRates.getOrDefault(itemId, 0.0d),
+                    consRates.getOrDefault(itemId, 0.0d)
+            ));
+        }
+        for (Map.Entry<String, Double> entry : rates.entrySet()) {
+            String itemId = entry.getKey();
+            if (amounts.containsKey(itemId)) {
+                continue;
+            }
+            ObserverDataPayload.EntryType entryType = entryTypeForId(itemId);
+            itemDeltas.add(new ObserverDataPayload.ItemDeltaEntry(
+                    entryType,
+                    itemId,
+                    toDisplayName(itemId, entryType),
+                    uiPrefs.groupKeyForItem(itemId),
+                    iconSpriteForEntryType(entryType),
+                    0L,
+                    entry.getValue(),
+                    prodRates.getOrDefault(itemId, 0.0d),
+                    consRates.getOrDefault(itemId, 0.0d)
+            ));
+        }
+        itemDeltas.sort(Comparator.comparing(ObserverDataPayload.ItemDeltaEntry::entryType)
+                .thenComparing(ObserverDataPayload.ItemDeltaEntry::itemId));
+        return itemDeltas;
+    }
+
+    private static List<ObserverDataPayload.ItemDeltaEntry> buildFluxEnergyDeltas(
+            BoundEntry binding,
+            ObserverBlockEntity observer
+    ) {
+        FluxNetworksIntegration.FluxSampleResult result = observer.getFluxSampleResultFor(binding.networkId());
+        if (result == null) {
+            return List.of();
+        }
+        return List.of(
+                new ObserverDataPayload.ItemDeltaEntry(
+                        ObserverDataPayload.EntryType.ITEM,
+                        "flux.input_per_tick",
+                        "Input/t",
+                        "flux_metrics",
+                        "resourceobserver:terminal/kpi_production",
+                        result.energyInput(),
+                        0.0d,
+                        0.0d,
+                        0.0d
+                ),
+                new ObserverDataPayload.ItemDeltaEntry(
+                        ObserverDataPayload.EntryType.ITEM,
+                        "flux.output_per_tick",
+                        "Output/t",
+                        "flux_metrics",
+                        "resourceobserver:terminal/kpi_consumption",
+                        result.energyOutput(),
+                        0.0d,
+                        0.0d,
+                        0.0d
+                ),
+                new ObserverDataPayload.ItemDeltaEntry(
+                        ObserverDataPayload.EntryType.ITEM,
+                        "flux.energy_stored",
+                        "Energy Stored",
+                        "flux_metrics",
+                        "resourceobserver:terminal/kpi_storage",
+                        result.totalEnergy(),
+                        0.0d,
+                        0.0d,
+                        0.0d
+                )
+        );
+    }
+
+    private static List<BoundEntry> deduplicateBindings(ObserverBlockEntity observer) {
+        List<BoundEntry> source = observer.getBindings();
+        if (source.size() <= 1) return source;
+        Set<IGrid> seenAe2Grids = Collections.newSetFromMap(new IdentityHashMap<>());
+        List<BoundEntry> deduped = new ArrayList<>(source.size());
+        for (BoundEntry binding : source) {
+            if (!"AE2_ITEMS".equals(binding.networkType())) {
+                deduped.add(binding);
+                continue;
+            }
+            IGrid grid = observer.resolveAe2GridForNetwork(binding.networkId());
+            if (grid == null || seenAe2Grids.add(grid)) {
+                deduped.add(binding);
+            }
+        }
+        return deduped;
+    }
+
+    private static ObserverDataPayload.CellCapacityMetrics toCellCapacityMetrics(
+            ObserverBlockEntity observer,
+            BoundEntry binding
+    ) {
+        if (!"AE2_ITEMS".equals(binding.networkType())) {
+            return ObserverDataPayload.CellCapacityMetrics.unavailable();
+        }
+        Ae2CellCapacityMetrics metrics = observer.getAe2CellCapacityMetricsFor(binding.networkId());
+        return new ObserverDataPayload.CellCapacityMetrics(
+                metrics.itemUsedBytes(),
+                metrics.itemTotalBytes(),
+                metrics.itemUsedTypes(),
+                metrics.itemTotalTypes(),
+                metrics.itemUsedUnits(),
+                metrics.itemMaxUnits(),
+                metrics.fluidUsedBytes(),
+                metrics.fluidTotalBytes(),
+                metrics.fluidUsedTypes(),
+                metrics.fluidTotalTypes(),
+                metrics.fluidUsedUnits(),
+                metrics.fluidMaxUnits(),
+                metrics.externalItemUsedUnits(),
+                metrics.externalItemTotalUnits(),
+                metrics.externalFluidUsedUnits(),
+                metrics.externalFluidTotalUnits(),
+                metrics.scope(),
+                metrics.reliable(),
+                metrics.available(),
+                metrics.externalReliable(),
+                metrics.externalAvailable()
+        );
+    }
+
+    private static String resolveBindingDisplayName(
+            BoundEntry binding,
+            PlayerUiPrefsSavedData.PlayerUiPrefsSnapshot uiPrefs
+    ) {
+        String custom = uiPrefs.customNameForNetwork(binding.networkId());
+        if (custom != null && !custom.isBlank()) return custom;
+        if ("AE2_ITEMS".equals(binding.networkType())) return "Storage Network";
+        if ("FLUX_ENERGY".equals(binding.networkType())) return "Power Network";
+        return "Linked Network";
+    }
+
+    private static String bindingIcon(BoundEntry binding) {
+        if ("AE2_ITEMS".equals(binding.networkType())) return "resourceobserver:terminal/kpi_storage";
+        if ("FLUX_ENERGY".equals(binding.networkType())) return "resourceobserver:terminal/kpi_consumption";
+        return "resourceobserver:terminal/kpi_efficiency";
+    }
+
+    private static ObserverDataPayload.EntryType entryTypeForId(String itemId) {
+        if (itemId != null && itemId.startsWith("fluid:")) {
+            return ObserverDataPayload.EntryType.FLUID;
+        }
+        return ObserverDataPayload.EntryType.ITEM;
+    }
+
+    private static String iconSpriteForEntryType(ObserverDataPayload.EntryType entryType) {
+        if (entryType == ObserverDataPayload.EntryType.FLUID) {
+            return "resourceobserver:terminal/watch_item";
+        }
+        return "resourceobserver:terminal/table_item";
+    }
+
+    private static String toDisplayName(String itemId, ObserverDataPayload.EntryType entryType) {
+        String id = itemId == null ? "" : itemId;
+        if (entryType == ObserverDataPayload.EntryType.FLUID && id.startsWith("fluid:")) {
+            id = id.substring("fluid:".length());
+        }
+        int colon = id.indexOf(':');
+        String path = colon >= 0 ? id.substring(colon + 1) : id;
+        if (path.isBlank()) return itemId == null ? "" : itemId;
+        String[] parts = path.split("[_\\-/]");
+        StringBuilder sb = new StringBuilder();
+        for (String part : parts) {
+            if (part.isBlank()) continue;
+            if (!sb.isEmpty()) sb.append(' ');
+            sb.append(part.substring(0, 1).toUpperCase(Locale.ROOT));
+            if (part.length() > 1) sb.append(part.substring(1));
+        }
+        return sb.isEmpty() ? path : sb.toString();
+    }
+
     // ===== 内部聚合工具 =====
+
+    private record ChartSeriesResult(
+            List<ObserverDataPayload.ChartPoint> itemSeries,
+            List<ObserverDataPayload.ChartPoint> energySeries
+    ) {
+    }
+
 
     private record StorageOutcome(
             OverviewSnapshot.KpiSnapshot kpi,

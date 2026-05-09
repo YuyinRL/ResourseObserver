@@ -416,7 +416,19 @@ final class PowerNetworkPageBuilder {
         Set<String> autoDetectedIds = computeAutoDetectedStorageIds(vm.debugSnapshot());
         Set<String> effectiveExtIds = new LinkedHashSet<>(autoDetectedIds);
         if (selectedExtIds != null) effectiveExtIds.addAll(selectedExtIds);
+
+        // G7：无外储排除时直接使用服务端数据；有外储排除时客户端覆盖计算。
+        // effectiveStats 始终计算（headroom/loadRatio 需要）。
         EffectiveStats stats = computeEffectiveStats(vm, effectiveExtIds);
+        List<PowerNetworkViewModel.PowerKpi> effectiveKpis;
+        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers;
+        if (effectiveExtIds.isEmpty()) {
+            effectiveKpis = vm.kpiCards();
+            effectiveConsumers = vm.consumers();
+        } else {
+            effectiveKpis = buildEffectiveKpis(stats, vm, effectiveExtIds);
+            effectiveConsumers = computeEffectiveConsumers(vm, effectiveExtIds, stats.totalInputPerTick());
+        }
 
         // ── Update donut chart data (in-place, preserves hover state) ──
         PowerNetworkViewModel.OverloadInfo info = stats.overloadInfo();
@@ -431,8 +443,6 @@ final class PowerNetworkPageBuilder {
         int accentColor = critical ? UiThemeTokens.ROSE
                 : (warning ? UiThemeTokens.AMBER : UiThemeTokens.EMERALD);
 
-        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers =
-                computeEffectiveConsumers(vm, effectiveExtIds, stats.totalInputPerTick());
         List<DonutChartView.Segment> donutSegs = buildDonutSegments(vm, stats, effectiveConsumers);
         double utilization = 100.0 - headroom;
         String centerValue = usedOnly
@@ -446,8 +456,7 @@ final class PowerNetworkPageBuilder {
         // Switch 组件自行维护 checked 状态，增量更新无需干预
 
         // ── Update KPI text values ──
-        List<PowerNetworkViewModel.PowerKpi> kpis = buildEffectiveKpis(stats, vm, effectiveExtIds);
-        updateTaggedTextViews(container, TAG_KPI_VALUES, kpis);
+        updateTaggedTextViews(container, TAG_KPI_VALUES, effectiveKpis);
 
         // ── Update summary gen/load text ──
         updateTaggedText(container, TAG_SUMMARY_GEN, compact(stats.totalInputPerTick()) + " FE/t");
@@ -574,10 +583,20 @@ final class PowerNetworkPageBuilder {
         Set<String> autoDetectedIds = computeAutoDetectedStorageIds(vm.debugSnapshot());
         Set<String> effectiveExtIds = new LinkedHashSet<>(autoDetectedIds);
         if (selectedExtIds != null) effectiveExtIds.addAll(selectedExtIds);
+
+        // G7：无外储排除时直接使用服务端下发的 KPI（4 张，含 external_excluded=0）和 consumers；
+        //      有外储排除时在客户端覆盖计算（用户态例外）。
+        // effectiveStats 始终计算（buildCapacityPieChart / buildGridChart 需要）。
         EffectiveStats effectiveStats = computeEffectiveStats(vm, effectiveExtIds);
-        List<PowerNetworkViewModel.PowerKpi> effectiveKpis = buildEffectiveKpis(effectiveStats, vm, effectiveExtIds);
-        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers =
-                computeEffectiveConsumers(vm, effectiveExtIds, effectiveStats.totalInputPerTick());
+        List<PowerNetworkViewModel.PowerKpi> effectiveKpis;
+        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers;
+        if (effectiveExtIds.isEmpty()) {
+            effectiveKpis = vm.kpiCards();
+            effectiveConsumers = vm.consumers();
+        } else {
+            effectiveKpis = buildEffectiveKpis(effectiveStats, vm, effectiveExtIds);
+            effectiveConsumers = computeEffectiveConsumers(vm, effectiveExtIds, effectiveStats.totalInputPerTick());
+        }
 
         int sectionGap = terminal.dp(6);
         int scrollbarW = terminal.dp(8);

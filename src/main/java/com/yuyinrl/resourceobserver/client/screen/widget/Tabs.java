@@ -74,6 +74,15 @@ public class Tabs extends BaseWidget {
     }
 
     @Override
+    public void tick() {
+        // 仅对当前选中（可见）的 tab 内容传播 tick
+        if (selected >= 0 && selected < tabs.size()) {
+            UiWidget c = tabs.get(selected).content();
+            if (c != null && c.isVisible()) c.tick();
+        }
+    }
+
+    @Override
     public void render(GuiGraphics g, int mx, int my, float pt) {
         if (!isVisible()) return;
         Rect b = bounds();
@@ -117,10 +126,11 @@ public class Tabs extends BaseWidget {
 
     @Override
     public boolean mouseClicked(double mx, double my, int button) {
-        if (!isVisible() || button != 0) return false;
+        if (!isVisible()) return false;
         Rect b = bounds();
-        // tab 条命中
-        if (mx >= b.x() && mx < b.right() && my >= b.y() && my < b.y() + tabBarHeight) {
+        // tab 条命中（仅左键切换）
+        if (button == 0
+                && mx >= b.x() && mx < b.right() && my >= b.y() && my < b.y() + tabBarHeight) {
             int n = tabs.size();
             if (n == 0) return false;
             int relX = (int) (mx - b.x());
@@ -133,7 +143,7 @@ public class Tabs extends BaseWidget {
             }
             return true;
         }
-        // 内容区域命中
+        // 内容区域命中（左键 / 右键 / 中键 均转发，由内容自行处理）
         if (selected >= 0 && selected < tabs.size()) {
             UiWidget c = tabs.get(selected).content;
             if (c != null && c.isVisible() && c.isMouseOver(mx, my)) {
@@ -159,6 +169,15 @@ public class Tabs extends BaseWidget {
         if (selected >= 0 && selected < tabs.size()) {
             UiWidget c = tabs.get(selected).content;
             if (c != null && c.isVisible()) return c.keyPressed(keyCode, scanCode, modifiers);
+        }
+        return false;
+    }
+
+    @Override
+    public boolean charTyped(char codePoint, int modifiers) {
+        if (selected >= 0 && selected < tabs.size()) {
+            UiWidget c = tabs.get(selected).content;
+            if (c != null && c.isVisible()) return c.charTyped(codePoint, modifiers);
         }
         return false;
     }

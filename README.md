@@ -6,210 +6,133 @@
 [![Modrinth](#)](#)
 [![CurseForge](#)](#)
 
-**Resource Observer** 是一个 Minecraft NeoForge 模组，提供**游戏内资源网络实时监控**。放置观察者方块、绑定到 AE2 存储网络或 Flux 能量网络，即可在终端 GUI 或 Web 仪表盘中查看实时数据、图表和告警。
+**Resource Observer** 是一个 Minecraft NeoForge 模组，让你在游戏内或浏览器中实时监控 AE2 存储网络和 Flux 能量网络的数据。
 
 ---
 
-## 核心功能
+## 功能
 
-### 游戏内终端（Modern UI）
-- **三标签页仪表盘：** 总览 / 存储网络 / 电力网络，实时更新
-- **流量图表：** Hermite 插值 + EMA 平滑的吞吐量与库存曲线，支持多时间窗口
-- **物品关注列表：** 固定关键物品到关注列表，快速跟踪生产/消耗/库存变化
-- **存储网络浏览器：** 按节点/物品浏览 AE2 网络，查看容量、类型占用、缓冲区估算
-- **合成下单：** 两阶段合成下单流程（计算方案 → Review → 确认），支持合成树可视化
-- **电力监控：** Flux Networks / Mekanism 设备负载分布、过载告警、外储联动
-- **拼音搜索：** 支持中文拼音模糊搜索物品（集成 JEC）
+- **游戏内仪表盘（ModernUI ）：** 总览 / 存储网络 / 电力网络三个标签页，数据实时刷新
+- **Web 仪表盘：** 游戏内点 🌐按钮即可访问WebPanel，查看与游戏内同步的实时数据图表
+- **存储网络浏览器：** 按节点/物品查看 AE2 网络，容量、类型占用、缓冲区倒计时一目了然。页面内含 **Items** 与 **Crafting** 两个子标签页
+- **合成管理：** 在 Crafting 子标签页中查看活跃合成任务、可合成列表，两阶段下单（计算方案 → 确认），支持合成树可视化
+- **流量图表：** 吞吐量与库存趋势曲线，支持多时间窗口切换
+- **电力监控：** Flux Networks 设备负载分布、过载告警、外部储能联动
+- **关注列表：** 固定关键物品，快速追踪生产/消耗变化
 
-### 内置 Web 仪表盘
-- **零依赖 HTTP 服务：** JDK 原生 HttpServer，默认 `127.0.0.1:28080`
-- **独立前端：** React 18 + Tailwind CSS 4 + Recharts 构建的现代化 Web 仪表盘
-- **RESTful API：** 实时数据接口，支持 Observer 枚举、KPI 详情、合成操作
-- **高精度采样：** 1200 桶环形缓冲区（0.25s 粒度），自适应时间颗粒度
+### 兼容模组
 
-### 模组兼容性
-| 模组 | 类型 | 说明 |
-|------|------|------|
-| **AE2** (Applied Energistics 2) | 必需 | 存储网络数据源 |
-| **ModernUI** (icyllis) | 必需（客户端） | 游戏内终端 UI 框架 |
-| **Flux Networks** | 可选 | 能量网络数据源 |
-| **Mekanism** | 可选 | 能量单位转换 |
-| **Draconic Evolution** | 可选 | 能量核心外部存储适配 |
-| **JEC** (Just Enough Characters) | 可选（客户端） | 拼音搜索增强 |
+| 模组                          | 类型      |
+| --------------------------- | ------- |
+| AE2 (Applied Energistics 2) | 必需      |
+| ModernUI (icyllis)          | 必需（客户端） |
+| JEI (Just Enough Items)     | 必需（客户端） |
+| Flux Networks               | 可选      |
+| Mekanism(感应矩阵)              | 支持外储识别  |
+| Draconic Evolution(能量核心)    | 支持外储识别  |
 
 ---
 
-## 游戏内截图
+## 截图
 
-> *以下为截图预留位置，发布时请补充实际游戏截图。*
+### 游戏内
 
-<!-- TODO: 添加截图 -->
-| 总览面板 | 存储网络 | 电力网络 |
-|:---:|:---:|:---:|
-| ![总览](docs/screenshots/overview.png) | ![存储](docs/screenshots/storage.png) | ![电力](docs/screenshots/power.png) |
+<p align="center">
+  <img src="docs/images/InGame_Overview.png" alt="总览页面"><br>
+  <em>总览页面</em>
+</p>
 
-<!-- TODO: 添加 Web 仪表盘截图 -->
+<p align="center">
+  <img src="docs/images/InGame_Power.png" alt="电力网络页面"><br>
+  <em>电力网络页面</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/InGame_Storage-1.png" alt="存储网络 - 物品"><br>
+  <em>存储网络 — Items</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/InGame_Storage-2.png" alt="存储网络 - 合成"><br>
+  <em>存储网络 — Crafting</em>
+</p>
+
 ### Web 仪表盘
-| Overview | Storage | Power |
-|:---:|:---:|:---:|
-| ![Web总览](docs/screenshots/web-overview.png) | ![Web存储](docs/screenshots/web-storage.png) | ![Web电力](docs/screenshots/web-power.png) |
+
+<p align="center">
+  <img src="docs/images/Web_Overview.png" alt="Web 总览"><br>
+  <em>总览</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/Web_Power.png" alt="Web 电力网络"><br>
+  <em>电力网络</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/Web_Storage-1.png" alt="Web 存储 - 物品"><br>
+  <em>存储网络 — Items</em>
+</p>
+
+<p align="center">
+  <img src="docs/images/Web_Storage-2.png" alt="Web 存储 - 合成"><br>
+  <em>存储网络 — Crafting</em>
+</p>
 
 ---
 
-## 使用说明
+## 快速上手
 
-### 快速开始
+1. 放置 **Observer Block** 在目标网络附近
+2. 手持 **Binding Tool**，右键观察者方块选中，再右键 AE2 控制器或 Flux 接口完成绑定
+3. 手持 **Resource Terminal** 右键打开仪表盘
+4. 如需 Web 访问，点击终端顶栏 🌐 按钮获取链接
 
-1. **放置观察者方块：** 在目标网络附近放置 Observer Block。
-2. **绑定网络：** 手持 Binding Tool，右键观察者方块（选中），再右键 AE2 控制器 / Flux 接口（绑定）。
-3. **打开终端：** 手持 Resource Terminal 右键打开仪表盘 GUI。
-4. **查看数据：** 在三个标签页之间切换，查看实时资源数据。
-
-### 绑定工具操作流程
-
-```
-右键观察者方块 → 聊天栏提示 "已选中观察者 (x, y, z)"
-    ↓
-右键目标网络方块 → 聊天栏提示 "已绑定到 <网络类型>"
-    ↓
-重复上一步可绑定多个网络到同一个观察者
-```
-
-- **解除绑定：** Shift + 右键空气清除所有绑定
-- **跨维度限制：** 观察者和目标方块必须在同一维度
-
-### 资源终端使用
-
-- **右键打开：** 手持终端右键打开 GUI
-- **Shift 查看详情：** 在物品上 Shift 悬停查看绑定信息
-- **点击 KPI 卡片：** 查看详细指标分解
-- **★ 收藏物品：** 点击星标将物品加入关注列表
-
-### Web 仪表盘访问
-
-1. 启动 Minecraft 客户端/服务器，模组会自动启动 HTTP 服务
-2. 浏览器访问 `http://127.0.0.1:28080`
-3. 左侧选择 Observer → 右侧查看实时数据面板
-
-配置文件：`config/resourceobserver-web.toml`
-
-```toml
-[server]
-enabled = true
-host = "127.0.0.1"
-port = 28080
-corsAllowAll = false
-```
+> 按 **F8** 可打开原版风格的 V2 终端。
 
 ---
 
-## 开发
-
-### 环境要求
-
-- **JDK 21**（推荐 [Eclipse Temurin](https://adoptium.net/)）
-- **Gradle**（通过 `gradlew` 自动下载）
-
-### 构建命令
+## 构建
 
 ```bash
-# 构建模组 JAR
+# 构建模组
 ./gradlew build
 
-# 启动 Minecraft 客户端（开发环境）
+# 启动开发环境
 ./gradlew runClient
-
-# 启动专用服务器
-./gradlew runServer
-
-# 运行数据生成器
-./gradlew runData
 
 # 构建 Web 仪表盘
 cd "Data Visualization Dashboard"
-pnpm install
-pnpm build
+pnpm install && pnpm build
 ```
 
-### 项目结构
+项目结构（仅列出顶层）：
 
 ```
-├── src/main/java/          # Java 模组代码
-│   └── com/yuyinrl/resourceobserver/
-│       ├── client/         # 客户端 UI（ModernUI Fragment / Vanilla Screen）
-│       │   ├── modernui/   # ModernUI Canvas 页面
-│       │   ├── ui/         # ViewModel + render/ + format/
-│       │   └── web/        # IconRenderer 客户端图标渲染
-│       ├── integration/    # 模组集成适配器
-│       ├── network/        # 网络 Payload（record 类型）
-│       ├── registry/       # DeferredRegister 注册
-│       ├── service/        # Web ↔ BlockEntity 桥接层（v0.8.0）
-│       ├── web/            # 内置 HTTP 服务
-│       │   ├── handler/    # API 端点处理器
-│       │   └── util/       # QueryUtil 工具
-│       └── world/          # 方块 / 实体 / 物品 / 数据
-│           └── block/entity/
-│               ├── ObserverBlockEntity   # 主实体（1083 行，委托架构）
-│               ├── Ae2DataStore          # 采样数据容器
-│               ├── Ae2Sampler            # AE2 采样器
-│               └── Ae2CellProber         # Cell 反射探测
-├── src/main/resources/     # 资源文件（纹理、语言、Web 静态文件）
-├── Data Visualization Dashboard/  # Web 仪表盘前端（Vite + React）
-├── docs/designdoc/         # 设计文档（Obsidian 兼容）
-└── scripts/                # 开发脚本
+src/main/java/          # 模组本体
+src/main/resources/     # 纹理、语言文件、Web 静态资源
+Data Visualization Dashboard/  # Web 仪表盘前端
+docs/                   # 设计文档 & 截图
 ```
 
-### 代码规范
-
-- 注释使用**中文**
-- Java 21 特性（record、模式匹配、密封类）
-- DeferredRegister 注册模式
-- 适配器模式集成可选模组
-- 委托模式分离采样/探测逻辑（Ae2Sampler / Ae2CellProber）
-- 服务桥接层隔离 Web ↔ BlockEntity 耦合（ObserverService）
-- 详见 `docs/designdoc/11-代码规范.md`
+详细架构与 API 文档请见 [`docs/designdoc/`](docs/designdoc/00-INDEX.md)。
 
 ---
 
-## 依赖项
+## 依赖
 
-### Minecraft 模组依赖
-
-| 依赖 | 版本 | 类型 |
-|------|------|------|
-| NeoForge | 1.21.1-21.1.206+ | 平台 |
-| AE2 (Applied Energistics 2) | — | 必需 |
-| ModernUI (icyllis) | 3.12.0 | 必需（客户端） |
-| Flux Networks | — | 可选 |
-| Mekanism | 1.21.1-10.7.18.84 | 可选 |
-| Draconic Evolution | — | 可选 |
-| JEC (Just Enough Characters) | — | 可选（客户端） |
-
-### Web 仪表盘技术栈
-
-| 技术 | 版本 |
-|------|------|
-| React | 18.3 |
-| Vite | 6.3 |
-| Tailwind CSS | 4.1 |
-| Recharts | 2.15 |
-| Radix UI | — |
-| Material UI | 7.3 |
-| React Router | 7.13 |
+- NeoForge 1.21.1-21.1.206+
+- AE2、ModernUI（客户端）、JEI（客户端）
+- 可选：Flux Networks、Mekanism、Draconic Evolution、JEC
 
 ---
 
 ## 许可证
 
-本项目基于 [MIT License](LICENSE) 发布。
+[MIT License](LICENSE)
 
 ---
 
 ## 作者
 
-- **YuyinRL** — 设计、开发与维护
-- 反馈与问题：请在 [GitHub Issues](#) 提交
-
----
-
-*Made with ❤️ for the Minecraft modding community.*
+**YuyinRL** — 设计、开发与维护
