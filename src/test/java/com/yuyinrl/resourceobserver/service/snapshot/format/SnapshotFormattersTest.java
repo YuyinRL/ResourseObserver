@@ -159,4 +159,95 @@ class SnapshotFormattersTest {
     void formatSignedPoints_nan_returnsNa() {
         assertEquals("N/A", SnapshotFormatters.formatSignedPoints(Double.NaN));
     }
+
+    // --- formatPercent (F2.A 新增) ---
+
+    @Test
+    void formatPercent_basic() {
+        assertEquals("0.0%", SnapshotFormatters.formatPercent(0.0));
+        assertEquals("50.0%", SnapshotFormatters.formatPercent(0.5));
+        assertEquals("100.0%", SnapshotFormatters.formatPercent(1.0));
+        assertEquals("12.3%", SnapshotFormatters.formatPercent(0.123));
+    }
+
+    @Test
+    void formatPercent_negativeOrInvalid_returnsNa() {
+        assertEquals("N/A", SnapshotFormatters.formatPercent(-0.1));
+        assertEquals("N/A", SnapshotFormatters.formatPercent(Double.NaN));
+        assertEquals("N/A", SnapshotFormatters.formatPercent(Double.POSITIVE_INFINITY));
+    }
+
+    // --- formatBufferSeconds (F2.A 新增) ---
+
+    @Test
+    void formatBufferSeconds_zeroOrNegative_returnsInfinity() {
+        assertEquals("∞", SnapshotFormatters.formatBufferSeconds(0));
+        assertEquals("∞", SnapshotFormatters.formatBufferSeconds(-1));
+    }
+
+    @Test
+    void formatBufferSeconds_secondsOnly() {
+        assertEquals("30s", SnapshotFormatters.formatBufferSeconds(30));
+        assertEquals("59s", SnapshotFormatters.formatBufferSeconds(59));
+    }
+
+    @Test
+    void formatBufferSeconds_minutesAndSeconds() {
+        assertEquals("1m 30s", SnapshotFormatters.formatBufferSeconds(90));
+        assertEquals("5m 0s", SnapshotFormatters.formatBufferSeconds(300));
+    }
+
+    @Test
+    void formatBufferSeconds_hoursMinutesSeconds() {
+        assertEquals("1h 1m 40s", SnapshotFormatters.formatBufferSeconds(3700));
+    }
+
+    @Test
+    void formatBufferSeconds_days() {
+        assertEquals("1d 0h 0m 0s", SnapshotFormatters.formatBufferSeconds(86400));
+    }
+
+    // --- bufferRatioFromSeconds (F2.A 新增) ---
+
+    @Test
+    void bufferRatio_zeroOrInvalid_returnsZero() {
+        assertEquals(0.0, SnapshotFormatters.bufferRatioFromSeconds(0), 1e-9);
+        assertEquals(0.0, SnapshotFormatters.bufferRatioFromSeconds(-10), 1e-9);
+        assertEquals(0.0, SnapshotFormatters.bufferRatioFromSeconds(Double.NaN), 1e-9);
+    }
+
+    @Test
+    void bufferRatio_dangerZone() {
+        assertEquals(0.30, SnapshotFormatters.bufferRatioFromSeconds(30), 1e-9);
+        assertEquals(0.15, SnapshotFormatters.bufferRatioFromSeconds(15), 1e-9);
+    }
+
+    @Test
+    void bufferRatio_warningZone() {
+        // 30 ~ 300s → 0.30 ~ 0.70
+        assertEquals(0.70, SnapshotFormatters.bufferRatioFromSeconds(300), 1e-9);
+        // 165 = 中点 → 0.50
+        assertEquals(0.50, SnapshotFormatters.bufferRatioFromSeconds(165), 1e-9);
+    }
+
+    @Test
+    void bufferRatio_safeZoneClamps() {
+        assertEquals(1.0, SnapshotFormatters.bufferRatioFromSeconds(3600), 1e-9);
+        assertEquals(1.0, SnapshotFormatters.bufferRatioFromSeconds(99999), 1e-9);
+    }
+
+    // --- normalizeGroupKey (F2.A 新增) ---
+
+    @Test
+    void normalizeGroupKey_nullOrBlankReturnsDefault() {
+        assertEquals("ungrouped", SnapshotFormatters.normalizeGroupKey(null, "ungrouped"));
+        assertEquals("ungrouped", SnapshotFormatters.normalizeGroupKey("", "ungrouped"));
+        assertEquals("ungrouped", SnapshotFormatters.normalizeGroupKey("   ", "ungrouped"));
+    }
+
+    @Test
+    void normalizeGroupKey_validReturnsAsIs() {
+        assertEquals("raw", SnapshotFormatters.normalizeGroupKey("raw", "ungrouped"));
+        assertEquals("custom", SnapshotFormatters.normalizeGroupKey("custom", "ungrouped"));
+    }
 }

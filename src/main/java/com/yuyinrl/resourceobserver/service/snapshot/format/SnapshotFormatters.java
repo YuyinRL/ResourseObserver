@@ -128,4 +128,52 @@ public final class SnapshotFormatters {
         }
         return trimTrailingZeros(String.format(Locale.ROOT, "%+.1f pts", value));
     }
+
+    /** 比例百分比（无符号）：0.5 → "50.0%"；负数 → "N/A"；NaN → "N/A" */
+    public static String formatPercent(double ratio) {
+        if (!Double.isFinite(ratio) || ratio < 0.0) {
+            return NA_PLACEHOLDER;
+        }
+        return String.format(Locale.ROOT, "%.1f%%", ratio * 100.0);
+    }
+
+    /**
+     * 缓冲秒数 → 文本：90 → "1m 30s"；3700 → "1h 1m 40s"；≤ 0 → "∞"。
+     * 仅在前段非零时显示对应单位（与原 mapper 对齐）。
+     */
+    public static String formatBufferSeconds(long totalSeconds) {
+        if (totalSeconds <= 0) return "∞";
+        long days = totalSeconds / 86400;
+        long hours = (totalSeconds % 86400) / 3600;
+        long minutes = (totalSeconds % 3600) / 60;
+        long seconds = totalSeconds % 60;
+
+        StringBuilder sb = new StringBuilder();
+        if (days > 0) sb.append(days).append("d ");
+        if (days > 0 || hours > 0) sb.append(hours).append("h ");
+        if (days > 0 || hours > 0 || minutes > 0) sb.append(minutes).append("m ");
+        sb.append(seconds).append("s");
+        return sb.toString();
+    }
+
+    /**
+     * 缓冲秒数 → 进度条比例（0.0 ~ 1.0）。三段非线性刻度：
+     * <ul>
+     *     <li>0 ~ 30s    → 0% ~ 30%（危险区放大）</li>
+     *     <li>30 ~ 300s  → 30% ~ 70%（警告区线性）</li>
+     *     <li>300 ~ 3600s → 70% ~ 100%（安全区压缩）</li>
+     *     <li>≥ 3600s 或 ∞ → 1.0</li>
+     * </ul>
+     */
+    public static double bufferRatioFromSeconds(double t) {
+        if (!Double.isFinite(t) || t <= 0) return 0.0;
+        if (t <= 30)  return t / 30.0 * 0.30;
+        if (t <= 300) return 0.30 + (t - 30.0) / 270.0 * 0.40;
+        return Math.min(1.0, 0.70 + (t - 300.0) / 3300.0 * 0.30);
+    }
+
+    /** 规范化分组键：null / 空白 → defaultKey */
+    public static String normalizeGroupKey(String raw, String defaultKey) {
+        return raw == null || raw.isBlank() ? defaultKey : raw;
+    }
 }
