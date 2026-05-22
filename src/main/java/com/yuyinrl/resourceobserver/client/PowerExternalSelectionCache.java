@@ -4,6 +4,9 @@ import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.JsonParseException;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
+import net.minecraft.client.Minecraft;
+import net.minecraft.client.multiplayer.ServerData;
+import net.minecraft.core.BlockPos;
 import net.neoforged.fml.loading.FMLPaths;
 import org.jetbrains.annotations.Nullable;
 
@@ -17,6 +20,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
@@ -173,6 +177,29 @@ public final class PowerExternalSelectionCache {
             }
         }
         return result;
+    }
+
+    /**
+     * 构造按观察者位置 + 维度 + 服务器/世界标识的缓存键，与 ModernUI 实现保持一致。
+     */
+    public static String buildKey(@Nullable BlockPos observerPos) {
+        if (observerPos == null) return "";
+        Minecraft mc = Minecraft.getInstance();
+        String sessionId = "unknown";
+        ServerData serverData = mc.getCurrentServer();
+        if (serverData != null && serverData.ip != null && !serverData.ip.isBlank()) {
+            sessionId = "server:" + serverData.ip.trim().toLowerCase(Locale.ROOT);
+        } else if (mc.hasSingleplayerServer() && mc.getSingleplayerServer() != null) {
+            String levelName = mc.getSingleplayerServer().getWorldData().getLevelName();
+            sessionId = (levelName != null && !levelName.isBlank())
+                    ? "singleplayer:" + levelName.trim().toLowerCase(Locale.ROOT)
+                    : "singleplayer";
+        }
+        String dimension = mc.level != null
+                ? mc.level.dimension().location().toString()
+                : "unknown";
+        return sessionId + "|" + dimension + "|"
+                + observerPos.getX() + "," + observerPos.getY() + "," + observerPos.getZ();
     }
 
     private static final class CacheFile {

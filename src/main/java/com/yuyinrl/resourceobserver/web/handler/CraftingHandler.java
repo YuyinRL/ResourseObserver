@@ -7,13 +7,13 @@ import com.yuyinrl.resourceobserver.integration.CraftingDataCollector;
 import com.yuyinrl.resourceobserver.integration.CraftingDataCollector.CraftableEntry;
 import com.yuyinrl.resourceobserver.integration.CraftingDataCollector.CraftingJobEntry;
 import com.yuyinrl.resourceobserver.integration.CraftingDataCollector.CraftingStorageMetrics;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -32,6 +32,7 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
         super(server);
     }
 
+    /** /api/observers/{id}/crafting —— 返回 AE2 合成 CPU 列表与运行中任务快照。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -47,6 +48,9 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
             sendError(exchange, 404, "not found");
             return;
         }
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         Map<String, Object> body = runOnMain(mc -> buildCraftingBody(mc, target));
         if (body == null) {
             sendError(exchange, 404, "observer not found");
@@ -60,8 +64,8 @@ public final class CraftingHandler extends BaseApiHandler implements HttpHandler
         if (level == null) return null;
         BlockPos pos = target.pos();
         if (!level.isLoaded(pos)) return null;
-        BlockEntity be = level.getBlockEntity(pos);
-        if (!(be instanceof ObserverBlockEntity observer)) return null;
+        ObserverBlockEntity observer = ObserverService.findByPos(level, pos).orElse(null);
+        if (observer == null) return null;
 
         Map<String, Object> body = new LinkedHashMap<>();
         body.put("dimension", target.dimension());

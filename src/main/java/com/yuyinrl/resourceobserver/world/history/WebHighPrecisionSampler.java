@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.world.history;
 
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
@@ -90,7 +91,7 @@ public final class WebHighPrecisionSampler {
     public static @Nullable QueryResult query(
             ServerLevel level,
             BlockPos observerPos,
-            List<ObserverBlockEntity.BoundEntry> bindings,
+            List<BoundEntry> bindings,
             @Nullable String itemId
     ) {
         ObserverKey observer = observerKey(level, observerPos);
@@ -101,7 +102,7 @@ public final class WebHighPrecisionSampler {
         for (int i = 0; i < BUFFER_BUCKETS; i++) {
             long bucket = latestBucket - (BUFFER_BUCKETS - 1L - i);
             BucketAggregate aggregate = new BucketAggregate();
-            for (ObserverBlockEntity.BoundEntry binding : bindings) {
+            for (BoundEntry binding : bindings) {
                 if (!"AE2_ITEMS".equals(binding.networkType())) {
                     continue;
                 }

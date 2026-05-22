@@ -2,9 +2,10 @@ package com.yuyinrl.resourceobserver.client.modernui;
 
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModel;
-import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModelMapper;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.network.UiActionType;
+import com.yuyinrl.resourceobserver.service.snapshot.format.SnapshotFormatters;
+import com.yuyinrl.resourceobserver.service.snapshot.storage.StorageBufferSmoother;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
 import icyllis.modernui.text.Editable;
 import icyllis.modernui.text.TextWatcher;
@@ -353,7 +354,7 @@ final class StorageNetworkPageBuilder {
             String itemId = entry.getKey();
             TextView[] cells = entry.getValue();
 
-            double countdownSec = StorageNetworkViewModelMapper.computeCountdownSeconds(itemId, ema);
+            double countdownSec = StorageBufferSmoother.computeCountdownSeconds(itemId, ema);
             if (countdownSec < 0) {
                 // ∞ — no consumption or no anchor
                 if (cells[3] != null) cells[3].setText("∞");
@@ -363,13 +364,13 @@ final class StorageNetworkPageBuilder {
 
             // Update buffer text
             if (cells[3] != null) {
-                cells[3].setText(StorageNetworkViewModelMapper.formatBufferSeconds(Math.round(countdownSec)));
+                cells[3].setText(SnapshotFormatters.formatBufferSeconds(Math.round(countdownSec)));
             }
 
             // Update buffer bar
             View[] bars = barMap.get(itemId);
             if (bars != null && bars[1] != null && bars[1].getWidth() > 0) {
-                double ratio = StorageNetworkViewModelMapper.bufferRatioFromSeconds(countdownSec);
+                double ratio = SnapshotFormatters.bufferRatioFromSeconds(countdownSec);
                 int barW = bars[1].getWidth();
                 int fillW = Math.max(1, (int) (barW * Math.min(1.0, ratio)));
                 int bufColor = ratio < 0.2 ? UiThemeTokens.ROSE

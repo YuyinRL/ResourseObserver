@@ -5,13 +5,13 @@ import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.integration.CraftingOrderService;
 import com.yuyinrl.resourceobserver.integration.CraftingOrderService.PlanResult;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity.BoundEntry;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 
 import java.io.IOException;
 import java.io.InputStream;
@@ -40,6 +40,10 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
         super(server);
     }
 
+    /**
+     * /api/observers/{id}/crafting/{plan|confirm|cancel|tree} —— 合成订单四类操作的统一入口。
+     * 解析 URL 末段后路由到对应私有方法。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"POST".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -112,6 +116,9 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
             sendError(exchange, 400, "missing networkId/itemId/amount");
             return;
         }
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         CompletableFuture<PlanResult> fut = runOnMain(mc -> startPlanOnMain(mc, target, networkId, itemId, amount));
         if (fut == null) {
             sendError(exchange, 504, "main thread timeout");
@@ -175,8 +182,8 @@ public final class CraftingOrderHandler extends BaseApiHandler implements HttpHa
             out.complete(PlanResult.fail(CraftingOrderService.Status.GRID_UNAVAILABLE, "observer chunk not loaded"));
             return out;
         }
-        BlockEntity be = level.getBlockEntity(pos);
-        if (!(be instanceof ObserverBlockEntity observer)) {
+        ObserverBlockEntity observer = ObserverService.findByPos(level, pos).orElse(null);
+        if (observer == null) {
             out.complete(PlanResult.fail(CraftingOrderService.Status.GRID_UNAVAILABLE, "observer not found"));
             return out;
         }

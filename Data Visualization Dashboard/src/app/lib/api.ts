@@ -3,6 +3,8 @@
  * 统一封装后端 REST 端点访问 + TypeScript 类型定义。
  */
 
+import { authHeaders, notifyUnauthorized, WhoAmIResponse } from './auth';
+
 // ===== Types: 与 Java 侧 JsonWriter 输出保持一致 =====
 
 export interface Meta {
@@ -41,6 +43,8 @@ export interface ObserverListResponse {
   count: number;
 }
 
+export type StorageAlertLevel = 'GREEN' | 'YELLOW' | 'RED';
+
 export interface BindingItem {
   id: string;
   amount: number;
@@ -54,6 +58,43 @@ export interface BindingItem {
   translationKey?: string;
   /** 服务端语言下的显示名，如 "Iron Ingot" / "铁锭" */
   displayName?: string;
+  localAmount?: number;
+  globalAmount?: number;
+  delta?: number;
+  alertLevel?: StorageAlertLevel;
+  groupKey?: string;
+  burnRatePerMin?: number;
+  estimatedBufferText?: string;
+  bufferRatio?: number;
+  iconSprite?: string;
+}
+
+export interface StorageKpi {
+  label: string;
+  value: string;
+  status: 'POSITIVE' | 'NEGATIVE' | 'WARNING' | 'NEUTRAL';
+}
+
+export interface StorageUsageSegment {
+  groupKey: string;
+  displayName: string;
+  percentage: number;
+  color: string;
+}
+
+export interface StorageNodeSummary {
+  nodeId: string;
+  displayName: string;
+  networkType: string;
+  iconSprite?: string;
+  itemCount: number;
+  capacityRatio: number;
+  selected: boolean;
+  usedFormatted: string;
+  totalFormatted: string;
+  statusKey: string;
+  statusAlert: boolean;
+  coordinatesText?: string | null;
 }
 
 export interface CellCapacity {
@@ -110,6 +151,187 @@ export interface FluxSnapshot {
   devices?: FluxDeviceSnapshot[];
 }
 
+export type OverviewKpiType = 'PRODUCTION' | 'CONSUMPTION' | 'STORAGE' | 'BALANCE';
+export type OverviewKpiStatus = 'POSITIVE' | 'NEGATIVE' | 'WARNING' | 'NEUTRAL';
+export type OverviewValueKind = 'FLOW_PER_MINUTE' | 'PERCENT' | 'BALANCE_SCORE' | 'COUNT';
+
+export interface OverviewChannelPayload {
+  labelKey: string;
+  recentRate: number;
+  previousRate: number;
+  trendPercent: number;
+  trendAvailable: boolean;
+  available: boolean;
+}
+
+export interface OverviewPayload {
+  header: {
+    titleKey: string;
+    subtitleKey: string;
+    linkStatusKey: string;
+    bindingCount: number;
+    hasAe2Binding: boolean;
+    hasFluxBinding: boolean;
+  };
+  kpis: Array<{
+    type: OverviewKpiType;
+    labelKey: string;
+    valueRaw: number | null;
+    valueKind: OverviewValueKind;
+    trendKey: string | null;
+    trendArg: string | null;
+    status: OverviewKpiStatus;
+    iconSprite?: string | null;
+  }>;
+  kpiDetails: Array<{
+    type: OverviewKpiType;
+    titleKey: string;
+    hintKey: string;
+    status: OverviewKpiStatus;
+    itemChannel: OverviewChannelPayload;
+    fluidChannel: OverviewChannelPayload;
+  }>;
+  storageDetail: {
+    hasAe2Binding: boolean;
+    diskReliable: boolean;
+    externalReliable: boolean;
+    hintKey: string;
+    diskItem: OverviewStorageChannelPayload;
+    diskFluid: OverviewStorageChannelPayload;
+    externalItem: OverviewStorageChannelPayload;
+    externalFluid: OverviewStorageChannelPayload;
+  };
+  chartWindow: string;
+  chartScope: string;
+  chartScopeItemId: string | null;
+  chartSeries: OverviewChartPointPayload[];
+  energyChartSeries: OverviewChartPointPayload[];
+  watchlistItems: OverviewWatchlistItemPayload[];
+  tableGroups: OverviewTableGroupPayload[];
+  uiState: OverviewUiStatePayload;
+}
+
+export interface OverviewStorageChannelPayload {
+  labelKey: string;
+  usedBytes: number;
+  totalBytes: number;
+  usedTypes: number;
+  totalTypes: number;
+  available: boolean;
+}
+
+export interface OverviewChartPointPayload {
+  slotIndex: number;
+  bucket: number;
+  production: number;
+  consumption: number;
+  net: number;
+  stock: number;
+  hasFlow: boolean;
+  hasStock: boolean;
+  sampleCount: number;
+}
+
+export interface OverviewWatchlistItemPayload {
+  itemId: string;
+  displayName: string;
+  netPerMinute: number;
+  stock: number;
+  iconSprite?: string | null;
+}
+
+export interface OverviewTableRowPayload {
+  itemId: string;
+  displayName: string;
+  groupKey: string;
+  production: number;
+  consumption: number;
+  net: number;
+  stock: number;
+  critical: boolean;
+  starred: boolean;
+  iconSprite?: string | null;
+}
+
+export interface OverviewTableGroupPayload {
+  key: string;
+  displayName: string;
+  rows: OverviewTableRowPayload[];
+}
+
+export interface OverviewUiStatePayload {
+  groupFilterKey: string;
+  groups: Array<{ key: string; displayName: string; systemGroup: boolean }>;
+  sortMode: string;
+  sortDesc: boolean;
+  statusFilter: string;
+  watchlistLimit: number;
+}
+
+export type PowerAlertLevel = 'NORMAL' | 'WARNING' | 'CRITICAL';
+export type PowerLoadCategory = 'MINING' | 'ASSEMBLY' | 'LOGISTICS' | 'OTHER';
+
+export interface PowerDevicePayload {
+  nodeId: string;
+  displayName: string;
+  category: PowerLoadCategory;
+  modName: string;
+  energyPerTick: number;
+  storedEnergy: number;
+  maxCapacity: number;
+  usageRatio: number;
+  alertLevel: PowerAlertLevel;
+}
+
+export interface PowerKpiPayload {
+  labelKey: string;
+  value: string;
+  status: 'POSITIVE' | 'NEGATIVE' | 'WARNING' | 'NEUTRAL';
+}
+
+export interface PowerLoadSegmentPayload {
+  category: PowerLoadCategory;
+  displayNameKey: string;
+  percentage: number;
+}
+
+export interface PowerOverloadAlertPayload {
+  nodeId: string;
+  displayName: string;
+  alertLevel: PowerAlertLevel;
+  throughputLoss: number;
+  descriptionKey: string;
+  descriptionArgs: unknown[];
+}
+
+export interface PowerConsumerPayload {
+  deviceName: string;
+  modName: string;
+  consumptionPerTick: number;
+  percentage: number;
+  supplyRatio: number;
+  paletteIndex: number;
+  count: number;
+}
+
+export interface PowerPayload {
+  displayName: string;
+  totalInputPerTick: number;
+  totalOutputPerTick: number;
+  totalStored: number;
+  totalCapacity: number;
+  timestampMs: number;
+  devices: PowerDevicePayload[];
+  kpiCards: PowerKpiPayload[];
+  loadSegments: PowerLoadSegmentPayload[];
+  overloadAlerts: PowerOverloadAlertPayload[];
+  overloadInfo: {
+    headroomPercent: number;
+    reservePerTick: number;
+  };
+  consumers: PowerConsumerPayload[];
+}
+
 export interface ObserverBinding {
   networkType: string;
   networkId: string;
@@ -119,11 +341,16 @@ export interface ObserverBinding {
   totalProduced: number;
   totalConsumed: number;
   items?: BindingItem[];
+  kpis?: StorageKpi[];
+  usageSegments?: StorageUsageSegment[];
+  nodeSummary?: StorageNodeSummary | null;
   cellCapacity?: CellCapacity;
   flux?: FluxSnapshot;
 }
 
 export interface ObserverDetail extends ObserverSummary {
+  overview?: OverviewPayload;
+  power?: PowerPayload;
   bindings: ObserverBinding[];
 }
 
@@ -301,18 +528,36 @@ export interface ChartHistoryResponse {
 
 async function apiGet<T>(url: string, init?: RequestInit): Promise<T> {
   const res = await fetch(url, {
+    credentials: 'include',
     ...init,
-    headers: { Accept: 'application/json', ...(init?.headers ?? {}) },
+    headers: authHeaders({ Accept: 'application/json', ...(init?.headers ?? {}) }),
   });
+  if (res.status === 401) {
+    notifyUnauthorized();
+    throw new Error(`GET ${url} unauthorized`);
+  }
   if (!res.ok) {
     throw new Error(`GET ${url} failed: ${res.status} ${res.statusText}`);
   }
   return res.json() as Promise<T>;
 }
 
+async function authedFetch(url: string, init?: RequestInit): Promise<Response> {
+  const res = await fetch(url, {
+    credentials: 'include',
+    ...init,
+    headers: authHeaders(init?.headers),
+  });
+  if (res.status === 401) {
+    notifyUnauthorized();
+  }
+  return res;
+}
+
 export const api = {
   health: (): Promise<HealthStatus> => apiGet('/api/health'),
   meta: (): Promise<Meta> => apiGet('/api/meta'),
+  whoami: (): Promise<WhoAmIResponse> => apiGet('/api/auth/whoami'),
   observers: (): Promise<ObserverListResponse> => apiGet('/api/observers'),
   observerDetail: (id: string): Promise<ObserverDetail> =>
     apiGet(`/api/observers/${id}`),
@@ -322,7 +567,7 @@ export const api = {
     id: string,
     body: { networkId: string; itemId: string; amount: number },
   ): Promise<CraftingPlanResult> => {
-    const res = await fetch(`/api/observers/${id}/crafting/plan`, {
+    const res = await authedFetch(`/api/observers/${id}/crafting/plan`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body),
@@ -354,7 +599,7 @@ export const api = {
     planId: string,
     cpu?: string | null,
   ): Promise<CraftingOrderResult> => {
-    const res = await fetch(`/api/observers/${id}/crafting/confirm`, {
+    const res = await authedFetch(`/api/observers/${id}/crafting/confirm`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ planId, cpu: cpu ?? '' }),
@@ -372,7 +617,7 @@ export const api = {
   cancelCraftingPlan: async (id: string, planId: string): Promise<void> => {
     if (!planId) return;
     try {
-      await fetch(`/api/observers/${id}/crafting/cancel`, {
+      await authedFetch(`/api/observers/${id}/crafting/cancel`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ planId }),
@@ -382,7 +627,7 @@ export const api = {
   fetchCraftingTree: async (id: string, treeId: string): Promise<CraftingTreeNode | null> => {
     if (!treeId) return null;
     try {
-      const res = await fetch(`/api/observers/${id}/crafting/tree`, {
+      const res = await authedFetch(`/api/observers/${id}/crafting/tree`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ treeId }),

@@ -31,7 +31,15 @@ public final class ClientKeyBindings {
             GLFW.GLFW_KEY_J,
             "key.categories.resourceobserver"
     );
+    private static final KeyMapping OPEN_TERMINAL_V2 = new KeyMapping(
+            "key.resourceobserver.open_terminal_v2",
+            KeyConflictContext.IN_GAME,
+            InputConstants.Type.KEYSYM,
+            GLFW.GLFW_KEY_F8,
+            "key.categories.resourceobserver"
+    );
     private static boolean wasPreviewKeyDown;
+    private static boolean wasV2KeyDown;
 
     private ClientKeyBindings() {
     }
@@ -45,27 +53,39 @@ public final class ClientKeyBindings {
 
     private static void onRegisterKeyMappings(RegisterKeyMappingsEvent event) {
         event.register(OPEN_MODERNUI_OVERVIEW_PREVIEW);
+        event.register(OPEN_TERMINAL_V2);
         ResourceObserverMod.LOGGER.info("Registered key mapping: key.resourceobserver.modernui_preview (default: J)");
+        ResourceObserverMod.LOGGER.info("Registered key mapping: key.resourceobserver.open_terminal_v2 (default: F8)");
     }
 
     private static void onClientTickPost(ClientTickEvent.Post event) {
         Minecraft mc = Minecraft.getInstance();
         if (mc.player == null || mc.level == null) {
             wasPreviewKeyDown = false;
+            wasV2KeyDown = false;
             return;
         }
 
         if (mc.screen != null) {
             wasPreviewKeyDown = false;
+            wasV2KeyDown = false;
             return;
         }
 
-        boolean downNow = OPEN_MODERNUI_OVERVIEW_PREVIEW.isDown();
-        boolean edgeTriggered = downNow && !wasPreviewKeyDown;
-        wasPreviewKeyDown = downNow;
+        boolean previewDown = OPEN_MODERNUI_OVERVIEW_PREVIEW.isDown();
+        boolean previewEdge = previewDown && !wasPreviewKeyDown;
+        wasPreviewKeyDown = previewDown;
 
-        if (OPEN_MODERNUI_OVERVIEW_PREVIEW.consumeClick() || edgeTriggered) {
+        if (OPEN_MODERNUI_OVERVIEW_PREVIEW.consumeClick() || previewEdge) {
             OverviewPreviewLauncher.open();
+        }
+
+        boolean v2Down = OPEN_TERMINAL_V2.isDown();
+        boolean v2Edge = v2Down && !wasV2KeyDown;
+        wasV2KeyDown = v2Down;
+
+        if (OPEN_TERMINAL_V2.consumeClick() || v2Edge) {
+            mc.setScreen(new com.yuyinrl.resourceobserver.client.screen.ResourceTerminalScreenV2());
         }
     }
 

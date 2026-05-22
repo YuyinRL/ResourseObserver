@@ -14,17 +14,19 @@ import {
 import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from 'recharts';
 import { api } from '../lib/api';
 import { useObserverCrafting, useObserverDetail, useObserverItems } from '../hooks/useObservers';
-import type { CraftingPlanResult, CraftingTreeNode, ItemSortField, SortDirection } from '../lib/api';
+import type { CraftingPlanResult, CraftingTreeNode, ItemSortField, SortDirection, StorageAlertLevel } from '../lib/api';
 import { useI18n } from '../lib/i18n';
 import {
   countBindingsByType,
   deriveCraftingSummary,
   deriveResourceItems,
   deriveStorageNodes,
+  deriveStorageUsageSegments,
   formatBytes,
 } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
+import { DIALOG } from '../lib/dialogSizes';
 import { ItemIcon } from './ItemIcon';
 import { CraftingTreeView } from './CraftingTreeView';
 import { CraftingTree } from './crafting-tree/CraftingTree';
@@ -51,6 +53,11 @@ interface InventoryItem {
   remainingMinutes: number;
   networkId?: string;
   translationKey?: string;
+  alertLevel?: StorageAlertLevel;
+  bufferText?: string;
+  bufferRatio?: number;
+  groupKey?: string;
+  iconSprite?: string;
   icon: typeof Pickaxe;
   accent: string;
 }
@@ -98,6 +105,13 @@ function formatElapsed(millis: number) {
 
 function normalizeStatusTone(status: 'Healthy' | 'Alert') {
   return status === 'Alert' ? 'rose' : 'emerald';
+}
+
+function alertTone(level: StorageAlertLevel | undefined, durationMinutes: number) {
+  const normalized = level ?? (durationMinutes < 0.5 ? 'RED' : durationMinutes < 30 ? 'YELLOW' : 'GREEN');
+  if (normalized === 'RED') return { border: 'border-rose-500/30 bg-rose-500/5', bar: 'bg-rose-500', text: 'text-rose-400' };
+  if (normalized === 'YELLOW') return { border: 'border-amber-500/30 bg-amber-500/5', bar: 'bg-amber-500', text: 'text-amber-400' };
+  return { border: 'border-slate-800 bg-slate-950/70', bar: 'bg-emerald-500', text: 'text-emerald-400' };
 }
 
 export const StorageNetwork = ({
@@ -207,14 +221,19 @@ export const StorageNetwork = ({
         return itemPage.items.map((item, index) => ({
           id: item.id,
           name: item.displayName || item.id,
-          stock: item.amount,
+          stock: item.localAmount ?? item.amount,
           production: item.production,
-          consumption: Math.max(1, item.consumption),
-          net: item.net,
-          capacity: item.capacity ?? Math.max(item.amount * 1.5, 1000),
-          remainingMinutes: item.remainingMinutes ?? item.amount / Math.max(item.consumption, 1),
+          consumption: Math.max(0, item.burnRatePerMin ?? item.consumption),
+          net: item.delta ?? item.net,
+          capacity: item.capacity ?? Math.max((item.localAmount ?? item.amount) * 1.5, 1000),
+          remainingMinutes: item.remainingMinutes ?? (item.localAmount ?? item.amount) / Math.max(item.burnRatePerMin ?? item.consumption, 1),
           networkId: item.networkId,
           translationKey: item.translationKey,
+          alertLevel: item.alertLevel,
+          bufferText: item.estimatedBufferText,
+          bufferRatio: item.bufferRatio,
+          groupKey: item.groupKey,
+          iconSprite: item.iconSprite,
           icon: iconForIndex(index),
           accent: accentForIndex(index),
         }));
@@ -225,11 +244,16 @@ export const StorageNetwork = ({
           name: item.name,
           stock: item.stock,
           production: item.produced,
-          consumption: Math.max(1, item.consumed),
-          net: item.produced - item.consumed,
+          consumption: Math.max(0, item.burnRatePerMin ?? item.consumed),
+          net: item.delta ?? item.produced - item.consumed,
           capacity: item.capacity,
-          remainingMinutes: item.stock / Math.max(item.consumed, 1),
+          remainingMinutes: item.stock / Math.max(item.burnRatePerMin ?? item.consumed, 1),
           networkId: item.networkId,
+          alertLevel: item.alertLevel,
+          bufferText: item.estimatedBufferText,
+          bufferRatio: item.bufferRatio,
+          groupKey: item.groupKey,
+          iconSprite: item.iconSprite,
           icon: iconForIndex(index),
           accent: accentForIndex(index),
         }))
@@ -250,8 +274,9 @@ export const StorageNetwork = ({
       if (keyword && !item.name.toLowerCase().includes(keyword) && !item.id.toLowerCase().includes(keyword)) {
         return false;
       }
-      if (filterAlertsOnly && (item.stock / Math.max(item.consumption, 1)) >= 30) {
-        return false;
+      if (filterAlertsOnly) {
+        const legacyAlert = (item.stock / Math.max(item.consumption, 1)) < 30;
+        if (item.alertLevel ? item.alertLevel === 'GREEN' : !legacyAlert) return false;
       }
       // 选中节点时按 networkId 精确过滤；同名物品跨网络不再互相串台。
       // 仅当物品自身没有携带 networkId（极旧的回退路径）时才退回到 itemIds 模糊匹配。
@@ -266,7 +291,19 @@ export const StorageNetwork = ({
     });
   }, [filterAlertsOnly, items, searchQuery, selectedNode]);
 
+  const usageSegments = useMemo(
+    () => deriveStorageUsageSegments(detail ?? null, selectedNodeId),
+    [detail, selectedNodeId],
+  );
+
   const distribution = useMemo(() => {
+    if (usageSegments.length > 0) {
+      return usageSegments.map((segment) => ({
+        name: segment.displayName || segment.groupKey,
+        value: Math.round(segment.percentage),
+        color: segment.color,
+      }));
+    }
     const top = items.slice(0, 3);
     if (top.length === 0) {
       return [
@@ -279,7 +316,7 @@ export const StorageNetwork = ({
       value: total > 0 ? Math.round((item.stock / total) * 100) : 0,
       color: ['#06b6d4', '#f59e0b', '#3b82f6'][index] ?? '#64748b',
     }));
-  }, [items]);
+  }, [items, usageSegments]);
 
   const craftingJobs = useMemo(
     () => (craftingData?.bindings ?? []).flatMap((binding) =>
@@ -435,6 +472,19 @@ export const StorageNetwork = ({
 
             <Card className="p-5">
               <SectionHeader title={t('storage.usage.title')} subtitle={t('storage.usage.totalUsed')} icon={LayoutGrid} />
+              {usageSegments.length > 0 ? (
+                <div className="mt-5 overflow-hidden rounded-full border border-slate-800 bg-slate-950">
+                  <div className="flex h-3 w-full">
+                    {usageSegments.map((segment) => (
+                      <div
+                        key={segment.groupKey}
+                        title={`${segment.displayName}: ${segment.percentage.toFixed(1)}%`}
+                        style={{ width: `${Math.max(1, segment.percentage)}%`, backgroundColor: segment.color }}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
               <div className="mt-5 h-[200px] relative">
                 <ResponsiveContainer width="100%" height="100%">
                   <PieChart>
@@ -502,8 +552,9 @@ export const StorageNetwork = ({
                   {filteredItems.map((item) => {
                     const durationMinutes = item.remainingMinutes ?? item.stock / Math.max(item.consumption, 1);
                     const net = item.net ?? item.production - item.consumption;
-                    const tone = durationMinutes < 0.5 ? 'border-rose-500/30 bg-rose-500/5' : durationMinutes < 30 ? 'border-amber-500/30 bg-amber-500/5' : 'border-slate-800 bg-slate-950/70';
+                    const tone = alertTone(item.alertLevel, durationMinutes);
                     const netTone = net >= 0 ? 'text-emerald-400' : 'text-rose-400';
+                    const bufferLabel = item.bufferText ?? formatDuration(durationMinutes);
                     return (
                       <HoverCard
                         key={`${item.networkId ?? 'local'}-${item.id}`}
@@ -513,7 +564,7 @@ export const StorageNetwork = ({
                             ref={ref}
                             onMouseEnter={onMouseEnter}
                             onMouseLeave={onMouseLeave}
-                            className={`group relative rounded-xl border p-4 transition-all hover:-translate-y-0.5 hover:border-cyan-500/30 ${tone}`}
+                            className={`group relative rounded-xl border p-4 transition-all hover:-translate-y-0.5 hover:border-cyan-500/30 ${tone.border}`}
                           >
                             <div className="flex items-start justify-between gap-3">
                               <ItemIcon item={item} />
@@ -523,7 +574,7 @@ export const StorageNetwork = ({
                             <p className="truncate text-[10px] font-mono text-slate-500" title={item.id}>{item.id}</p>
                             <div className="mt-3 flex items-center justify-between text-xs">
                               <span className="font-mono text-slate-300">{item.stock.toLocaleString()}</span>
-                              <span className={durationMinutes < 30 ? 'font-mono font-bold text-amber-400' : 'font-mono text-slate-500'}>{formatDuration(durationMinutes)}</span>
+                              <span className={`font-mono font-bold ${tone.text}`}>{bufferLabel}</span>
                             </div>
                           </div>
                         )}
@@ -537,7 +588,7 @@ export const StorageNetwork = ({
                               <TooltipMetric label={t('storage.table.production')} value={`${item.production.toFixed(1)}/m`} tone="text-cyan-400" />
                               <TooltipMetric label={t('storage.table.consumption')} value={`${item.consumption.toFixed(1)}/m`} tone="text-amber-400" />
                               <TooltipMetric label={t('storage.table.net')} value={`${net >= 0 ? '+' : ''}${net.toFixed(1)}/m`} tone={netTone} />
-                              <TooltipMetric label={t('storage.buffer.remaining')} value={formatDuration(durationMinutes)} />
+                              <TooltipMetric label={t('storage.buffer.remaining')} value={bufferLabel} />
                               <TooltipMetric label={t('observer.label')} value={item.networkId ?? t('common.none')} />
                             </div>
                           </>
@@ -564,10 +615,10 @@ export const StorageNetwork = ({
                     {filteredItems.map((item) => {
                       const durationMinutes = item.remainingMinutes ?? item.stock / Math.max(item.consumption, 1);
                       const net = item.net ?? item.production - item.consumption;
-                      const tone = durationMinutes < 0.5 ? 'bg-rose-500' : durationMinutes < 30 ? 'bg-amber-500' : 'bg-emerald-500';
-                      const textTone = durationMinutes < 0.5 ? 'text-rose-400' : durationMinutes < 30 ? 'text-amber-400' : 'text-emerald-400';
+                      const tone = alertTone(item.alertLevel, durationMinutes);
+                      const bufferLabel = item.bufferText ?? formatDuration(durationMinutes);
                       return (
-                        <tr key={`${item.networkId ?? 'local'}-${item.id}`} className="transition-colors hover:bg-slate-800/30">
+                        <tr key={`${item.networkId ?? 'local'}-${item.id}`} className={`transition-colors hover:bg-slate-800/30 ${item.alertLevel === 'RED' ? 'bg-rose-500/5' : item.alertLevel === 'YELLOW' ? 'bg-amber-500/5' : ''}`}>
                           <td className="p-4">
                             <div className="flex items-center gap-3">
                               <ItemIcon item={item} />
@@ -583,10 +634,10 @@ export const StorageNetwork = ({
                           <td className={`p-4 text-right font-mono text-sm ${net >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>{net >= 0 ? '+' : ''}{net.toFixed(1)}/m</td>
                           <td className="p-4">
                             <div className="mb-1.5 flex justify-between text-[10px] font-mono">
-                              <span className={`font-bold ${textTone}`}>{formatDuration(durationMinutes)}</span>
+                              <span className={`font-bold ${tone.text}`}>{bufferLabel}</span>
                               <span className="text-slate-600">{t('storage.buffer.remaining')}</span>
                             </div>
-                            <ProgressBar value={Math.min(120, durationMinutes)} max={120} colorClass={tone} />
+                            <ProgressBar value={item.bufferRatio ?? Math.min(1, durationMinutes / 120)} max={1} colorClass={tone.bar} />
                           </td>
                         </tr>
                       );
@@ -773,6 +824,8 @@ export const StorageNetwork = ({
           kpiDialogIndex === 3 ? t('storage.kpi.detail.title', { label: t('storage.kpi.items') }) :
           ''
         }
+        width={DIALOG.MEDIUM.w}
+        height={DIALOG.MEDIUM.h}
       >
         {kpiDialogIndex === 0 || kpiDialogIndex === 1 || kpiDialogIndex === 2 ? (
           <>
@@ -826,7 +879,8 @@ export const StorageNetwork = ({
         open={renameTarget !== null}
         onClose={() => setRenameTarget(null)}
         title={t('storage.node.rename.title')}
-        width={320}
+        width={DIALOG.SMALL.w}
+        height={DIALOG.SMALL.h}
       >
         <input
           type="text"
@@ -891,8 +945,8 @@ export const StorageNetwork = ({
           setSelectedCpuIndex(null);
         }}
         title={t('storage.crafting.orderDialog.title') ?? 'Place crafting order'}
-        width={720}
-        height={560}
+        width={DIALOG.XL.w}
+        height={DIALOG.XL.h}
       >
         {orderTarget ? (
           <div className="space-y-4">

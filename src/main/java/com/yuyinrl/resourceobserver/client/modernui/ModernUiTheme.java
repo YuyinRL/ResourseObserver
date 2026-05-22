@@ -16,6 +16,7 @@ import icyllis.modernui.util.ColorStateList;
 import icyllis.modernui.view.Gravity;
 import icyllis.modernui.view.View;
 import icyllis.modernui.view.ViewGroup;
+import icyllis.modernui.widget.FrameLayout;
 import icyllis.modernui.widget.LinearLayout;
 import icyllis.modernui.widget.TextView;
 import net.minecraft.network.chat.Component;
@@ -37,6 +38,24 @@ public final class ModernUiTheme {
     private static float textScale = 1.2f;
     /** 布局缩放倍率（应用于图标尺寸、行高等） */
     private static float layoutScale = 1.2f;
+
+    // ===================== 对话框尺寸规范（基准 dp，会经 layoutScale 缩放） =====================
+
+    /** 小型弹窗（输入框 / 确认提示）：200×WRAP */
+    public static final int DIALOG_SMALL_W = 200;
+    /** 进度提示弹窗：240×WRAP */
+    public static final int DIALOG_PROGRESS_W = 240;
+    /** KPI 详情弹窗：420×360 */
+    public static final int DIALOG_KPI_W = 420;
+    public static final int DIALOG_KPI_H = 360;
+    /** 紧凑型 KPI 详情弹窗（单列指标）：360×280 */
+    public static final int DIALOG_KPI_SMALL_W = 360;
+    public static final int DIALOG_KPI_SMALL_H = 280;
+    /** 合成审核弹窗（流程信息密集）：560×WRAP */
+    public static final int DIALOG_REVIEW_W = 560;
+    /** 超大弹窗（合成树详情）：720×560 */
+    public static final int DIALOG_XL_W = 720;
+    public static final int DIALOG_XL_H = 560;
 
     /** 设置全局 UI 缩放（在 size 按钮点击时调用，rebuildUi 前更新） */
     public static void setUiScale(float text, float layout) {
@@ -289,6 +308,33 @@ public final class ModernUiTheme {
     /** Fragment 重载 */
     public static TextView chromeIconButton(Fragment fragment, String symbol, boolean isClose) {
         return chromeIconButton(Objects.requireNonNull(fragment.getView()), symbol, isClose);
+    }
+
+    /**
+     * 顶栏图标按钮 —— 使用自定义 View 作为图标（圆形背景 + 波纹反馈 + 悬停缩放动画）。
+     * <p>
+     * 用于替代 emoji 文本图标（emoji 在 ModernUI 字体中无法渲染）。
+     * 按钮结构：外层 FrameLayout 持有背景和交互，内层 iconView 居中显示。
+     */
+    public static View chromeDrawableButton(View context, View iconView, boolean isClose) {
+        int size = context.dp(Math.round(22 * layoutScale));
+        FrameLayout wrapper = new FrameLayout(context.getContext());
+        wrapper.setLayoutParams(new LinearLayout.LayoutParams(size, size));
+
+        FrameLayout.LayoutParams iconLp = new FrameLayout.LayoutParams(size, size);
+        wrapper.addView(iconView, iconLp);
+
+        // 圆形背景 + 波纹
+        wrapper.setBackground(chromeCircleBg(context, isClose));
+        wrapper.setClickable(true);
+        wrapper.setFocusable(true);
+        addHoverScaleEffect(wrapper);
+        return wrapper;
+    }
+
+    /** Fragment 重载 */
+    public static View chromeDrawableButton(Fragment fragment, View iconView, boolean isClose) {
+        return chromeDrawableButton(Objects.requireNonNull(fragment.getView()), iconView, isClose);
     }
 
     // ===================== Section 工厂 =====================

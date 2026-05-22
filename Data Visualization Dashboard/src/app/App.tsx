@@ -4,17 +4,15 @@ import { Sidebar } from './components/Sidebar';
 import { Overview } from './components/Overview';
 import { PowerNetwork } from './components/PowerNetwork';
 import { StorageNetwork } from './components/StorageNetwork';
-import { I18nProvider, useI18n, type Language } from './lib/i18n';
+import { useI18n, type Language } from './lib/i18n';
 import { ObserverSelectionProvider, useSelectedObserver } from './components/ObserverSelector';
 import { useMeta, useObserverDetail } from './hooks/useObservers';
 
 export default function App() {
   return (
-    <I18nProvider>
-      <ObserverSelectionProvider>
-        <AppInner />
-      </ObserverSelectionProvider>
-    </I18nProvider>
+    <ObserverSelectionProvider>
+      <AppInner />
+    </ObserverSelectionProvider>
   );
 }
 

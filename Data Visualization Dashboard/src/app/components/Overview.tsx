@@ -21,9 +21,17 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, XAxis, YAxis } fro
 import { useObserverDetail, useObserverHistory, useObserverSamplerDebug } from '../hooks/useObservers';
 import type { HistoryRange } from '../lib/api';
 import { useI18n } from '../lib/i18n';
-import { deriveAggregatedResourceItems, deriveOverviewKpis, formatBytes, isAe2, isPower } from '../lib/liveAdapter';
+import {
+  deriveAggregatedResourceItems,
+  deriveOverviewChartPoints,
+  deriveOverviewKpis,
+  formatBytes,
+  isAe2,
+  isPower,
+} from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import { Card, KpiCard, ProgressBar, SectionHeader, SegmentedControl, IconSegmentedControl, StatusPill, ModernDialog, DialogSectionTitle, DialogRow, DialogDivider, HoverCard } from './DashboardPrimitives';
+import { DIALOG } from '../lib/dialogSizes';
 import { ItemIcon } from './ItemIcon';
 
 interface ResourceRow {
@@ -35,6 +43,8 @@ interface ResourceRow {
   capacity: number;
   icon: typeof Pickaxe;
   accent: string;
+  starred?: boolean;
+  iconSprite?: string;
 }
 
 type OverviewSortField = 'stock' | 'produced' | 'consumed';
@@ -328,6 +338,7 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
   const { data: detail } = useObserverDetail(selectedId);
   const liveItems = useMemo(() => deriveAggregatedResourceItems(detail, 36), [detail]);
   const liveKpis = useMemo(() => deriveOverviewKpis(detail), [detail]);
+  const overviewChartPoints = useMemo(() => deriveOverviewChartPoints(detail), [detail]);
 
   const [selectedItemId, setSelectedItemId] = useState<string | null>(null);
   const [watchedMap, setWatchedMap] = useState<Record<string, boolean>>({});
@@ -355,6 +366,8 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
       capacity: item.capacity,
       icon: iconForIndex(index),
       accent: accentForIndex(index),
+      starred: item.starred,
+      iconSprite: item.iconSprite,
     }));
   }, [liveItems]);
 
@@ -376,7 +389,7 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
   }, [filteredResources, overviewSort, overviewSortDir]);
 
   const watchedResources = useMemo(
-    () => filteredResources.filter((resource) => watchedMap[resource.id] ?? false),
+    () => filteredResources.filter((resource) => resource.starred || (watchedMap[resource.id] ?? false)),
     [filteredResources, watchedMap],
   );
 
@@ -405,6 +418,10 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
   );
   const flowSeries = useMemo(() => {
     const nowSeconds = rangeHistory?.gameTime != null ? rangeHistory.gameTime * 0.05 : 0;
+    if (!selectedItemId && overviewChartPoints && overviewChartPoints.length > 0) {
+      const series = smoothFlowSeries(overviewChartPoints, 1, smoothPointCount);
+      if (series.length > 0) return series;
+    }
     if (!activeHistory || !Array.isArray(activeHistory.points) || activeHistory.points.length === 0) {
       if (selectedId) return [];
       return buildFlowSeries(selectedResource?.produced ?? 0, selectedResource?.consumed ?? 0, nowSeconds, visibleSeconds);
@@ -413,7 +430,17 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
     return series.length > 0
       ? series
       : selectedId ? [] : buildFlowSeries(selectedResource?.produced ?? 0, selectedResource?.consumed ?? 0, nowSeconds, visibleSeconds);
-  }, [activeHistory, rangeHistory, selectedResource, visibleSeconds, bucketSeconds, smoothPointCount, selectedId]);
+  }, [
+    activeHistory,
+    rangeHistory,
+    selectedResource,
+    visibleSeconds,
+    bucketSeconds,
+    smoothPointCount,
+    selectedId,
+    selectedItemId,
+    overviewChartPoints,
+  ]);
   const chartDragRef = useRef<{
     active: boolean;
     pointerId: number | null;
@@ -453,10 +480,11 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
   }, []);
 
   const tailLagSeconds = bucketSeconds + rangePollSeconds(granularity) + Math.min(1, bucketSeconds * 0.25);
+  const overviewChartActive = !selectedItemId && !!overviewChartPoints?.length;
   const stableWindowRight = Math.max(0, currentTimeSeconds - tailLagSeconds);
   const minLoadedX = flowSeries.length > 0 ? flowSeries[0].x : stableWindowRight - visibleSeconds;
   const maxLoadedX = flowSeries.length > 0 ? flowSeries[flowSeries.length - 1].x : stableWindowRight;
-  const liveDomainRight = Math.min(stableWindowRight, maxLoadedX);
+  const liveDomainRight = overviewChartActive ? maxLoadedX : Math.min(stableWindowRight, maxLoadedX);
   const oldestDomainRight = Math.min(liveDomainRight, minLoadedX + visibleSeconds);
   const oldestDisplayRight = oldestAnimatedRight == null
     ? oldestDomainRight
@@ -769,8 +797,8 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
                 open
                 onClose={() => setKpiDialogIndex(null)}
                 title={t('overview.kpi.detail.title', { label })}
-                width={420}
-                height={380}
+                width={DIALOG.MEDIUM.w}
+                height={DIALOG.MEDIUM.h}
               >
                 <div className="space-y-3">
                   <DialogSectionTitle>{t('overview.kpi.detail.current')}</DialogSectionTitle>
@@ -917,7 +945,7 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
           </div>
 
           <div
-            className={`relative mt-4 h-[320px] w-full select-none overflow-hidden ${isChartDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
+            className={`relative mt-4 min-h-[280px] md:h-[40vh] lg:h-[360px] w-full select-none overflow-hidden ${isChartDragging ? 'cursor-grabbing' : 'cursor-grab'}`}
             style={{ touchAction: 'none' }}
             onPointerDown={handleChartPointerDown}
             onPointerMove={handleChartPointerMove}
@@ -1203,10 +1231,15 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
                           }}
                           className={`rounded-full p-1 transition-all duration-200 ${
                             starPulseIds[resource.id] ? 'scale-125 text-amber-300 drop-shadow-[0_0_10px_rgba(251,191,36,0.75)]' :
-                            (watchedMap[resource.id] ?? false) ? 'scale-100 text-amber-400' : 'scale-100 text-slate-700 hover:text-slate-400'
+                            (resource.starred || (watchedMap[resource.id] ?? false))
+                              ? 'scale-100 text-amber-400'
+                              : 'scale-100 text-slate-700 hover:text-slate-400'
                           }`}
                         >
-                          <Star size={15} fill={(watchedMap[resource.id] ?? false) ? 'currentColor' : 'none'} />
+                          <Star
+                            size={15}
+                            fill={(resource.starred || (watchedMap[resource.id] ?? false)) ? 'currentColor' : 'none'}
+                          />
                         </button>
                       </div>
                       <p className="mt-3 truncate text-sm font-bold text-white" title={resource.name}>{resource.name}</p>
@@ -1288,10 +1321,15 @@ export const Overview = ({ searchQuery }: { searchQuery: string }) => {
                         }}
                         className={`rounded-full p-1 transition-all duration-200 ${
                           starPulseIds[resource.id] ? 'scale-125 text-amber-300 drop-shadow-[0_0_10px_rgba(251,191,36,0.75)]' :
-                          (watchedMap[resource.id] ?? false) ? 'scale-100 text-amber-400' : 'scale-100 text-slate-700 hover:text-slate-400'
+                          (resource.starred || (watchedMap[resource.id] ?? false))
+                            ? 'scale-100 text-amber-400'
+                            : 'scale-100 text-slate-700 hover:text-slate-400'
                         }`}
                       >
-                        <Star size={16} fill={(watchedMap[resource.id] ?? false) ? 'currentColor' : 'none'} />
+                        <Star
+                          size={16}
+                          fill={(resource.starred || (watchedMap[resource.id] ?? false)) ? 'currentColor' : 'none'}
+                        />
                       </button>
                     </td>
                     <td className="p-4">

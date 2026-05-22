@@ -28,22 +28,31 @@ com.yuyinrl.resourceobserver.web
 ├─ WebServerConfig      # TOML 配置（enabled/host/port/corsAllowAll）
 ├─ WebServerService     # HttpServer 封装，绑定生命周期事件
 ├─ JsonWriter           # 极简 JSON 序列化器（Map/Iterable/Number/String）
+├─ util/
+│   └─ QueryUtil        # HTTP 查询字符串解析（parseQuery / urlDecode）
 └─ handler/
    ├─ BaseApiHandler    # 主线程切换 + 路径解析工具
    ├─ HealthHandler     # GET /api/health
    ├─ IconHandler       # GET /api/icon/{namespace}/{path}
+   ├─ ItemsHandler      # GET /api/observers/{...}/items
+   ├─ HistoryHandler    # GET /api/observers/{...}/history
+   ├─ MetaHandler       # GET /api/meta
    ├─ ObserversHandler  # GET /api/observers[/{dim}/{x}/{y}/{z}]
    ├─ CraftingHandler   # GET /api/observers/{...}/crafting
    ├─ CraftingOrderHandler # POST /api/observers/{...}/crafting/{plan|confirm|cancel|tree}
-   ├─ ItemNameResolver  # itemId -> translationKey/displayName 解析
+   ├─ SamplerDebugHandler  # GET /api/observers/{...}/debug/sampler
+   ├─ ItemNameResolver  # itemId → translationKey/displayName 解析
    ├─ ServerAssetIndex  # 预加载 mod jar lang 资源（zh_cn/en_us）
    └─ StaticHandler     # GET / (静态资源 assets/resourceobserver/web/)
 ```
 
-- 合成采集由 `integration.CraftingDataCollector` / `CraftingOrderService` 直接调用
-  AE2 API（`ICraftingService`、`ICraftingCPU`、`AEKey`、`AEFluidKey`），支持计划计算、样板过滤与流体键。
-- Observer 枚举通过 `ObserverBlockEntity` 的静态 `LOADED` 注册表，
-  在 `onLoad()/setRemoved()` 中自动增删，避免扫描区块。
+另外，`service.ObserverService` 提供 Web 与 BlockEntity 之间的桥接层：
+```java
+ObserverService.listObservers()            // 枚举所有已加载 Observer
+ObserverService.findByPos(level, pos)       // 按坐标查找 ObserverBlockEntity
+ObserverService.buildObserverSummaries()    // 生成 Observer 摘要列表
+```
+Web Handler 通过 `ObserverService.findByPos()` 获取 ObserverBlockEntity 引用，而非直接 `level.getBlockEntity()` + `instanceof` 转型。
 
 ## 🔀 生命周期
 
@@ -66,6 +75,23 @@ Singleplayer 每次进入世界都是一次新的 `ServerStartedEvent`，退出�
 ```json
 {"status":"ok","modid":"resourceobserver","serverName":"...","tickCount":1234,"singleplayer":true}
 ```
+
+### `GET /api/auth/whoami`（0.9.0+）
+返回当前 session token 对应的玩家：
+```json
+{"uuid":"<player-uuid>","name":"Steve","admin":false,"authMode":"TOKEN"}
+```
+鉴权失败返回 401。
+
+### `POST /api/auth/exchange`（0.9.0+）
+用一次性 link token 换长期 session token；**不**经过 `AuthFilter`。
+请求体支持 JSON `{token: "rl_..."}`、表单 `token=...` 或 `?t=...` 三种形式。
+成功响应：
+```json
+{"session_token":"rs_...","uuid":"<player-uuid>","name":"Steve","admin":false}
+```
+同时下发 cookie：`Set-Cookie: ro_session=<token>; Max-Age=2592000; Path=/; SameSite=Lax`。
+link token 不存在 / 过期 / 已被消费时返回 401。
 
 ### `GET /api/meta`（0.4.0+）
 Dashboard 启动时调用一次，返回 API schema 版本和可用集成列表：
@@ -144,9 +170,11 @@ Dashboard 启动时调用一次，返回 API schema 版本和可用集成列表�
 | 键 | 默认 | 说明 |
 |----|------|------|
 | `web.enabled` | `true` | 总开关 |
-| `web.host` | `127.0.0.1` | 监听地址；改为 `0.0.0.0` 可局域网访问（无鉴权） |
+| `web.host` | `127.0.0.1` | 监听地址；改为 `0.0.0.0` 可局域网访问 |
 | `web.port` | `28080` | 端口 |
 | `web.corsAllowAll` | `true` | 是否对 `/api/*` 响应 `Access-Control-Allow-Origin: *` |
+| `web.publicUrlBase` | `""` | 玩家拿到的对外链接 base（如 `http://server.example.com:28080`）；为空时根据 host 自动推断 |
+| `web.auth.mode` | `TOKEN` | `TOKEN` 强制 Token 鉴权；`NONE` 关闭鉴权（仅本机使用时可用） |
 
 ## 🖥️ 前端 Dashboard（0.4.0+）
 
@@ -190,10 +218,40 @@ npm run build      # 产物落到 mod 资源目录
 - [ ] `Overview` / `StorageNetwork` / `PowerNetwork` 内的 mock 数据逐步替换为
   `useObserverDetail` / `useObserverCrafting` 返回值
 
+## 🔐 鉴权与权限（0.9.0+）
+
+**鉴权模式**：`web.auth.mode = TOKEN`（默认）/ `NONE`。`TOKEN` 模式下所有
+`/api/observers/**`、`/api/icon/**`、`/api/auth/whoami` 都必须携带有效 token。
+
+**双 Token 模型**：
+- **link token**（前缀 `rl_`、TTL 5 分钟、内存存储、一次性）—— 由游戏内 🌐 按钮 / 聊天链接生成，
+  仅作为"换长期 token"的一次性凭证；浏览器消费后立即从内存移除，第二个浏览器无法重复使用同一链接。
+- **session token**（前缀 `rs_`、长期、持久化到 SavedData、可多设备并存）—— 通过
+  `POST /api/auth/exchange` 用 link token 换得；写入 `localStorage` 与 cookie `ro_session`
+  （`Max-Age=2592000; Path=/; SameSite=Lax`），关闭浏览器重开仍登录。
+
+**鉴权通道**（`AuthFilter` 同时识别）：
+1. `Authorization: Bearer <session-token>`（前端默认走这条）
+2. `Cookie: ro_session=<session-token>`（用于 LS 被清后的兜底，也支持纯 cookie 登录）
+
+**Owner-only 权限**：`ObserverBlockEntity.placerUuid` 记录放置者；非放置者 / 非 OP 无法看到该 Observer，
+`/api/observers` 仅返回当前 Token 对应玩家可见的 Observer。
+
+**零命令获取 Token**：
+- **游戏内 UI**：Resource Terminal 顶栏 🌐 按钮 → 弹窗显示 URL，含"复制链接 / 重新生成 / 关闭"
+- **聊天链接**：玩家首次右键终端时，服务端推送一条带 `ClickEvent.OPEN_URL` 的可点击链接（每进程仅一次）
+
+**同源收敛**：`StaticHandler` 收到 `Host: 127.x.x.x` / `[::1]` 的请求时 302 跳转到
+`localhost:<port>`，把两条入口收敛到同一 origin，避免浏览器把 `127.0.0.1` 与 `localhost`
+视为不同站点导致 cookie / localStorage 不互通。
+
+`POST /api/auth/exchange` 是唯一**不**经过 `AuthFilter` 的端点（因为它本身就是获取凭证的入口）。
+
 ## 🔐 安全提示
 
 - 默认仅绑定 `127.0.0.1`，任何访问需要宿主机权限
-- **不包含认证机制**，请勿暴露至公网
+- **默认开启 Token 鉴权**（v0.9.0+）；`web.auth.mode = NONE` 仅供本机调试，不应在多人服务器中关闭
+- 玩家暴露 token URL 等同于把账号 web 视图借出；服主可在游戏内点"重新生成"一键吊销所有已登录浏览器
 - 路径中的 `..` 会被静态资源处理器直接拒绝
 
 ## 🔗 相关文档

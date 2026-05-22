@@ -2,12 +2,11 @@ package com.yuyinrl.resourceobserver.web.handler;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
-import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.history.WebHighPrecisionSampler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -29,6 +28,7 @@ public final class SamplerDebugHandler extends BaseApiHandler implements HttpHan
         super(server);
     }
 
+    /** /api/sampler/debug —— 暴露 AE2/Flux 采样器最近一次的调试快照（仅开发环境使用）。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -46,6 +46,9 @@ public final class SamplerDebugHandler extends BaseApiHandler implements HttpHan
             sendError(exchange, 404, "not found");
             return;
         }
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         Map<String, Object> body = runOnMain(mc -> buildBody(mc, target));
         if (body == null) {
             sendError(exchange, 404, "observer not found");
@@ -57,8 +60,7 @@ public final class SamplerDebugHandler extends BaseApiHandler implements HttpHan
     private @Nullable Map<String, Object> buildBody(MinecraftServer mc, ObserverTarget target) {
         ServerLevel level = resolveLevel(mc, target.dimension());
         if (level == null) return null;
-        BlockEntity raw = level.getBlockEntity(target.pos());
-        if (!(raw instanceof ObserverBlockEntity)) return null;
+        if (ObserverService.findByPos(level, target.pos()).isEmpty()) return null;
 
         WebHighPrecisionSampler.Diagnostics diag =
                 WebHighPrecisionSampler.diagnostics(level, target.pos());

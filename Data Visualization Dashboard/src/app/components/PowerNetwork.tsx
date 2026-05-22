@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   Activity, Battery, BatteryCharging, Cpu, Gauge, Zap, ZapOff,
 } from 'lucide-react';
+import { DIALOG } from '../lib/dialogSizes';
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from 'recharts';
 import { useObserverDetail } from '../hooks/useObservers';
 import { useI18n } from '../lib/i18n';
@@ -13,11 +14,14 @@ import {
   derivePowerEffectiveStats,
   derivePowerExternalGroups,
   derivePowerKpis,
+  derivePowerLines,
   derivePowerLoadSegments,
+  derivePowerServerKpiCards,
   derivePowerSummary,
   formatEnergy,
   type LivePowerConsumer,
   type LivePowerExternalGroup,
+  type LivePowerLine,
 } from '../lib/liveAdapter';
 import { useSelectedObserver } from './ObserverSelector';
 import {
@@ -83,6 +87,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
   );
 
   const rawKpi = useMemo(() => derivePowerKpis(detail), [detail]);
+  const serverKpis = useMemo(() => derivePowerServerKpiCards(detail), [detail]);
   const effStats = useMemo(
     () => derivePowerEffectiveStats(detail, excludedKeys, effectiveGroups),
     [detail, excludedKeys, effectiveGroups],
@@ -95,6 +100,8 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
     () => derivePowerLoadSegments(detail, excludedKeys),
     [detail, excludedKeys],
   );
+  const devices = useMemo(() => derivePowerLines(detail), [detail]);
+  const alerts = detail?.power?.overloadAlerts ?? [];
   const summary = useMemo(() => derivePowerSummary(detail), [detail]);
   const gridLoad = useMemo(() => {
     if (!effStats) return null;
@@ -118,6 +125,17 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
     if (filter === 'top') list = list.slice(0, 10);
     return list;
   }, [consumers, searchQuery, filter]);
+
+  const filteredDevices = useMemo(() => {
+    let list = devices ?? [];
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter((d) =>
+        d.name.toLowerCase().includes(q) || d.category.toLowerCase().includes(q));
+    }
+    if (filter === 'top') list = list.slice(0, 10);
+    return list;
+  }, [devices, searchQuery, filter]);
 
   const donutData = useMemo(() => {
     const segs = segments ?? [];
@@ -183,10 +201,15 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
   return (
     <div className="space-y-6">
       {/* ========== KPI Row: 有效输入 / 有效输出 / 储能 / 排储速率 ========== */}
+      {/* G7: 无外储排除时优先使用服务端预格式化的 kpiCards（与游戏内 UI 数据源对齐） */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
         <KpiCard
           label={t('power.kpi.input.label')}
-          value={fmtFE(effStats?.totalInputPerTick ?? 0)}
+          value={
+            effStats && effStats.excludedInputPerTick > 0
+              ? fmtFE(effStats.totalInputPerTick)
+              : (serverKpis?.[0]?.value ?? fmtFE(effStats?.totalInputPerTick ?? 0))
+          }
           icon={Zap}
           tone="cyan"
           helper={effStats && effStats.excludedInputPerTick > 0 ? `−${fmtFE(effStats.excludedInputPerTick)}` : undefined}
@@ -194,7 +217,11 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
         />
         <KpiCard
           label={t('power.kpi.output.label')}
-          value={fmtFE(effStats?.totalOutputPerTick ?? 0)}
+          value={
+            effStats && effStats.excludedOutputPerTick > 0
+              ? fmtFE(effStats.totalOutputPerTick)
+              : (serverKpis?.[1]?.value ?? fmtFE(effStats?.totalOutputPerTick ?? 0))
+          }
           icon={ZapOff}
           tone="amber"
           helper={effStats && effStats.excludedOutputPerTick > 0 ? `−${fmtFE(effStats.excludedOutputPerTick)}` : undefined}
@@ -205,12 +232,16 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
           value={`${storedRatio.toFixed(1)}%`}
           icon={Battery}
           tone="emerald"
-          helper={storageHelper}
+          helper={serverKpis?.[2]?.value ?? storageHelper}
           onClick={() => setKpiDialog(2)}
         />
         <KpiCard
           label={t('power.kpi.excludedRate.label')}
-          value={fmtFE(effStats?.excludedTotalPerTick ?? 0)}
+          value={
+            effStats && effStats.excludedTotalPerTick > 0
+              ? fmtFE(effStats.excludedTotalPerTick)
+              : (serverKpis?.[3]?.value ?? fmtFE(0))
+          }
           icon={BatteryCharging}
           tone="blue"
           helper={t('power.helper.excludedRate')}
@@ -361,6 +392,20 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
                 </>
               )}
             </div>
+            {alerts.length > 0 && (
+              <div className="mt-4 space-y-2 border-t border-slate-800 pt-3">
+                {alerts.slice(0, 3).map((alert) => (
+                  <div key={alert.nodeId} className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <StatusPill tone={alert.alertLevel === 'CRITICAL' ? 'rose' : 'amber'}>{alert.alertLevel}</StatusPill>
+                      <span className="truncate text-slate-200">{alert.displayName}</span>
+                      <span className="ml-auto font-mono text-amber-200">{Number(alert.throughputLoss).toFixed(0)}%</span>
+                    </div>
+                    <p className="mt-1 truncate text-[10px] text-slate-500">{alert.descriptionKey}</p>
+                  </div>
+                ))}
+              </div>
+            )}
           </Card>
 
           {/* Power Devices Table */}
@@ -374,15 +419,42 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
                     type="button"
                     onClick={() => setFilter('all')}
                     className={`px-2.5 py-1 text-[10px] font-semibold rounded border ${filter === 'all' ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300' : 'border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                  >ALL</button>
+                  >{t('common.filterAll')}</button>
                   <button
                     type="button"
                     onClick={() => setFilter('top')}
                     className={`px-2.5 py-1 text-[10px] font-semibold rounded border ${filter === 'top' ? 'border-cyan-500/50 bg-cyan-500/15 text-cyan-300' : 'border-slate-700 text-slate-400 hover:border-slate-600'}`}
-                  >TOP 10</button>
+                  >{t('common.filterTop')}</button>
                 </div>
               }
             />
+            {filteredDevices.length > 0 && (
+              <div className="mt-3 max-h-48 overflow-y-auto thin-scrollbar border-b border-slate-800 pb-3">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-slate-900/95 backdrop-blur">
+                    <tr className="text-slate-500 uppercase tracking-wider">
+                      <th className="text-left py-2 px-2">Device</th>
+                      <th className="text-right py-2 px-2">FE/t</th>
+                      <th className="text-right py-2 px-2">Stored</th>
+                      <th className="text-right py-2 px-2">Status</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {filteredDevices.map((d: LivePowerLine) => (
+                      <tr key={d.id} className="border-t border-slate-800/50 hover:bg-slate-800/30">
+                        <td className="py-2 px-2">
+                          <p className="text-slate-200 truncate max-w-[240px]">{d.name}</p>
+                          <p className="text-[10px] text-slate-500 truncate">{d.category}</p>
+                        </td>
+                        <td className="py-2 px-2 text-right font-mono text-amber-300">{fmtFE(d.consumption)}</td>
+                        <td className="py-2 px-2 text-right font-mono text-slate-400">{formatEnergy(d.capacity)}</td>
+                        <td className="py-2 px-2 text-right"><StatusPill tone={d.status === 'Overload' ? 'amber' : 'emerald'}>{d.status}</StatusPill></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
             <div className="mt-3 max-h-96 overflow-y-auto thin-scrollbar">
               <table className="w-full text-xs">
                 <thead className="sticky top-0 bg-slate-900/95 backdrop-blur">
@@ -449,8 +521,8 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
             : kpiDialog === 2 ? t('power.kpi.storage.label')
             : t('power.kpi.excludedRate.label')
         }
-        width={460}
-        height={380}
+        width={DIALOG.MEDIUM.w}
+        height={DIALOG.MEDIUM.h}
       >
         {effStats && rawKpi && (
           <div className="space-y-2">
@@ -462,7 +534,7 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
             <DialogRow label={t('power.external.excludedOutput')} value={fmtFE(effStats.excludedOutputPerTick)} />
             <DialogDivider />
             <DialogRow label={t('power.kpi.storage.label')} value={`${storedRatio.toFixed(2)}%`} />
-            <DialogRow label="Stored / Capacity" value={storageHelper} />
+            <DialogRow label={t('power.kpi.storedCapacity')} value={storageHelper} />
           </div>
         )}
       </ModernDialog>
@@ -472,8 +544,8 @@ export const PowerNetwork: React.FC<Props> = ({ searchQuery }) => {
         open={extDialogOpen}
         onClose={() => setExtDialogOpen(false)}
         title={t('power.external.dialog.title')}
-        width={560}
-        height={460}
+        width={DIALOG.LARGE.w}
+        height={DIALOG.LARGE.h}
       >
         <div className="space-y-3">
           <p className="text-xs text-slate-400">{t('power.external.dialog.hint')}</p>

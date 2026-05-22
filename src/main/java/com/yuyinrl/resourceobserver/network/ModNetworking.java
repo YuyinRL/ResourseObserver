@@ -123,6 +123,26 @@ public final class ModNetworking {
                 )
         );
 
+        // 服务端 → 客户端：Web Dashboard 访问 Token / 登录链接
+        registrar.playToClient(
+                WebTokenPayload.TYPE,
+                WebTokenPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() ->
+                        com.yuyinrl.resourceobserver.client.ClientPayloadHandler.handleWebToken(payload)
+                )
+        );
+
+        // 客户端 → 服务端：请求 Web 访问 Token（含 regenerate=true 强制重新签发）
+        registrar.playToServer(
+                RequestWebTokenPayload.TYPE,
+                RequestWebTokenPayload.STREAM_CODEC,
+                (payload, context) -> context.enqueueWork(() -> {
+                    if (!(context.player() instanceof ServerPlayer serverPlayer)) return;
+                    com.yuyinrl.resourceobserver.web.auth.WebTokenService
+                            .issueAndSend(serverPlayer, payload.regenerate());
+                })
+        );
+
         // 客户端 → 服务端：UI 操作请求（关注/分组/排序/筛选等）
         registrar.playToServer(
                 ObserverUiActionPayload.TYPE,

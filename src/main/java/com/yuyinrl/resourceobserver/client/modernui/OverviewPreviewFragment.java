@@ -3,6 +3,13 @@ package com.yuyinrl.resourceobserver.client.modernui;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.ui.state.TableSortMode;
 import com.yuyinrl.resourceobserver.ui.state.TableStatusFilter;
@@ -72,10 +79,10 @@ public final class OverviewPreviewFragment extends Fragment {
     private float manualScale = SCALE_MODES[1];
 
     private ChartWindow chartWindow = ChartWindow.DAY_24H_5M;
-    private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
-    private ChartRenderer.LineMode chartLineMode = ChartRenderer.LineMode.ALL;
-    private ChartRenderer.SmoothingMode smoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
-    private ChartRenderer.ChartDataType chartDataType = ChartRenderer.ChartDataType.ITEMS;
+    private ChartPage chartPage = ChartPage.THROUGHPUT;
+    private LineMode chartLineMode = LineMode.ALL;
+    private SmoothingMode smoothingMode = SmoothingMode.SMOOTH;
+    private ChartDataType chartDataType = ChartDataType.ITEMS;
 
     private String selectedItemId;
     private String groupFilterKey = PlayerUiPrefsSavedData.GROUP_FILTER_ALL;
@@ -485,7 +492,7 @@ public final class OverviewPreviewFragment extends Fragment {
         buttons.addView(windowBtn);
 
         TextView dataBtn = chartButton(buttons,
-                chartDataType == ChartRenderer.ChartDataType.ENERGY
+                chartDataType == ChartDataType.ENERGY
                         ? tr("screen.resourceobserver.overview.chart.data.energy")
                         : tr("screen.resourceobserver.overview.chart.data.items"),
                 true);
@@ -496,7 +503,7 @@ public final class OverviewPreviewFragment extends Fragment {
         buttons.addView(dataBtn, leftGap(dp(4)));
 
         TextView pageBtn = chartButton(buttons,
-                chartPage == ChartRenderer.ChartPage.THROUGHPUT
+                chartPage == ChartPage.THROUGHPUT
                         ? tr("screen.resourceobserver.overview.chart.tab.throughput")
                         : tr("screen.resourceobserver.overview.chart.tab.stock"),
                 true);
@@ -506,10 +513,10 @@ public final class OverviewPreviewFragment extends Fragment {
         });
         buttons.addView(pageBtn, leftGap(dp(4)));
 
-        boolean lineModeEnabled = chartPage == ChartRenderer.ChartPage.THROUGHPUT;
+        boolean lineModeEnabled = chartPage == ChartPage.THROUGHPUT;
         TextView modeBtn = chartButton(buttons, lineModeLabel(chartLineMode), lineModeEnabled);
         modeBtn.setOnClickListener(v -> {
-            if (chartPage == ChartRenderer.ChartPage.THROUGHPUT) {
+            if (chartPage == ChartPage.THROUGHPUT) {
                 chartLineMode = chartLineMode.next();
                 rebuildUi();
             }
@@ -517,7 +524,7 @@ public final class OverviewPreviewFragment extends Fragment {
         buttons.addView(modeBtn, leftGap(dp(4)));
 
         TextView smoothBtn = chartButton(buttons,
-                smoothingMode == ChartRenderer.SmoothingMode.SMOOTH
+                smoothingMode == SmoothingMode.SMOOTH
                         ? tr("screen.resourceobserver.overview.chart.smoothing.smooth")
                         : tr("screen.resourceobserver.overview.chart.smoothing.raw"),
                 true);
@@ -534,7 +541,7 @@ public final class OverviewPreviewFragment extends Fragment {
         section.addView(titleRow, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
 
         String scopeLabel = selectedItemDisplayName();
-        String subtitle = chartPage == ChartRenderer.ChartPage.STOCK
+        String subtitle = chartPage == ChartPage.STOCK
                 ? tr("screen.resourceobserver.overview.chart.subtitle.stock", scopeLabel, chartWindow.shortLabel())
                 : tr("screen.resourceobserver.overview.chart.subtitle.throughput", scopeLabel, chartWindow.shortLabel());
         addText(section, subtitle, UiThemeTokens.TEXT_MUTED, 10, dp(2), ViewGroup.LayoutParams.WRAP_CONTENT, false);
@@ -595,7 +602,7 @@ public final class OverviewPreviewFragment extends Fragment {
             int yCons = Math.round(height * (0.66f - 0.16f * wave(i, consumptionSeed)));
             int yNet = Math.round(height * (0.58f - 0.20f * wave(i, netSeed)));
             addPoint(plot, x, yProd, UiThemeTokens.CYAN);
-            if (chartPage == ChartRenderer.ChartPage.THROUGHPUT) {
+            if (chartPage == ChartPage.THROUGHPUT) {
                 addPoint(plot, x, yCons, UiThemeTokens.AMBER);
                 addPoint(plot, x, yNet, UiThemeTokens.EMERALD);
             } else {
@@ -1128,7 +1135,7 @@ public final class OverviewPreviewFragment extends Fragment {
         };
     }
 
-    private String lineModeLabel(ChartRenderer.LineMode mode) {
+    private String lineModeLabel(LineMode mode) {
         return switch (mode) {
             case ALL -> tr("screen.resourceobserver.overview.chart.mode.all");
             case PRODUCTION -> tr("screen.resourceobserver.overview.chart.mode.production");

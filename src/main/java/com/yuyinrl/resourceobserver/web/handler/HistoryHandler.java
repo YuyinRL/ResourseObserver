@@ -5,13 +5,15 @@ import com.sun.net.httpserver.HttpHandler;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
+import com.yuyinrl.resourceobserver.service.ObserverService;
 import com.yuyinrl.resourceobserver.web.WebServerService;
+import com.yuyinrl.resourceobserver.web.util.QueryUtil;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.history.HistoryRecorder;
 import com.yuyinrl.resourceobserver.world.history.WebHighPrecisionSampler;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
@@ -41,6 +43,9 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
         super(server);
     }
 
+    /**
+     * 处理 GET 请求 —— 解析 Observer 路径，切到主线程构造响应。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -57,12 +62,15 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
             sendError(exchange, 404, "not found");
             return;
         }
-        Map<String, String> query = parseQuery(uri.getRawQuery());
+        Map<String, String> query = QueryUtil.parseQuery(uri.getRawQuery());
         ChartWindow visibleWindow = mapRange(query.getOrDefault("range", "short"));
         ChartWindow window = bufferWindow(visibleWindow);
         String itemId = query.get("item");
         ChartScope scope = (itemId != null && !itemId.isBlank()) ? ChartScope.ITEM : ChartScope.GLOBAL;
 
+        AccessResult<Boolean> chk = runOnMainWithAccess(exchange, target, (mc, obs) -> Boolean.TRUE);
+        if (chk.isForbidden()) { sendError(exchange, 403, "forbidden"); return; }
+        if (chk.isNotFound()) { sendError(exchange, 404, "observer not found"); return; }
         Map<String, Object> body = runOnMain(mc -> buildBody(mc, target, window, visibleWindow, scope, itemId));
         if (body == null) {
             sendError(exchange, 404, "observer not found");
@@ -71,15 +79,19 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
         sendJson(exchange, 200, body);
     }
 
+    /**
+     * 在主线程上构造响应体；找不到 level 或 observer 时返回 {@code null}（由调用方转为 404）。
+     * <p>detail 档优先走 {@link WebHighPrecisionSampler}（0.25 秒桶 + 3 秒滑窗）；其它档走 {@link HistoryRecorder}。</p>
+     */
     private @Nullable Map<String, Object> buildBody(MinecraftServer mc, ObserverTarget target,
                                                     ChartWindow window, ChartWindow visibleWindow, ChartScope scope,
                                                     @Nullable String itemId) {
         ServerLevel level = resolveLevel(mc, target.dimension());
         if (level == null) return null;
-        BlockEntity raw = level.getBlockEntity(target.pos());
-        if (!(raw instanceof ObserverBlockEntity observer)) return null;
+        ObserverBlockEntity observer = ObserverService.findByPos(level, target.pos()).orElse(null);
+        if (observer == null) return null;
 
-        List<ObserverBlockEntity.BoundEntry> bindings = itemChartBindings(observer.getBindings());
+        List<BoundEntry> bindings = itemChartBindings(observer.getBindings());
         if (visibleWindow == ChartWindow.WEB_DETAIL_1M_1S) {
             WebHighPrecisionSampler.registerDemand(level, target.pos(), itemId);
             WebHighPrecisionSampler.QueryResult highPrecision =
@@ -247,9 +259,9 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
     }
 
     /** Web Overview 的资源曲线只聚合物品/流体网络，避免能源网络污染物品流转曲线。 */
-    private static List<ObserverBlockEntity.BoundEntry> itemChartBindings(List<ObserverBlockEntity.BoundEntry> bindings) {
-        List<ObserverBlockEntity.BoundEntry> out = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : bindings) {
+    private static List<BoundEntry> itemChartBindings(List<BoundEntry> bindings) {
+        List<BoundEntry> out = new ArrayList<>();
+        for (BoundEntry binding : bindings) {
             if (!"FLUX_ENERGY".equals(binding.networkType()) && !"MEK_ENERGY".equals(binding.networkType())) {
                 out.add(binding);
             }
@@ -304,27 +316,5 @@ public final class HistoryHandler extends BaseApiHandler implements HttpHandler 
             return 0.0d;
         }
         return (total / observedTicks) * 1200.0d;
-    }
-
-    private static Map<String, String> parseQuery(@Nullable String raw) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String pair : raw.split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq < 0) {
-                out.put(urlDecode(pair), "");
-            } else {
-                out.put(urlDecode(pair.substring(0, eq)), urlDecode(pair.substring(eq + 1)));
-            }
-        }
-        return out;
-    }
-
-    private static String urlDecode(String s) {
-        try {
-            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            return s;
-        }
     }
 }

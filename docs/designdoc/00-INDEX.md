@@ -51,6 +51,7 @@ aliases:
 | [[07-模组集成]] | AE2 / Flux Networks / Mekanism / ModernUI 适配 |
 | [[12-资源结构]] | 资产文件、数据包、模板、国际化 |
 | [[14-Web服务]] | 内置 HTTP Dashboard、JSON API、AE2 合成端点 |
+| [[15-Web-API参考]] | 面向第三方开发者的 REST API 参考文档 |
 
 ### 项目管理
 

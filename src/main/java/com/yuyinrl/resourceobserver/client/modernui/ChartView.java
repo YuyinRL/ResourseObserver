@@ -4,6 +4,13 @@ import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartMath;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import icyllis.modernui.core.Context;
 import icyllis.modernui.graphics.Canvas;
 import icyllis.modernui.graphics.Paint;
@@ -47,9 +54,9 @@ final class ChartView extends View {
     private static final float HOVER_SNAP_DISTANCE = 60.0f;
 
     private List<OverviewViewModel.FlowPoint> series;
-    private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
-    private ChartRenderer.LineMode lineMode = ChartRenderer.LineMode.ALL;
-    private ChartRenderer.SmoothingMode smoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
+    private ChartPage chartPage = ChartPage.THROUGHPUT;
+    private LineMode lineMode = LineMode.ALL;
+    private SmoothingMode smoothingMode = SmoothingMode.SMOOTH;
 
     private ChartMath.PreparedChart preparedChart;
     private long lastFingerprint;
@@ -77,9 +84,9 @@ final class ChartView extends View {
      */
     void setChartData(
             List<OverviewViewModel.FlowPoint> series,
-            ChartRenderer.ChartPage page,
-            ChartRenderer.LineMode lineMode,
-            ChartRenderer.SmoothingMode smoothingMode
+            ChartPage page,
+            LineMode lineMode,
+            SmoothingMode smoothingMode
     ) {
         this.series = series;
         this.chartPage = page;
@@ -370,7 +377,7 @@ final class ChartView extends View {
         paint.recycle();
     }
 
-    private static int seriesColor(ChartRenderer.ChartSeriesType type) {
+    private static int seriesColor(ChartSeriesType type) {
         return switch (type) {
             case PRODUCTION -> UiThemeTokens.CYAN;
             case CONSUMPTION -> UiThemeTokens.AMBER;
@@ -379,7 +386,7 @@ final class ChartView extends View {
         };
     }
 
-    private static String seriesLabel(ChartRenderer.ChartSeriesType type) {
+    private static String seriesLabel(ChartSeriesType type) {
         return switch (type) {
             case PRODUCTION -> Component.translatable("screen.resourceobserver.overview.chart.legend.production").getString();
             case CONSUMPTION -> Component.translatable("screen.resourceobserver.overview.chart.legend.consumption").getString();

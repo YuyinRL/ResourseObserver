@@ -2,7 +2,15 @@
  * 将后端 ObserverDetail / CraftingResponse 转换成现有面板所使用的形状。
  * 当未选中 Observer 或数据未就绪时返回 null，让面板回退到内置 mock。
  */
-import type { ObserverDetail, CraftingResponse, ObserverBinding, FluxDeviceSnapshot } from './api';
+import type {
+  ObserverDetail,
+  CraftingResponse,
+  ObserverBinding,
+  FluxDeviceSnapshot,
+  StorageAlertLevel,
+  StorageUsageSegment,
+  OverviewValueKind,
+} from './api';
 
 export interface LiveKpi {
   label: string;
@@ -106,6 +114,30 @@ export interface LiveResourceItem {
   capacity: number;
   /** 所属 AE 网络 id；Storage Page 选中节点时按此过滤，避免同名物品跨网络互相串台。 */
   networkId?: string;
+  globalAmount?: number;
+  delta?: number;
+  alertLevel?: StorageAlertLevel;
+  groupKey?: string;
+  burnRatePerMin?: number;
+  estimatedBufferText?: string;
+  bufferRatio?: number;
+  iconSprite?: string;
+  starred?: boolean;
+}
+
+function overviewUnit(kind: OverviewValueKind): string {
+  switch (kind) {
+    case 'FLOW_PER_MINUTE': return '/min';
+    case 'PERCENT': return '%';
+    case 'BALANCE_SCORE': return '%';
+    default: return '';
+  }
+}
+
+function overviewValue(value: number | null | undefined, kind: OverviewValueKind): string {
+  if (value == null || !Number.isFinite(value)) return '0';
+  if (kind === 'COUNT') return Math.round(value).toLocaleString();
+  return value.toFixed(kind === 'FLOW_PER_MINUTE' ? 1 : 1);
 }
 
 function shortenNetwork(id: string): string {
@@ -151,6 +183,16 @@ export function isPower(b: ObserverBinding): boolean {
 
 /** 根据 detail 推导 Overview 页的 4 张 KPI。 */
 export function deriveOverviewKpis(detail: ObserverDetail | null): LiveKpi[] | null {
+  if (detail?.overview?.kpis?.length) {
+    return detail.overview.kpis.map((kpi) => ({
+      label: kpi.labelKey,
+      value: overviewValue(kpi.valueRaw, kpi.valueKind),
+      unit: overviewUnit(kpi.valueKind),
+      change: kpi.trendArg ?? kpi.trendKey ?? '',
+      isPositive: kpi.status === 'POSITIVE' || kpi.status === 'NEUTRAL',
+    }));
+  }
+
   const bindings = detail?.bindings;
   if (!detail || !Array.isArray(bindings) || bindings.length === 0) return null;
 
@@ -225,10 +267,18 @@ export function deriveResourceItems(detail: ObserverDetail | null, limit = 500):
         id: it.id,
         name: niceItemName(it.id, it.displayName, it.translationKey),
         produced: it.production,
-        consumed: it.consumption,
-        stock: it.amount,
-        capacity: Math.max(it.amount * 1.5, 1000),
-        networkId: b.networkId,
+        consumed: it.burnRatePerMin ?? it.consumption,
+        stock: it.localAmount ?? it.amount,
+        capacity: it.capacity ?? Math.max((it.localAmount ?? it.amount) * 1.5, 1000),
+        networkId: it.networkId ?? b.networkId,
+        globalAmount: it.globalAmount,
+        delta: it.delta ?? it.net,
+        alertLevel: it.alertLevel,
+        groupKey: it.groupKey,
+        burnRatePerMin: it.burnRatePerMin,
+        estimatedBufferText: it.estimatedBufferText,
+        bufferRatio: it.bufferRatio,
+        iconSprite: it.iconSprite,
       });
       if (out.length >= limit) return out;
     }
@@ -244,6 +294,23 @@ export function deriveAggregatedResourceItems(
   detail: ObserverDetail | null,
   limit = 500,
 ): LiveResourceItem[] | null {
+  if (detail?.overview?.tableGroups?.length) {
+    const rows = detail.overview.tableGroups.flatMap((group) => group.rows ?? []);
+    const out = rows.map((row) => ({
+      id: row.itemId,
+      name: niceItemName(row.itemId, row.displayName),
+      produced: row.production,
+      consumed: row.consumption,
+      stock: row.stock,
+      capacity: Math.max(row.stock * 1.5, 1000),
+      delta: row.net,
+      groupKey: row.groupKey,
+      iconSprite: row.iconSprite ?? undefined,
+      starred: row.starred,
+    }));
+    return out.length > limit ? out.slice(0, limit) : out;
+  }
+
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
   const map = new Map<string, LiveResourceItem>();
@@ -251,19 +318,30 @@ export function deriveAggregatedResourceItems(
     if (!isAe2(b) || !b.items) continue;
     for (const it of b.items) {
       const existing = map.get(it.id);
+      const stock = it.localAmount ?? it.amount;
+      const consumed = it.burnRatePerMin ?? it.consumption;
       if (existing) {
         existing.produced += it.production;
-        existing.consumed += it.consumption;
-        existing.stock += it.amount;
-        existing.capacity = Math.max(existing.capacity, Math.max(it.amount * 1.5, 1000));
+        existing.consumed += consumed;
+        existing.stock += stock;
+        existing.capacity = Math.max(existing.capacity, it.capacity ?? Math.max(stock * 1.5, 1000));
+        existing.delta = (existing.delta ?? 0) + (it.delta ?? it.net);
       } else {
         map.set(it.id, {
           id: it.id,
           name: niceItemName(it.id, it.displayName, it.translationKey),
           produced: it.production,
-          consumed: it.consumption,
-          stock: it.amount,
-          capacity: Math.max(it.amount * 1.5, 1000),
+          consumed: it.burnRatePerMin ?? it.consumption,
+          stock: it.localAmount ?? it.amount,
+          capacity: it.capacity ?? Math.max((it.localAmount ?? it.amount) * 1.5, 1000),
+          globalAmount: it.globalAmount,
+          delta: it.delta ?? it.net,
+          alertLevel: it.alertLevel,
+          groupKey: it.groupKey,
+          burnRatePerMin: it.burnRatePerMin,
+          estimatedBufferText: it.estimatedBufferText,
+          bufferRatio: it.bufferRatio,
+          iconSprite: it.iconSprite,
         });
       }
     }
@@ -273,7 +351,30 @@ export function deriveAggregatedResourceItems(
   return out.length > limit ? out.slice(0, limit) : out;
 }
 
+export function deriveOverviewChartPoints(detail: ObserverDetail | null) {
+  const points = detail?.overview?.chartSeries;
+  if (!Array.isArray(points) || points.length === 0) return null;
+  return points.map((point) => ({
+    bucket: point.bucket,
+    produced: point.production,
+    consumed: point.consumption,
+    net: point.net,
+    stock: point.stock,
+    hasFlow: point.hasFlow,
+    hasStock: point.hasStock,
+    sampleCount: point.sampleCount,
+  }));
+}
+
 /** 将每个 AE2 绑定视作一个存储节点。 */
+export function deriveStorageUsageSegments(detail: ObserverDetail | null, selectedNodeId?: string | null): StorageUsageSegment[] {
+  const bindings = detail?.bindings;
+  if (!Array.isArray(bindings)) return [];
+  const preferred = selectedNodeId ? bindings.find((b) => b.networkId === selectedNodeId) : null;
+  const source = preferred ?? bindings.find((b) => isAe2(b) && Array.isArray(b.usageSegments) && b.usageSegments.length > 0);
+  return source?.usageSegments ?? [];
+}
+
 export function deriveStorageNodes(detail: ObserverDetail | null): LiveStorageNode[] | null {
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
@@ -284,14 +385,15 @@ export function deriveStorageNodes(detail: ObserverDetail | null): LiveStorageNo
     const cap = b.cellCapacity?.itemTotalBytes ?? 1;
     const pct = (used / cap) * 100;
     out.push({
-      id: b.networkId,
-      name: shortenNetwork(b.targetBlockId || b.networkId),
-      type: 'AE2 Network',
+      id: b.nodeSummary?.nodeId ?? b.networkId,
+      name: b.nodeSummary?.displayName ?? shortenNetwork(b.targetBlockId || b.networkId),
+      type: b.nodeSummary?.networkType ?? 'AE2 Network',
       capacity: cap,
       used,
-      status: pct > 90 ? 'Alert' : 'Healthy',
+      status: b.nodeSummary?.statusAlert || pct > 90 ? 'Alert' : 'Healthy',
       itemIds: (b.items ?? []).map((it) => it.id),
-      itemCount: (b.items ?? []).length,
+      itemCount: b.nodeSummary?.itemCount ?? (b.items ?? []).length,
+      coordinates: b.nodeSummary?.coordinatesText ?? undefined,
     });
   }
   return out.length > 0 ? out : null;
@@ -299,6 +401,19 @@ export function deriveStorageNodes(detail: ObserverDetail | null): LiveStorageNo
 
 /** 将每个 Flux/Mek 能源绑定视作一条生产线（粗粒度，按网络）。 */
 export function derivePowerLines(detail: ObserverDetail | null): LivePowerLine[] | null {
+  if (detail?.power?.devices?.length) {
+    return detail.power.devices.map((device) => ({
+      id: device.nodeId,
+      name: device.displayName || 'Power Network',
+      itemProduced: device.modName || 'FE',
+      consumption: device.energyPerTick,
+      capacity: Math.max(device.maxCapacity, 1),
+      status: device.alertLevel === 'NORMAL' ? 'Normal' : 'Overload',
+      devices: 1,
+      category: normalizePowerCategory(device.category),
+    }));
+  }
+
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
   const out: LivePowerLine[] = [];
@@ -354,6 +469,17 @@ function powerCategoryDisplayName(category: string): string {
   }
 }
 
+function normalizePowerCategory(category: string | undefined): string {
+  return (category ?? 'other').toLowerCase();
+}
+
+function powerSnapshotDisplayName(key: string | undefined, category: string): string {
+  if (!key) return powerCategoryDisplayName(category);
+  const tail = key.split('.').pop();
+  if (!tail) return powerCategoryDisplayName(category);
+  return tail.charAt(0).toUpperCase() + tail.slice(1);
+}
+
 /** "modid:block|Block Name @ [x, y, z]" → "Block Name" */
 function stripCoordinates(rawName: string | undefined | null): string {
   if (!rawName) return 'Unknown';
@@ -385,6 +511,19 @@ export function derivePowerConsumers(
   detail: ObserverDetail | null,
   excludedKeys?: ReadonlySet<string> | null,
 ): LivePowerConsumer[] | null {
+  if (detail?.power?.consumers?.length) {
+    return detail.power.consumers.map((consumer, i) => ({
+      id: `snapshot-consumer-${i}`,
+      name: consumer.deviceName,
+      modName: consumer.modName,
+      category: inferCategory(consumer.deviceName),
+      consumption: consumer.consumptionPerTick,
+      count: consumer.count,
+      percentage: consumer.percentage,
+      supplyRatio: consumer.supplyRatio,
+    }));
+  }
+
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
 
@@ -477,6 +616,18 @@ export function derivePowerLoadSegments(
   detail: ObserverDetail | null,
   excludedKeys?: ReadonlySet<string> | null,
 ): LivePowerLoadSegment[] {
+  if (detail?.power?.loadSegments?.length) {
+    return detail.power.loadSegments.map((segment) => {
+      const category = normalizePowerCategory(segment.category);
+      return {
+        category,
+        displayName: powerSnapshotDisplayName(segment.displayNameKey, category),
+        percentage: segment.percentage,
+        color: POWER_CATEGORY_COLORS[category] ?? POWER_CATEGORY_COLORS.other,
+      };
+    });
+  }
+
   const consumers = derivePowerConsumers(detail, excludedKeys);
   if (!consumers || consumers.length === 0) return [];
   const totals = new Map<string, number>();
@@ -501,8 +652,39 @@ export function derivePowerLoadSegments(
   return segments;
 }
 
+/**
+ * 直接返回服务端预格式化的 4 张 Power KPI 卡片（G7：单一数据源）。
+ * 字段含义：labelKey = 已本地化的标签文字；value = 服务端格式化的值字符串；status = 状态枚举。
+ * 当无法获取时返回 null，调用方应回退到本地派生。
+ */
+export function derivePowerServerKpiCards(
+  detail: ObserverDetail | null,
+): Array<{ label: string; value: string; status: string }> | null {
+  const cards = detail?.power?.kpiCards;
+  if (!Array.isArray(cards) || cards.length === 0) return null;
+  return cards.map((c) => ({ label: c.labelKey, value: c.value, status: c.status }));
+}
+
 /** 4 张 Power KPI —— 与游戏内 PowerNetworkPageBuilder 对齐。 */
 export function derivePowerKpis(detail: ObserverDetail | null): LivePowerKpis | null {
+  if (detail?.power) {
+    const input = detail.power.totalInputPerTick ?? 0;
+    const output = detail.power.totalOutputPerTick ?? 0;
+    const stored = detail.power.totalStored ?? 0;
+    const capacity = detail.power.totalCapacity ?? 0;
+    const utilization = input > 0 ? Math.min(100, (output / input) * 100) : 0;
+    return {
+      inputPerTick: input,
+      outputPerTick: output,
+      utilizationPercent: utilization,
+      reservePerTick: detail.power.overloadInfo?.reservePerTick ?? Math.max(0, input - output),
+      headroomPercent: detail.power.overloadInfo?.headroomPercent
+        ?? (input > 0 ? Math.max(0, ((input - output) / input) * 100) : 0),
+      totalStored: stored,
+      totalCapacity: capacity,
+    };
+  }
+
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
   let input = 0;
@@ -713,6 +895,20 @@ export function derivePowerEffectiveStats(
 ): LivePowerEffectiveStats | null {
   const raw = derivePowerKpis(detail);
   if (!raw) return null;
+  if (detail?.power) {
+    return {
+      totalInputPerTick: raw.inputPerTick,
+      totalOutputPerTick: raw.outputPerTick,
+      excludedInputPerTick: 0,
+      excludedOutputPerTick: 0,
+      excludedTotalPerTick: 0,
+      utilizationPercent: raw.utilizationPercent,
+      reservePerTick: raw.reservePerTick,
+      headroomPercent: raw.headroomPercent,
+      totalStored: raw.totalStored,
+      totalCapacity: raw.totalCapacity,
+    };
+  }
   const bindings = detail?.bindings ?? [];
 
   let excludedInput = 0;
@@ -767,6 +963,15 @@ export interface LivePowerSummary {
 }
 
 export function derivePowerSummary(detail: ObserverDetail | null): LivePowerSummary | null {
+  if (detail?.power) {
+    return {
+      totalEnergy: detail.power.totalStored,
+      totalMax: detail.power.totalCapacity,
+      input: detail.power.totalInputPerTick,
+      output: detail.power.totalOutputPerTick,
+    };
+  }
+
   const bindings = detail?.bindings;
   if (!Array.isArray(bindings)) return null;
   let totalEnergy = 0;

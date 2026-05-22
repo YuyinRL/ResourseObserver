@@ -7,7 +7,6 @@ import icyllis.modernui.animation.ObjectAnimator;
 import icyllis.modernui.text.TextUtils;
 import icyllis.modernui.animation.PropertyValuesHolder;
 import icyllis.modernui.animation.TimeInterpolator;
-import icyllis.modernui.graphics.drawable.GradientDrawable;
 import icyllis.modernui.graphics.drawable.ShapeDrawable;
 import icyllis.modernui.view.Gravity;
 import icyllis.modernui.view.View;
@@ -417,7 +416,19 @@ final class PowerNetworkPageBuilder {
         Set<String> autoDetectedIds = computeAutoDetectedStorageIds(vm.debugSnapshot());
         Set<String> effectiveExtIds = new LinkedHashSet<>(autoDetectedIds);
         if (selectedExtIds != null) effectiveExtIds.addAll(selectedExtIds);
+
+        // G7：无外储排除时直接使用服务端数据；有外储排除时客户端覆盖计算。
+        // effectiveStats 始终计算（headroom/loadRatio 需要）。
         EffectiveStats stats = computeEffectiveStats(vm, effectiveExtIds);
+        List<PowerNetworkViewModel.PowerKpi> effectiveKpis;
+        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers;
+        if (effectiveExtIds.isEmpty()) {
+            effectiveKpis = vm.kpiCards();
+            effectiveConsumers = vm.consumers();
+        } else {
+            effectiveKpis = buildEffectiveKpis(stats, vm, effectiveExtIds);
+            effectiveConsumers = computeEffectiveConsumers(vm, effectiveExtIds, stats.totalInputPerTick());
+        }
 
         // ── Update donut chart data (in-place, preserves hover state) ──
         PowerNetworkViewModel.OverloadInfo info = stats.overloadInfo();
@@ -432,8 +443,6 @@ final class PowerNetworkPageBuilder {
         int accentColor = critical ? UiThemeTokens.ROSE
                 : (warning ? UiThemeTokens.AMBER : UiThemeTokens.EMERALD);
 
-        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers =
-                computeEffectiveConsumers(vm, effectiveExtIds, stats.totalInputPerTick());
         List<DonutChartView.Segment> donutSegs = buildDonutSegments(vm, stats, effectiveConsumers);
         double utilization = 100.0 - headroom;
         String centerValue = usedOnly
@@ -447,8 +456,7 @@ final class PowerNetworkPageBuilder {
         // Switch 组件自行维护 checked 状态，增量更新无需干预
 
         // ── Update KPI text values ──
-        List<PowerNetworkViewModel.PowerKpi> kpis = buildEffectiveKpis(stats, vm, effectiveExtIds);
-        updateTaggedTextViews(container, TAG_KPI_VALUES, kpis);
+        updateTaggedTextViews(container, TAG_KPI_VALUES, effectiveKpis);
 
         // ── Update summary gen/load text ──
         updateTaggedText(container, TAG_SUMMARY_GEN, compact(stats.totalInputPerTick()) + " FE/t");
@@ -575,10 +583,20 @@ final class PowerNetworkPageBuilder {
         Set<String> autoDetectedIds = computeAutoDetectedStorageIds(vm.debugSnapshot());
         Set<String> effectiveExtIds = new LinkedHashSet<>(autoDetectedIds);
         if (selectedExtIds != null) effectiveExtIds.addAll(selectedExtIds);
+
+        // G7：无外储排除时直接使用服务端下发的 KPI（4 张，含 external_excluded=0）和 consumers；
+        //      有外储排除时在客户端覆盖计算（用户态例外）。
+        // effectiveStats 始终计算（buildCapacityPieChart / buildGridChart 需要）。
         EffectiveStats effectiveStats = computeEffectiveStats(vm, effectiveExtIds);
-        List<PowerNetworkViewModel.PowerKpi> effectiveKpis = buildEffectiveKpis(effectiveStats, vm, effectiveExtIds);
-        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers =
-                computeEffectiveConsumers(vm, effectiveExtIds, effectiveStats.totalInputPerTick());
+        List<PowerNetworkViewModel.PowerKpi> effectiveKpis;
+        List<PowerNetworkViewModel.ConsumerEntry> effectiveConsumers;
+        if (effectiveExtIds.isEmpty()) {
+            effectiveKpis = vm.kpiCards();
+            effectiveConsumers = vm.consumers();
+        } else {
+            effectiveKpis = buildEffectiveKpis(effectiveStats, vm, effectiveExtIds);
+            effectiveConsumers = computeEffectiveConsumers(vm, effectiveExtIds, effectiveStats.totalInputPerTick());
+        }
 
         int sectionGap = terminal.dp(6);
         int scrollbarW = terminal.dp(8);
@@ -753,8 +771,8 @@ final class PowerNetworkPageBuilder {
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
 
         // ---------- 对话框卡片 ----------
-        int dialogW = Math.min(terminal.dp(400), cw - terminal.dp(20));
-        int dialogH = Math.min(terminal.dp(320), ch - terminal.dp(20));
+        int dialogW = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_W), cw - terminal.dp(20));
+        int dialogH = Math.min(terminal.dp(ModernUiTheme.DIALOG_KPI_H), ch - terminal.dp(20));
 
         LinearLayout dialog = new LinearLayout(terminal.getContext());
         dialog.setOrientation(LinearLayout.VERTICAL);
@@ -2256,32 +2274,11 @@ final class PowerNetworkPageBuilder {
     /**
      * 在 FrameLayout 内添加顶部和底部渐隐遮罩（GradientDrawable），
      * 用于暗示 ScrollView 内容可继续滚动，并防止内容与标题重叠。
+     *
+     * @deprecated 已迁移至 {@link DialogChrome#addScrollFadeOverlays}，保留此方法以兼容内部调用。
      */
+    @Deprecated
     private static void addScrollFadeOverlays(ResourceTerminalFragment terminal, FrameLayout wrapper) {
-        int fadeH = terminal.dp(14);
-        int panelBg = UiThemeTokens.PANEL_BG;
-        int transparent = panelBg & 0x00FFFFFF;
-
-        View topFade = new View(terminal.getContext());
-        GradientDrawable topGrad = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{panelBg, transparent});
-        topGrad.setCornerRadius(0);
-        topFade.setBackground(topGrad);
-        FrameLayout.LayoutParams topLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, fadeH);
-        topLp.gravity = Gravity.TOP;
-        wrapper.addView(topFade, topLp);
-
-        View bottomFade = new View(terminal.getContext());
-        GradientDrawable bottomGrad = new GradientDrawable(
-                GradientDrawable.Orientation.TOP_BOTTOM,
-                new int[]{transparent, panelBg});
-        bottomGrad.setCornerRadius(0);
-        bottomFade.setBackground(bottomGrad);
-        FrameLayout.LayoutParams bottomLp = new FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT, fadeH);
-        bottomLp.gravity = Gravity.BOTTOM;
-        wrapper.addView(bottomFade, bottomLp);
+        DialogChrome.addScrollFadeOverlays(terminal, wrapper);
     }
 }

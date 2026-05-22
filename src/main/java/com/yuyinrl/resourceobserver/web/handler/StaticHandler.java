@@ -23,10 +23,21 @@ public final class StaticHandler implements HttpHandler {
         this.server = server;
     }
 
+    /** 静态资源回退入口 —— SPA 单页路由不存在的路径回落到 index.html。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {
             server.writeJson(exchange, 204, "");
+            return;
+        }
+        // 把 127.0.0.1 / 数字 IP 的访问 302 到 localhost，统一 origin —— 否则
+        // cookie 与 localStorage 会按 origin 隔离，玩家在 127.0.0.1 拿到登录态后
+        // 切到 localhost（或反之）就会丢失，需要重新走 token 链接。
+        String redirect = canonicalRedirect(exchange);
+        if (redirect != null) {
+            exchange.getResponseHeaders().set("Location", redirect);
+            exchange.sendResponseHeaders(302, -1);
+            exchange.close();
             return;
         }
         String path = exchange.getRequestURI().getPath();
@@ -112,5 +123,52 @@ public final class StaticHandler implements HttpHandler {
         if (lower.endsWith(".txt"))   return "text/plain; charset=utf-8";
         if (lower.endsWith(".wasm"))  return "application/wasm";
         return "application/octet-stream";
+    }
+
+    /**
+     * 若请求 Host 是 {@code 127.0.0.1} / {@code ::1} / 其它数字 IP 形式，则返回应当跳转到
+     * 的 {@code http://localhost:<port><uri>}；否则返回 {@code null} 表示无需跳转。
+     * <p>
+     * 这一步是为了把 {@code 127.0.0.1} 与 {@code localhost} 这两条入口收敛到同一个 origin —
+     * 浏览器把它们视为不同站点，cookie / localStorage 不互通，会造成"在 127 上登录后，
+     * 切到 localhost 又要重新登录"的体验问题。
+     */
+    private static @org.jetbrains.annotations.Nullable String canonicalRedirect(HttpExchange ex) {
+        String hostHeader = ex.getRequestHeaders().getFirst("Host");
+        if (hostHeader == null || hostHeader.isBlank()) return null;
+        // host:port 或 [v6]:port 拆分
+        String hostOnly;
+        String portPart;
+        if (hostHeader.startsWith("[")) {
+            int rb = hostHeader.indexOf(']');
+            if (rb < 0) return null;
+            hostOnly = hostHeader.substring(1, rb);
+            portPart = (rb + 2 < hostHeader.length() && hostHeader.charAt(rb + 1) == ':')
+                    ? hostHeader.substring(rb + 2) : "";
+        } else {
+            int colon = hostHeader.lastIndexOf(':');
+            if (colon < 0) {
+                hostOnly = hostHeader;
+                portPart = "";
+            } else {
+                hostOnly = hostHeader.substring(0, colon);
+                portPart = hostHeader.substring(colon + 1);
+            }
+        }
+        if (!isLoopbackAlias(hostOnly)) return null;
+        // 已经是 localhost 就不跳
+        if ("localhost".equalsIgnoreCase(hostOnly)) return null;
+        String uri = ex.getRequestURI().toString();
+        String portSeg = portPart.isBlank() ? "" : (":" + portPart);
+        return "http://localhost" + portSeg + uri;
+    }
+
+    /** 是否是回环地址的等价形式（127.x / ::1 等），需要规范化到 localhost。 */
+    private static boolean isLoopbackAlias(String host) {
+        if (host == null) return false;
+        if ("127.0.0.1".equals(host)) return true;
+        if (host.startsWith("127.")) return true;
+        if ("::1".equals(host) || "0:0:0:0:0:0:0:1".equals(host)) return true;
+        return false;
     }
 }

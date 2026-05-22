@@ -20,6 +20,7 @@ public final class HealthHandler implements HttpHandler {
         this.server = server;
     }
 
+    /** /api/health —— 健康检查；恒返回 {@code {"status":"ok"}}。 */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if ("OPTIONS".equalsIgnoreCase(exchange.getRequestMethod())) {

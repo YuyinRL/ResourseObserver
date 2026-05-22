@@ -1,7 +1,5 @@
 package com.yuyinrl.resourceobserver.client.ui.render;
 
-import com.mojang.blaze3d.pipeline.RenderTarget;
-import com.mojang.blaze3d.pipeline.TextureTarget;
 import com.mojang.blaze3d.platform.GlStateManager;
 import com.mojang.blaze3d.systems.RenderSystem;
 import com.mojang.blaze3d.vertex.BufferBuilder;
@@ -15,8 +13,14 @@ import com.yuyinrl.resourceobserver.client.ChartRenderShaders;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.UiRect;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
-import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.Font;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.renderer.GameRenderer;
@@ -24,10 +28,8 @@ import net.minecraft.client.renderer.ShaderInstance;
 import net.minecraft.network.chat.Component;
 import org.joml.Matrix4f;
 import org.joml.Matrix4fStack;
-import org.lwjgl.BufferUtils;
 import org.lwjgl.opengl.GL11C;
 
-import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -64,17 +66,13 @@ public final class ChartRenderer {
     private static final int SMOOTH_W = 62;      // 平滑模式按钮宽度
 
     // ========== 渲染管线参数 ==========
-    private static final int DEFAULT_SUPERSAMPLE = 4;       // 默认超采样倍率
     private static final double PLOT_PAD_X_SCALE = 1.0;     // 绘图区水平边距倍率
     private static final double PLOT_PAD_TOP_SCALE = 2.5;   // 绘图区顶部边距倍率
     private static final double PLOT_PAD_END_SCALE = 2.0;   // 绘图区末端边距倍率
 
     // ========== 线条样式预设 ==========
-    /** 默认线条样式（超采样抗锯齿） */
-    private static final LineStyle DEFAULT_LINE_STYLE = new LineStyle(DEFAULT_SUPERSAMPLE, 1.0f, 0.82f, 1.26f, 0.50f, 0.75f, 0.92f, 0.20f, 0.34f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
     /** 调试模式直接渲染线条样式 */
     private static final LineStyle DEBUG_DIRECT_LINE_STYLE = new LineStyle(1, 16.0f, 0.80f, 0.96f, 0.40f, 0.72f, 1.00f, 0.00f, 0.28f, GL11C.GL_LINEAR, 1.0f, 1.0f, 0.0f);
-    private static final boolean ENABLE_AREA_FILL = false; // TODO 将当前填充路径替换为无接缝着色器填充后恢复此功能
 
     /** 弱引用缓存集合，用于统一失效所有缓存 */
     private static final Set<ChartRenderCache> LIVE_CACHES = Collections.newSetFromMap(new WeakHashMap<>());
@@ -248,100 +246,6 @@ public final class ChartRenderer {
         for (int x = plot.x() + vs; x < plot.right() - 1; x += vs) {
             gfx.fill(x, plot.y() + 1, x + 1, plot.bottom() - 1, 0x152F4668);
         }
-    }
-
-    private static void renderToTexture(
-            CachedChartTexture texture,
-            List<OverviewViewModel.FlowPoint> series,
-            ChartWindow chartWindow,
-            ChartPage page,
-            LineMode lineMode,
-            SmoothingMode smoothingMode,
-            LineStyle lineStyle
-    ) {
-        clearTarget(texture.highRes);
-        clearTarget(texture.lowRes);
-        texture.lowRes.setFilterMode(lineStyle.lowResFilter());
-
-        int n = series.size();
-        double[] p = new double[n];
-        double[] c = new double[n];
-        double[] net = new double[n];
-        double[] stock = new double[n];
-        boolean[] fm = new boolean[n];
-        boolean[] sm = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            OverviewViewModel.FlowPoint point = series.get(i);
-            p[i] = point.production();
-            c[i] = point.consumption();
-            net[i] = point.net();
-            stock[i] = point.stock();
-            fm[i] = point.hasFlow();
-            sm[i] = point.hasStock();
-        }
-
-        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
-        RectBounds bounds = new RectBounds(
-                plotMinX(texture.sampleScale),
-                plotMinY(texture.sampleScale),
-                maxCoordX(texture.highResWidth, texture.sampleScale),
-                maxCoordY(texture.highResHeight, texture.sampleScale)
-        );
-
-        withTarget(texture.highRes, texture.highResWidth, texture.highResHeight, bounds, () -> {
-            if (page == ChartPage.THROUGHPUT) {
-                double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
-                double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
-                double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
-                Range r = rangeThroughput(lineMode, ps, cs, ns, fm);
-
-                if (r.min < 0.0 && r.max > 0.0) {
-                    double zy = clampD(valueY4(0.0, r.min, r.max, texture.highResHeight, texture.sampleScale), bounds.minY, bounds.maxY);
-                    drawAaLine(new Point(bounds.minX, zy), new Point(bounds.maxX, zy), 0xBBD5F3, lineStyle.zeroWidth(), lineStyle.zeroWidth(), lineStyle.feather(), lineStyle.zeroAlpha(), 0.0f, bounds, texture.sampleScale);
-                }
-                if (lineMode.showProduction()) {
-                    List<List<Point>> seg = buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), ps, fm, r.min, r.max, smooth);
-                    if (ENABLE_AREA_FILL) {
-                        fillArea(seg, bounds, 0x1A22D3EE);
-                    }
-                    drawSeries(seg, bounds, UiThemeTokens.CYAN, lineStyle, texture.sampleScale);
-                }
-                if (lineMode.showConsumption()) {
-                    List<List<Point>> seg = buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), cs, fm, r.min, r.max, smooth);
-                    if (ENABLE_AREA_FILL) {
-                        fillArea(seg, bounds, 0x1CF59E0B);
-                    }
-                    drawSeries(seg, bounds, UiThemeTokens.AMBER, lineStyle, texture.sampleScale);
-                }
-                if (lineMode.showNet()) {
-                    drawSeries(buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), ns, fm, r.min, r.max, smooth), bounds, UiThemeTokens.EMERALD, lineStyle, texture.sampleScale);
-                }
-            } else {
-                double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
-                Range r = rangeSingle(ss, sm);
-                List<List<Point>> seg = buildPolylines(texture.highResWidth, texture.highResHeight, texture.sampleScale, lineStyle.curveSubdivision(), ss, sm, r.min, r.max, smooth);
-                if (ENABLE_AREA_FILL) {
-                    fillArea(seg, bounds, 0x1A60A5FA);
-                }
-                drawSeries(seg, bounds, UiThemeTokens.BLUE, lineStyle, texture.sampleScale);
-            }
-        });
-
-        boolean highResVisible = detectVisibleContent(texture.highRes, texture.highResWidth, texture.highResHeight, false);
-        texture.setHighResVisible(highResVisible);
-
-        downsample(texture.highRes, texture.lowRes, texture.highResWidth, texture.highResHeight, texture.width, texture.height, lineStyle);
-        boolean lowResVisible = detectVisibleContent(texture.lowRes, texture.width, texture.height, true);
-        if (!lowResVisible && highResVisible) {
-            downsampleFallback(texture.highRes, texture.lowRes, texture.width, texture.height);
-            lowResVisible = detectVisibleContent(texture.lowRes, texture.width, texture.height, true);
-        }
-        if (lowResVisible && !highResVisible) {
-            highResVisible = true;
-            texture.setHighResVisible(true);
-        }
-        texture.setLowResVisible(lowResVisible);
-        texture.setHasVisibleContent(lowResVisible);
     }
 
     /**
@@ -653,94 +557,6 @@ public final class ChartRenderer {
         }
         return out;
     }
-
-    /**
-     * 面积填充 —— 将折线下方区域填充为半透明色。
-     * 实现方式：按列光栅化，对每列求折线的最高 Y 值，然后从该点向下填充到底部。
-     */
-    private static void fillArea(List<List<Point>> segments, RectBounds bounds, int color) {
-        int premult = premultiply(color);
-        int r = (premult >>> 16) & 0xFF;
-        int g = (premult >>> 8) & 0xFF;
-        int b = premult & 0xFF;
-        int a = (premult >>> 24) & 0xFF;
-        double bottom = bounds.maxY;
-        Tesselator tesselator = Tesselator.getInstance();
-        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_COLOR);
-        boolean hasGeometry = false;
-        for (List<Point> segment : segments) {
-            if (segment.size() < 2) {
-                continue;
-            }
-            int startColumn = clamp((int) Math.floor(segment.getFirst().x), (int) Math.floor(bounds.minX), (int) Math.ceil(bounds.maxX));
-            int endColumn = clamp((int) Math.ceil(segment.getLast().x), (int) Math.floor(bounds.minX), (int) Math.ceil(bounds.maxX));
-            if (endColumn <= startColumn) {
-                continue;
-            }
-
-            double[] top = new double[endColumn - startColumn];
-            Arrays.fill(top, Double.NaN);
-
-            for (int i = 0; i + 1 < segment.size(); i++) {
-                Point p0 = clampPoint(segment.get(i), bounds);
-                Point p1 = clampPoint(segment.get(i + 1), bounds);
-                if (Math.abs(p1.x - p0.x) < 1.0E-6 && Math.abs(p1.y - p0.y) < 1.0E-6) {
-                    continue;
-                }
-                rasterizeAreaColumns(top, startColumn, endColumn, p0, p1, bounds);
-            }
-
-            for (int column = startColumn; column < endColumn; column++) {
-                double yTop = top[column - startColumn];
-                if (!Double.isFinite(yTop)) {
-                    continue;
-                }
-                double xl = clampD(column, bounds.minX, bounds.maxX);
-                double xr = clampD(column + 1.0, bounds.minX, bounds.maxX);
-                if (xr - xl < 1.0E-6) {
-                    continue;
-                }
-                addFillQuad(buffer, xl, xr, yTop, yTop, bottom, r, g, b, a);
-                hasGeometry = true;
-            }
-        }
-        if (!hasGeometry) {
-            return;
-        }
-        RenderSystem.setShader(GameRenderer::getPositionColorShader);
-        MeshData mesh = buffer.buildOrThrow();
-        BufferUploader.drawWithShader(mesh);
-    }
-
-    /**
-     * 绘制折线系列。
-     * 对每段线段使用自定义着色器绘制抗锯齿线（核心线 + 辉光）。
-     */
-    private static void drawSeries(List<List<Point>> segments, RectBounds bounds, int color, LineStyle lineStyle, int sampleScale) {
-        int rgb = color & 0x00FFFFFF;
-        for (List<Point> segment : segments) {
-            for (int i = 0; i + 1 < segment.size(); i++) {
-                ClippedSegment clipped = clipSegment(segment.get(i), segment.get(i + 1), bounds);
-                if (clipped == null) {
-                    continue;
-                }
-                drawAaLine(
-                        clipped.a,
-                        clipped.b,
-                        rgb,
-                        lineStyle.coreWidth(),
-                        lineStyle.glowWidth(),
-                        lineStyle.feather(),
-                        lineStyle.coreAlpha(),
-                        lineStyle.glowAlpha(),
-                        bounds,
-                        sampleScale
-                );
-            }
-        }
-    }
-
-    /** 在指定偏移位置绘制折线系列 */
     private static void drawSeriesAtOffset(
             List<List<Point>> segments,
             RectBounds bounds,
@@ -837,56 +653,6 @@ public final class ChartRenderer {
         MeshData mesh = buffer.buildOrThrow();
         BufferUploader.drawWithShader(mesh);
     }
-
-    /**
-     * 超采样降采样。
-     * 使用自定义 downsample shader 将高分辨率纹理缩放到显示分辨率。
-     */
-    private static void downsample(RenderTarget source, RenderTarget target, int sourceW, int sourceH, int targetW, int targetH, LineStyle lineStyle) {
-        ShaderInstance shader = ChartRenderShaders.chartDownsampleShader();
-        if (shader == null) {
-            downsampleFallback(source, target, targetW, targetH);
-            return;
-        }
-
-        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
-        ScissorState scissorState = captureScissorState();
-        target.bindWrite(true);
-        RenderSystem.viewport(0, 0, targetW, targetH);
-        RenderSystem.disableDepthTest();
-        RenderSystem.disableCull();
-        RenderSystem.disableBlend();
-        RenderSystem.disableScissor();
-
-        ProjectionState projectionState = pushProjection(targetW, targetH);
-        try {
-            clearTarget(target);
-            target.bindWrite(true);
-            RenderSystem.viewport(0, 0, targetW, targetH);
-            RenderSystem.setShader(() -> shader);
-            RenderSystem.setShaderTexture(0, source.getColorTextureId());
-            setUniform(shader, "InvSourceSize", 1.0f / sourceW, 1.0f / sourceH);
-            setUniform(shader, "SampleScale", (float) lineStyle.supersample());
-            setUniform(shader, "ResolveParams", lineStyle.resolveEdgeWeight(), lineStyle.resolveInnerWeight(), lineStyle.resolveAlphaBoost(), 0.0f);
-
-            Tesselator tesselator = Tesselator.getInstance();
-            BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION);
-            buffer.addVertex(0.0f, 0.0f, 0.0f);
-            buffer.addVertex(0.0f, targetH, 0.0f);
-            buffer.addVertex(targetW, targetH, 0.0f);
-            buffer.addVertex(targetW, 0.0f, 0.0f);
-            MeshData mesh = buffer.buildOrThrow();
-            BufferUploader.drawWithShader(mesh);
-        } finally {
-            popProjection(projectionState);
-            main.bindWrite(true);
-            restoreScissorState(scissorState);
-            RenderSystem.enableBlend();
-            RenderSystem.defaultBlendFunc();
-        }
-    }
-
-    /** 回退直线绘制（无自定义着色器时使用） */
     private static void drawFallbackLine(Point a, Point b, int rgb, float width, float alpha) {
         if (alpha <= 0.0f || width <= 0.0f) {
             return;
@@ -910,341 +676,13 @@ public final class ChartRenderer {
         int g = (argb >>> 8) & 0xFF;
         int bColor = argb & 0xFF;
         int aColor = (argb >>> 24) & 0xFF;
-        addColorVertex(buffer, (float) (a.x - nx), (float) (a.y - ny), r, g, bColor, aColor);
-        addColorVertex(buffer, (float) (b.x - nx), (float) (b.y - ny), r, g, bColor, aColor);
-        addColorVertex(buffer, (float) (b.x + nx), (float) (b.y + ny), r, g, bColor, aColor);
-        addColorVertex(buffer, (float) (a.x + nx), (float) (a.y + ny), r, g, bColor, aColor);
+        buffer.addVertex((float) (a.x - nx), (float) (a.y - ny), 0.0f).setColor(r, g, bColor, aColor);
+        buffer.addVertex((float) (b.x - nx), (float) (b.y - ny), 0.0f).setColor(r, g, bColor, aColor);
+        buffer.addVertex((float) (b.x + nx), (float) (b.y + ny), 0.0f).setColor(r, g, bColor, aColor);
+        buffer.addVertex((float) (a.x + nx), (float) (a.y + ny), 0.0f).setColor(r, g, bColor, aColor);
         RenderSystem.setShader(GameRenderer::getPositionColorShader);
         MeshData mesh = buffer.buildOrThrow();
         BufferUploader.drawWithShader(mesh);
-    }
-
-    /** 回退降采样（使用 GL_LINEAR 直接缩放） */
-    private static void downsampleFallback(RenderTarget source, RenderTarget target, int targetW, int targetH) {
-        source.setFilterMode(GL11C.GL_LINEAR);
-
-        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
-        ScissorState scissorState = captureScissorState();
-        target.bindWrite(true);
-        RenderSystem.viewport(0, 0, targetW, targetH);
-        RenderSystem.disableDepthTest();
-        RenderSystem.disableCull();
-        RenderSystem.disableBlend();
-        RenderSystem.disableScissor();
-
-        ProjectionState projectionState = pushProjection(targetW, targetH);
-        try {
-            clearTarget(target);
-            target.bindWrite(true);
-            RenderSystem.viewport(0, 0, targetW, targetH);
-            RenderSystem.setShader(GameRenderer::getPositionTexShader);
-            RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-            RenderSystem.setShaderTexture(0, source.getColorTextureId());
-
-            Tesselator tesselator = Tesselator.getInstance();
-            BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-            buffer.addVertex(0.0f, 0.0f, 0.0f).setUv(0.0f, 1.0f);
-            buffer.addVertex(0.0f, targetH, 0.0f).setUv(0.0f, 0.0f);
-            buffer.addVertex(targetW, targetH, 0.0f).setUv(1.0f, 0.0f);
-            buffer.addVertex(targetW, 0.0f, 0.0f).setUv(1.0f, 1.0f);
-            MeshData mesh = buffer.buildOrThrow();
-            BufferUploader.drawWithShader(mesh);
-        } finally {
-            popProjection(projectionState);
-            main.bindWrite(true);
-            restoreScissorState(scissorState);
-            source.setFilterMode(GL11C.GL_NEAREST);
-            RenderSystem.enableBlend();
-            RenderSystem.defaultBlendFunc();
-        }
-    }
-
-    /** 将缓存的纹理图层绘制到屏幕 */
-    private static void drawLayer(GuiGraphics gfx, UiRect plot, CachedChartTexture layer) {
-        if (layer == null || layer == CachedChartTexture.EMPTY || layer.lowRes == null) {
-            return;
-        }
-
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.disableDepthTest();
-        RenderSystem.setShader(GameRenderer::getPositionTexShader);
-        RenderSystem.setShaderColor(1.0f, 1.0f, 1.0f, 1.0f);
-        RenderSystem.setShaderTexture(0, layer.lowRes.getColorTextureId());
-
-        Matrix4f pose = gfx.pose().last().pose();
-        Tesselator tesselator = Tesselator.getInstance();
-        BufferBuilder buffer = tesselator.begin(VertexFormat.Mode.QUADS, DefaultVertexFormat.POSITION_TEX);
-        buffer.addVertex(pose, plot.x(), plot.y(), 0.0f).setUv(0.0f, 1.0f);
-        buffer.addVertex(pose, plot.x(), plot.bottom(), 0.0f).setUv(0.0f, 0.0f);
-        buffer.addVertex(pose, plot.right(), plot.bottom(), 0.0f).setUv(1.0f, 0.0f);
-        buffer.addVertex(pose, plot.right(), plot.y(), 0.0f).setUv(1.0f, 1.0f);
-        MeshData mesh = buffer.buildOrThrow();
-        BufferUploader.drawWithShader(mesh);
-    }
-
-    /** 调试模式：直接向量绘制（不使用纹理缓存） */
-    private static void drawDirectVectorDebug(
-            GuiGraphics gfx,
-            Font font,
-            UiRect plot,
-            List<OverviewViewModel.FlowPoint> series,
-            ChartPage page,
-            LineMode lineMode,
-            SmoothingMode smoothingMode,
-            LineStyle lineStyle
-    ) {
-        int n = series.size();
-        double[] p = new double[n];
-        double[] c = new double[n];
-        double[] net = new double[n];
-        double[] stock = new double[n];
-        boolean[] fm = new boolean[n];
-        boolean[] sm = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            OverviewViewModel.FlowPoint point = series.get(i);
-            p[i] = point.production();
-            c[i] = point.consumption();
-            net[i] = point.net();
-            stock[i] = point.stock();
-            fm[i] = point.hasFlow();
-            sm[i] = point.hasStock();
-        }
-
-        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
-        RectBounds bounds = new RectBounds(
-                plot.x() + plotMinX(1),
-                plot.y() + plotMinY(1),
-                plot.x() + maxCoordX(plot.width(), 1),
-                plot.y() + maxCoordY(plot.height(), 1)
-        );
-
-        gfx.enableScissor(plot.x() + 1, plot.y() + 1, plot.right() - 1, plot.bottom() - 1);
-        ProjectionState projectionState = pushProjection(gfx.guiWidth(), gfx.guiHeight());
-        try {
-            RenderSystem.enableBlend();
-            RenderSystem.disableDepthTest();
-            RenderSystem.disableCull();
-            RenderSystem.blendFuncSeparate(
-                    GlStateManager.SourceFactor.ONE,
-                    GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
-                    GlStateManager.SourceFactor.ONE,
-                    GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA
-            );
-
-            if (page == ChartPage.THROUGHPUT) {
-                double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
-                double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
-                double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
-                Range range = rangeThroughput(lineMode, ps, cs, ns, fm);
-                if (range.min < 0.0 && range.max > 0.0) {
-                    double zy = plot.y() + valueY4(0.0, range.min, range.max, plot.height(), 1);
-                    drawAaLine(
-                            new Point(bounds.minX, zy),
-                            new Point(bounds.maxX, zy),
-                            0xBBD5F3,
-                            lineStyle.zeroWidth(),
-                            lineStyle.zeroWidth(),
-                            lineStyle.feather(),
-                            lineStyle.zeroAlpha(),
-                            0.0f,
-                            bounds,
-                            1
-                    );
-                }
-                if (lineMode.showProduction()) {
-                    drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), ps, fm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.CYAN, lineStyle, 1);
-                }
-                if (lineMode.showConsumption()) {
-                    drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), cs, fm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.AMBER, lineStyle, 1);
-                }
-                if (lineMode.showNet()) {
-                    drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), ns, fm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.EMERALD, lineStyle, 1);
-                }
-                return;
-            }
-
-            double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
-            Range range = rangeSingle(ss, sm);
-            drawSeries(offsetSegments(buildPolylines(plot.width(), plot.height(), 1, lineStyle.curveSubdivision(), ss, sm, range.min, range.max, smooth), plot.x(), plot.y()), bounds, UiThemeTokens.BLUE, lineStyle, 1);
-        } finally {
-            popProjection(projectionState);
-            RenderSystem.enableBlend();
-            RenderSystem.defaultBlendFunc();
-            gfx.disableScissor();
-        }
-    }
-
-    /** 调试模式/回退模式：覆盖渲染 */
-    private static void drawOverlayFallback(
-            GuiGraphics gfx,
-            Font font,
-            UiRect plot,
-            List<OverviewViewModel.FlowPoint> series,
-            ChartPage page,
-            LineMode lineMode,
-            SmoothingMode smoothingMode,
-            LineStyle lineStyle,
-            boolean debugMode,
-            boolean drawSeriesFallback
-    ) {
-        int n = series.size();
-        double[] p = new double[n];
-        double[] c = new double[n];
-        double[] net = new double[n];
-        double[] stock = new double[n];
-        boolean[] fm = new boolean[n];
-        boolean[] sm = new boolean[n];
-        for (int i = 0; i < n; i++) {
-            OverviewViewModel.FlowPoint point = series.get(i);
-            p[i] = point.production();
-            c[i] = point.consumption();
-            net[i] = point.net();
-            stock[i] = point.stock();
-            fm[i] = point.hasFlow();
-            sm[i] = point.hasStock();
-        }
-
-        boolean smooth = smoothingMode == SmoothingMode.SMOOTH;
-        if (debugMode) {
-            gfx.fill(plot.right() - 4, plot.y() + 2, plot.right() - 2, plot.y() + 4, 0xFFFF4DFF);
-        }
-
-        if (page == ChartPage.THROUGHPUT) {
-            double[] ps = smooth ? smoothSeries(p, fm) : Arrays.copyOf(p, n);
-            double[] cs = smooth ? smoothSeries(c, fm) : Arrays.copyOf(c, n);
-            double[] ns = smooth ? smoothSeries(net, fm) : Arrays.copyOf(net, n);
-            Range range = rangeThroughput(lineMode, ps, cs, ns, fm);
-            if (drawSeriesFallback && lineMode.showProduction()) {
-                drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), ps, fm, range.min, range.max, smooth), UiThemeTokens.CYAN, debugMode, lineStyle.supersample());
-            }
-            if (drawSeriesFallback && lineMode.showConsumption()) {
-                drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), cs, fm, range.min, range.max, smooth), UiThemeTokens.AMBER, debugMode, lineStyle.supersample());
-            }
-            if (drawSeriesFallback && lineMode.showNet()) {
-                drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), ns, fm, range.min, range.max, smooth), UiThemeTokens.EMERALD, debugMode, lineStyle.supersample());
-            }
-            if (debugMode) {
-                drawDebugScale(gfx, font, plot, range, lastValidValue(lineMode, ps, cs, ns, fm));
-            }
-            return;
-        }
-
-        double[] ss = smooth ? smoothSeries(stock, sm) : Arrays.copyOf(stock, n);
-        Range range = rangeSingle(ss, sm);
-        if (drawSeriesFallback) {
-            drawDebugSeries(gfx, plot, buildPolylines(plot.width() * lineStyle.supersample(), plot.height() * lineStyle.supersample(), lineStyle.supersample(), lineStyle.curveSubdivision(), ss, sm, range.min, range.max, smooth), UiThemeTokens.BLUE, debugMode, lineStyle.supersample());
-        }
-        if (debugMode) {
-            drawDebugScale(gfx, font, plot, range, lastValidValue(ss, sm));
-        }
-    }
-
-    private static void drawDebugSeries(GuiGraphics gfx, UiRect plot, List<List<Point>> segments, int color, boolean debugMode, int sampleScale) {
-        int core = 0xFF000000 | (color & 0x00FFFFFF);
-        for (List<Point> segment : segments) {
-            for (int i = 0; i + 1 < segment.size(); i++) {
-                Point a = segment.get(i);
-                Point b = segment.get(i + 1);
-                int x0 = plot.x() + clamp((int) Math.round(a.x / sampleScale), 1, Math.max(1, plot.width() - 2));
-                int y0 = plot.y() + clamp((int) Math.round(a.y / sampleScale), 1, Math.max(1, plot.height() - 2));
-                int x1 = plot.x() + clamp((int) Math.round(b.x / sampleScale), 1, Math.max(1, plot.width() - 2));
-                int y1 = plot.y() + clamp((int) Math.round(b.y / sampleScale), 1, Math.max(1, plot.height() - 2));
-                RenderUtils.drawLine(gfx, x0, y0, x1, y1, core);
-                if (debugMode) {
-                    gfx.fill(x1 - 1, y1 - 1, x1 + 1, y1 + 1, 0xAAFFFFFF);
-                }
-            }
-        }
-    }
-
-    private static void drawDebugScale(GuiGraphics gfx, Font font, UiRect plot, Range range, double last) {
-        String maxText = "max " + formatMetric(range.max);
-        String minText = "min " + formatMetric(range.min);
-        String lastText = "last " + formatMetric(last);
-        gfx.drawString(font, maxText, plot.x() + 6, plot.y() + 14, 0xFFD7E7FF);
-        gfx.drawString(font, minText, plot.x() + 6, plot.bottom() - 10, 0xFFB8C4D4);
-        gfx.drawString(font, lastText, plot.right() - font.width(lastText) - 6, plot.y() + 14, 0xFFFFE083);
-    }
-
-    private static void drawPipelineBadge(GuiGraphics gfx, Font font, UiRect plot, CachedChartTexture layer, boolean useDirectFallback) {
-        String suffix = layer == null || layer == CachedChartTexture.EMPTY
-                ? "H0 L0"
-                : "H" + (layer.highResVisible() ? "1" : "0") + " L" + (layer.lowResVisible() ? "1" : "0");
-        String text = (useDirectFallback ? "PIPELINE: FALLBACK " : "PIPELINE: GPU ") + suffix;
-        int textColor = useDirectFallback ? 0xFFFFA6A6 : 0xFF9FFFC7;
-        int bgColor = useDirectFallback ? 0xCC4A1620 : 0xCC143524;
-        int borderColor = useDirectFallback ? 0xFFE45A7A : 0xFF38D980;
-        int width = font.width(text) + 8;
-        UiRect badge = new UiRect(plot.right() - width - 6, plot.bottom() - 16, width, 12);
-        gfx.fill(badge.x(), badge.y(), badge.right(), badge.bottom(), bgColor);
-        RenderUtils.drawBorder(gfx, badge, borderColor);
-        gfx.drawString(font, text, badge.x() + 4, badge.y() + 2, textColor);
-    }
-
-    private static void drawPipelineBadge(GuiGraphics gfx, Font font, UiRect plot, String text) {
-        int width = font.width(text) + 8;
-        UiRect badge = new UiRect(plot.right() - width - 6, plot.bottom() - 16, width, 12);
-        gfx.fill(badge.x(), badge.y(), badge.right(), badge.bottom(), 0xCC143524);
-        RenderUtils.drawBorder(gfx, badge, 0xFF38D980);
-        gfx.drawString(font, text, badge.x() + 4, badge.y() + 2, 0xFF9FFFC7);
-    }
-
-    /** 获取最后一个有效数据值（调试显示用） */
-    private static double lastValidValue(LineMode lineMode, double[] p, double[] c, double[] n, boolean[] mask) {
-        double last = 0.0;
-        for (int i = 0; i < mask.length; i++) {
-            if (!mask[i]) {
-                continue;
-            }
-            if (lineMode.showNet()) {
-                last = n[i];
-            } else if (lineMode.showConsumption()) {
-                last = c[i];
-            } else {
-                last = p[i];
-            }
-        }
-        return last;
-    }
-
-    /** 获取最后一个有效数据值（调试显示用） */
-    private static double lastValidValue(double[] values, boolean[] mask) {
-        double last = 0.0;
-        for (int i = 0; i < mask.length; i++) {
-            if (mask[i]) {
-                last = values[i];
-            }
-        }
-        return last;
-    }
-
-    /** 对线段列表整体施加偏移（纹理坐标 → 屏幕坐标） */
-    private static List<List<Point>> offsetSegments(List<List<Point>> segments, double dx, double dy) {
-        List<List<Point>> shifted = new ArrayList<>(segments.size());
-        for (List<Point> segment : segments) {
-            List<Point> shiftedSegment = new ArrayList<>(segment.size());
-            for (Point point : segment) {
-                shiftedSegment.add(new Point(point.x + dx, point.y + dy));
-            }
-            shifted.add(shiftedSegment);
-        }
-        return shifted;
-    }
-
-    /** 格式化数值为紧凑表示（用于调试标签） */
-    private static String formatMetric(double value) {
-        double abs = Math.abs(value);
-        if (abs >= 1_000_000_000.0) {
-            return String.format(java.util.Locale.ROOT, "%.2fB", value / 1_000_000_000.0);
-        }
-        if (abs >= 1_000_000.0) {
-            return String.format(java.util.Locale.ROOT, "%.2fM", value / 1_000_000.0);
-        }
-        if (abs >= 1_000.0) {
-            return String.format(java.util.Locale.ROOT, "%.2fK", value / 1_000.0);
-        }
-        return String.format(java.util.Locale.ROOT, "%.2f", value);
     }
 
     /** 计算吞吐量模式下所有可见系列的数值范围 */
@@ -1385,116 +823,6 @@ public final class ChartRenderer {
         RenderUtils.drawBorder(gfx, rect, border);
         gfx.drawString(font, RenderUtils.ellipsis(font, text, rect.width() - 8), rect.x() + 4, rect.y() + 3, textColor);
     }
-
-    /** 在指定渲染目标上执行绘制操作（临时切换绑定） */
-    private static void withTarget(RenderTarget target, int width, int height, RectBounds bounds, Runnable runnable) {
-        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
-        ScissorState scissorState = captureScissorState();
-        target.bindWrite(true);
-        RenderSystem.viewport(0, 0, width, height);
-        RenderSystem.disableDepthTest();
-        RenderSystem.disableCull();
-        RenderSystem.disableScissor();
-        RenderSystem.enableBlend();
-        RenderSystem.blendFuncSeparate(
-                GlStateManager.SourceFactor.ONE,
-                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA,
-                GlStateManager.SourceFactor.ONE,
-                GlStateManager.DestFactor.ONE_MINUS_SRC_ALPHA
-        );
-
-        ProjectionState projectionState = pushProjection(width, height);
-        try {
-            runnable.run();
-        } finally {
-            popProjection(projectionState);
-            main.bindWrite(true);
-            restoreScissorState(scissorState);
-            RenderSystem.enableBlend();
-            RenderSystem.defaultBlendFunc();
-        }
-    }
-
-    /** 捕获当前裁剪测试状态 */
-    private static ScissorState captureScissorState() {
-        boolean enabled = GL11C.glIsEnabled(GL11C.GL_SCISSOR_TEST);
-        int[] box = new int[4];
-        GL11C.glGetIntegerv(GL11C.GL_SCISSOR_BOX, box);
-        return new ScissorState(enabled, box[0], box[1], box[2], box[3]);
-    }
-
-    /** 恢复裁剪测试状态 */
-    private static void restoreScissorState(ScissorState state) {
-        if (state == null || !state.enabled) {
-            RenderSystem.disableScissor();
-            return;
-        }
-        RenderSystem.enableScissor(state.x, state.y, state.width, state.height);
-    }
-
-    /**
-     * 检测渲染目标是否包含可见内容。
-     * <p>
-     * 双策略检测：
-     * - exhaustive=true：读取全部像素，阈值 alpha>1（用于降采样后的低分辨率纹理）
-     * - exhaustive=false：采样网格检测，阈值 alpha>8（用于高分辨率纹理的快速检查）
-     * - 采样网格参数：列数=width/24（最少 4 最多 10），行数=height/18（最少 3 最多 8）
-     */
-    private static boolean detectVisibleContent(RenderTarget target, int width, int height, boolean exhaustive) {
-        if (target == null || width <= 0 || height <= 0) {
-            return false;
-        }
-
-        ScissorState scissorState = captureScissorState();
-        RenderTarget main = Minecraft.getInstance().getMainRenderTarget();
-
-        try {
-            target.bindWrite(false);
-            RenderSystem.disableScissor();
-            if (exhaustive) {
-                ByteBuffer pixels = BufferUtils.createByteBuffer(width * height * 4);
-                GL11C.glReadPixels(0, 0, width, height, GL11C.GL_RGBA, GL11C.GL_UNSIGNED_BYTE, pixels);
-                for (int i = 3; i < pixels.limit(); i += 4) {
-                    if ((pixels.get(i) & 0xFF) > 1) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-
-            ByteBuffer pixel = BufferUtils.createByteBuffer(4);
-            int sampleCols = Math.max(4, Math.min(10, width / 24));
-            int sampleRows = Math.max(3, Math.min(8, height / 18));
-            for (int row = 0; row < sampleRows; row++) {
-                int py = sampleRows == 1
-                        ? height / 2
-                        : Math.round(row * (Math.max(1, height - 1)) / (float) (sampleRows - 1));
-                for (int col = 0; col < sampleCols; col++) {
-                    int px = sampleCols == 1
-                            ? width / 2
-                            : Math.round(col * (Math.max(1, width - 1)) / (float) (sampleCols - 1));
-                    pixel.clear();
-                    GL11C.glReadPixels(
-                            clamp(px, 0, Math.max(0, width - 1)),
-                            clamp(py, 0, Math.max(0, height - 1)),
-                            1,
-                            1,
-                            GL11C.GL_RGBA,
-                            GL11C.GL_UNSIGNED_BYTE,
-                            pixel
-                    );
-                    if ((pixel.get(3) & 0xFF) > 8) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        } finally {
-            main.bindWrite(true);
-            restoreScissorState(scissorState);
-        }
-    }
-
     /** 推入正交投影矩阵 */
     private static ProjectionState pushProjection(int width, int height) {
         RenderSystem.backupProjectionMatrix();
@@ -1512,69 +840,6 @@ public final class ChartRenderer {
         RenderSystem.applyModelViewMatrix();
         RenderSystem.restoreProjectionMatrix();
     }
-
-    /** 清除渲染目标为全透明 */
-    private static void clearTarget(RenderTarget target) {
-        if (target == null) {
-            return;
-        }
-        ScissorState scissorState = captureScissorState();
-        RenderSystem.disableScissor();
-        target.setClearColor(0.0f, 0.0f, 0.0f, 0.0f);
-        try {
-            target.clear(Minecraft.ON_OSX);
-        } finally {
-            restoreScissorState(scissorState);
-        }
-    }
-
-    private static void addColorVertex(BufferBuilder buffer, float x, float y, int r, int g, int b, int a) {
-        buffer.addVertex(x, y, 0.0f).setColor(r, g, b, a);
-    }
-
-    private static void addFillQuad(BufferBuilder buffer, double xl, double xr, double yLeft, double yRight, double bottom, int r, int g, int b, int a) {
-        addColorVertex(buffer, (float) xl, (float) bottom, r, g, b, a);
-        addColorVertex(buffer, (float) xl, (float) yLeft, r, g, b, a);
-        addColorVertex(buffer, (float) xr, (float) yRight, r, g, b, a);
-        addColorVertex(buffer, (float) xr, (float) bottom, r, g, b, a);
-    }
-
-    /** 对单条线段进行列光栅化 —— 在每列的中心点(column+0.5)处采样线段高度 */
-    private static void rasterizeAreaColumns(double[] top, int startColumn, int endColumn, Point p0, Point p1, RectBounds bounds) {
-        // 垂直或近垂直线段：直接取较小 Y 写入所在列
-        if (Math.abs(p1.x - p0.x) < 1.0E-6) {
-            int column = clamp((int) Math.floor(p0.x), startColumn, Math.max(startColumn, endColumn - 1));
-            writeColumnTop(top, startColumn, column, Math.min(p0.y, p1.y));
-            return;
-        }
-
-        double left = Math.max(Math.min(p0.x, p1.x), startColumn);
-        double right = Math.min(Math.max(p0.x, p1.x), endColumn);
-        int colStart = clamp((int) Math.floor(left), startColumn, endColumn);
-        int colEnd = clamp((int) Math.ceil(right), startColumn, endColumn);
-        double dx = p1.x - p0.x;
-        double dy = p1.y - p0.y;
-        for (int column = colStart; column < colEnd; column++) {
-            // 中心采样：在列中点 x=column+0.5 处计算线段的 Y 值
-            double sampleX = clampD(column + 0.5, Math.min(p0.x, p1.x), Math.max(p0.x, p1.x));
-            double t = (sampleX - p0.x) / dx;
-            double y = clampD(p0.y + dy * t, bounds.minY, bounds.maxY);
-            writeColumnTop(top, startColumn, column, y);
-        }
-    }
-
-    private static void writeColumnTop(double[] top, int startColumn, int column, double y) {
-        int index = column - startColumn;
-        if (index < 0 || index >= top.length) {
-            return;
-        }
-        if (!Double.isFinite(top[index])) {
-            top[index] = y;
-            return;
-        }
-        top[index] = Math.min(top[index], y);
-    }
-
     private static void addPositionVertex(BufferBuilder buffer, Point point) {
         buffer.addVertex((float) point.x, (float) point.y, 0.0f);
     }
@@ -1648,16 +913,6 @@ public final class ChartRenderer {
                 new Point(a.x + dx * t1, a.y + dy * t1)
         );
     }
-
-    /** 颜色预乘 alpha（用于面积填充） */
-    private static int premultiply(int color) {
-        int a = (color >>> 24) & 0xFF;
-        int r = (int) Math.round(((color >>> 16) & 0xFF) * (a / 255.0));
-        int g = (int) Math.round(((color >>> 8) & 0xFF) * (a / 255.0));
-        int b = (int) Math.round((color & 0xFF) * (a / 255.0));
-        return (a << 24) | (clamp(r, 0, 255) << 16) | (clamp(g, 0, 255) << 8) | clamp(b, 0, 255);
-    }
-
     private static float red01(int rgb) {
         return ((rgb >>> 16) & 0xFF) / 255.0f;
     }
@@ -1734,100 +989,6 @@ public final class ChartRenderer {
             long seriesFingerprint
     ) {
     }
-
-    /**
-     * 缓存图表纹理 —— 包含高分辨率和低分辨率两层渲染目标。
-     * 高分辨率用于超采样绘制，低分辨率用于最终显示。
-     */
-    private static final class CachedChartTexture implements AutoCloseable {
-        private static final CachedChartTexture EMPTY = new CachedChartTexture(null, null, 0, 0, 0, 0, 0);
-
-        private final RenderTarget highRes;
-        private final RenderTarget lowRes;
-        private final int width;
-        private final int height;
-        private final int highResWidth;
-        private final int highResHeight;
-        private final int sampleScale;
-        private boolean hasVisibleContent;
-        private boolean highResVisible;
-        private boolean lowResVisible;
-
-        private CachedChartTexture(RenderTarget highRes, RenderTarget lowRes, int width, int height, int highResWidth, int highResHeight, int sampleScale) {
-            this.highRes = highRes;
-            this.lowRes = lowRes;
-            this.width = width;
-            this.height = height;
-            this.highResWidth = highResWidth;
-            this.highResHeight = highResHeight;
-            this.sampleScale = sampleScale;
-            this.hasVisibleContent = false;
-            this.highResVisible = false;
-            this.lowResVisible = false;
-        }
-
-        private static final int MAX_TEXTURE_SIZE = 8192; // 保守限制，低于 GPU 最大值 (16384) 以避免边界情况
-
-        private static CachedChartTexture create(int width, int height, int sampleScale) {
-            if (width <= 0 || height <= 0) {
-                return EMPTY;
-            }
-            int highResWidth = Math.max(1, width * sampleScale);
-            int highResHeight = Math.max(1, height * sampleScale);
-            // 限制纹理尺寸以防止高 DPI / 大视口下的 OpenGL 崩溃
-            if (highResWidth > MAX_TEXTURE_SIZE || highResHeight > MAX_TEXTURE_SIZE) {
-                int clampedScale = sampleScale;
-                while (clampedScale > 1 && (width * clampedScale > MAX_TEXTURE_SIZE || height * clampedScale > MAX_TEXTURE_SIZE)) {
-                    clampedScale--;
-                }
-                sampleScale = clampedScale;
-                highResWidth = Math.min(MAX_TEXTURE_SIZE, Math.max(1, width * sampleScale));
-                highResHeight = Math.min(MAX_TEXTURE_SIZE, Math.max(1, height * sampleScale));
-            }
-            int clampedWidth = Math.min(width, MAX_TEXTURE_SIZE);
-            int clampedHeight = Math.min(height, MAX_TEXTURE_SIZE);
-            TextureTarget highRes = new TextureTarget(highResWidth, highResHeight, false, Minecraft.ON_OSX);
-            highRes.setFilterMode(GL11C.GL_NEAREST);
-            TextureTarget lowRes = new TextureTarget(clampedWidth, clampedHeight, false, Minecraft.ON_OSX);
-            lowRes.setFilterMode(GL11C.GL_LINEAR);
-            return new CachedChartTexture(highRes, lowRes, clampedWidth, clampedHeight, highResWidth, highResHeight, sampleScale);
-        }
-
-        private boolean hasVisibleContent() {
-            return hasVisibleContent;
-        }
-
-        private void setHasVisibleContent(boolean hasVisibleContent) {
-            this.hasVisibleContent = hasVisibleContent;
-        }
-
-        private boolean highResVisible() {
-            return highResVisible;
-        }
-
-        private void setHighResVisible(boolean highResVisible) {
-            this.highResVisible = highResVisible;
-        }
-
-        private boolean lowResVisible() {
-            return lowResVisible;
-        }
-
-        private void setLowResVisible(boolean lowResVisible) {
-            this.lowResVisible = lowResVisible;
-        }
-
-        @Override
-        public void close() {
-            if (highRes != null) {
-                highRes.destroyBuffers();
-            }
-            if (lowRes != null) {
-                lowRes.destroyBuffers();
-            }
-        }
-    }
-
     /** 预计算图表数据 —— 包含边界、零轴位置和所有系列的折线段 */
     private record PreparedChart(
             RectBounds bounds,
@@ -1851,10 +1012,6 @@ public final class ChartRenderer {
 
     /** 二维点 */
     private record Point(double x, double y) {
-    }
-
-    /** 裁剪测试状态快照 */
-    private record ScissorState(boolean enabled, int x, int y, int width, int height) {
     }
 
     /**
@@ -1911,105 +1068,9 @@ public final class ChartRenderer {
      * - ITEMS：物品吞吐/库存数据（AE2 网络）
      * - ENERGY：电量吞吐/储量数据（Flux 能量网络）
      */
-    public enum ChartDataType {
-        ITEMS,
-        ENERGY;
-
-        public ChartDataType next() {
-            return this == ITEMS ? ENERGY : ITEMS;
-        }
-    }
-
     /**
-     * 图表页面类型枚举。
-     * - THROUGHPUT：吞吐量视图（生产/消耗/净流量）
-     * - STOCK：库存视图（库存量变化）
+     * 图表数据类型枚举。
+     * - ITEMS：物品吞吐/库存数据（AE2 网络）
+     * - ENERGY：电量吞吐/储量数据（Flux 能量网络）
      */
-    public enum ChartPage {
-        THROUGHPUT,
-        STOCK;
-
-        public ChartPage next() {
-            return this == THROUGHPUT ? STOCK : THROUGHPUT;
-        }
-    }
-
-    /**
-     * 平滑模式枚举。
-     * - SMOOTH：EMA 指数移动平均平滑
-     * - RAW：原始数据直接绘制
-     */
-    public enum SmoothingMode {
-        SMOOTH,
-        RAW;
-
-        public SmoothingMode next() {
-            return this == SMOOTH ? RAW : SMOOTH;
-        }
-    }
-
-    /**
-     * 线条显示模式枚举。
-     * - ALL：显示全部曲线
-     * - PRODUCTION：仅显示生产曲线
-     * - CONSUMPTION：仅显示消耗曲线
-     * - NET：仅显示净流量曲线
-     */
-    public enum LineMode {
-        ALL,
-        PRODUCTION,
-        CONSUMPTION,
-        NET;
-
-        public LineMode next() {
-            return switch (this) {
-                case ALL -> PRODUCTION;
-                case PRODUCTION -> CONSUMPTION;
-                case CONSUMPTION -> NET;
-                case NET -> ALL;
-            };
-        }
-
-        public boolean showProduction() {
-            return this == ALL || this == PRODUCTION;
-        }
-
-        public boolean showConsumption() {
-            return this == ALL || this == CONSUMPTION;
-        }
-
-        public boolean showNet() {
-            return this == ALL || this == NET;
-        }
-    }
-
-    /** 图表渲染结果 —— 包含各控制按钮的热区 */
-    public enum ChartSeriesType {
-        PRODUCTION,
-        CONSUMPTION,
-        NET,
-        STOCK
-    }
-
-    public record ChartHoverPoint(
-            ChartSeriesType seriesType,
-            double x,
-            double y,
-            int slotIndex,
-            double value
-    ) {
-    }
-
-    public record RenderResult(
-            UiRect windowToggle,
-            UiRect dataTypeToggle,
-            UiRect pageToggle,
-            UiRect lineModeButton,
-            UiRect smoothingButton,
-            UiRect resetButton,
-            boolean lineModeEnabled,
-            UiRect plotRect,
-            List<ChartHoverPoint> hoverPoints
-    ) {
-    }
 }

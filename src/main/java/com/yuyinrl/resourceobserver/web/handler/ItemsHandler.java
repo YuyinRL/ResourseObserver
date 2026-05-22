@@ -2,17 +2,19 @@ package com.yuyinrl.resourceobserver.web.handler;
 
 import com.sun.net.httpserver.HttpExchange;
 import com.sun.net.httpserver.HttpHandler;
+import com.yuyinrl.resourceobserver.service.snapshot.storage.StorageSnapshot;
+import com.yuyinrl.resourceobserver.service.snapshot.storage.StorageSnapshotBuilder;
 import com.yuyinrl.resourceobserver.web.WebServerService;
+import com.yuyinrl.resourceobserver.web.util.QueryUtil;
+import com.yuyinrl.resourceobserver.world.block.entity.BoundEntry;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
-import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.level.ServerLevel;
-import net.minecraft.world.level.block.entity.BlockEntity;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.net.URI;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Locale;
@@ -33,6 +35,10 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
         super(server);
     }
 
+    /**
+     * /api/observers/{id}/items —— 物品分页/排序/筛选入口。
+     * 解析 query 参数后切到主线程读取 Observer 数据并构造响应。
+     */
     @Override
     public void handle(HttpExchange exchange) throws IOException {
         if (!"GET".equalsIgnoreCase(exchange.getRequestMethod())) {
@@ -49,22 +55,21 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
             sendError(exchange, 404, "not found");
             return;
         }
-        Map<String, String> query = parseQuery(uri.getRawQuery());
-        Map<String, Object> body = runOnMain(mc -> buildBody(mc, target, query));
-        if (body == null) {
+        Map<String, String> query = QueryUtil.parseQuery(uri.getRawQuery());
+        AccessResult<Map<String, Object>> res = runOnMainWithAccess(exchange, target,
+                (mc, observer) -> buildBody(observer, query));
+        if (res.isForbidden()) {
+            sendError(exchange, 403, "forbidden");
+            return;
+        }
+        if (res.isNotFound()) {
             sendError(exchange, 404, "observer not found");
             return;
         }
-        sendJson(exchange, 200, body);
+        sendJson(exchange, 200, res.body());
     }
 
-    private @Nullable Map<String, Object> buildBody(MinecraftServer mc, ObserverTarget target,
-                                                    Map<String, String> query) {
-        ServerLevel level = resolveLevel(mc, target.dimension());
-        if (level == null) return null;
-        BlockEntity raw = level.getBlockEntity(target.pos());
-        if (!(raw instanceof ObserverBlockEntity observer)) return null;
-
+    private @Nullable Map<String, Object> buildBody(ObserverBlockEntity observer, Map<String, String> query) {
         int offset = Math.max(0, parseInt(query.get("offset"), 0));
         int limit = Math.max(1, Math.min(MAX_LIMIT, parseInt(query.get("limit"), DEFAULT_LIMIT)));
         String q = query.getOrDefault("q", "").trim().toLowerCase(Locale.ROOT);
@@ -73,11 +78,21 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
         boolean alertsOnly = Boolean.parseBoolean(query.getOrDefault("alertsOnly", "false"));
 
         List<Map<String, Object>> rows = new ArrayList<>();
-        for (ObserverBlockEntity.BoundEntry binding : observer.getBindings()) {
+        for (BoundEntry binding : observer.getBindings()) {
             if (!"AE2_ITEMS".equals(binding.networkType())) {
                 continue;
             }
-            appendRows(observer, binding.networkId(), q, alertsOnly, rows);
+            StorageSnapshot snapshot = StorageSnapshotBuilder.fromObserver(
+                    observer,
+                    binding.networkId(),
+                    alertsOnly,
+                    new HashMap<>(),
+                    q,
+                    ServerStorageLocalizer.INSTANCE,
+                    StorageSnapshotBuilder.SearchMatcher.DEFAULT,
+                    null
+            );
+            rows.addAll(itemRows(snapshot, binding.networkId()));
         }
 
         rows.sort(comparator(sort, dir));
@@ -97,44 +112,97 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
         return body;
     }
 
-    private static void appendRows(ObserverBlockEntity observer, String networkId, String q, boolean alertsOnly,
-                                   List<Map<String, Object>> rows) {
-        Map<String, Long> amounts = observer.getAe2ItemAmountsFor(networkId);
-        Map<String, Double> prodRates = observer.getAe2ItemProdRatesPerMinFor(networkId);
-        Map<String, Double> consRates = observer.getAe2ItemConsRatesPerMinFor(networkId);
-        Map<String, Double> netRates = observer.getAe2ItemRatesPerMinFor(networkId);
-
-        for (Map.Entry<String, Long> e : amounts.entrySet()) {
-            String id = e.getKey();
-            ItemNameResolver.Resolved name = ItemNameResolver.resolve(id);
-            String displayName = name.displayName() == null ? id : name.displayName();
-            if (!q.isEmpty() && !id.toLowerCase(Locale.ROOT).contains(q)
-                    && !displayName.toLowerCase(Locale.ROOT).contains(q)) {
-                continue;
-            }
-
-            double production = prodRates.getOrDefault(id, 0.0d);
-            double consumption = consRates.getOrDefault(id, 0.0d);
-            double net = netRates.getOrDefault(id, 0.0d);
-            long amount = e.getValue();
-            double remainingMinutes = amount / Math.max(consumption, 1.0d);
-            if (alertsOnly && remainingMinutes >= 30.0d) {
-                continue;
-            }
-
-            Map<String, Object> row = new LinkedHashMap<>();
-            row.put("id", id);
-            row.put("displayName", displayName);
-            if (name.translationKey() != null) row.put("translationKey", name.translationKey());
-            row.put("amount", amount);
-            row.put("production", production);
-            row.put("consumption", consumption);
-            row.put("net", net);
-            row.put("capacity", Math.max(amount * 1.5d, 1000.0d));
-            row.put("remainingMinutes", remainingMinutes);
-            row.put("networkId", networkId);
-            rows.add(row);
+    static List<Map<String, Object>> itemRows(StorageSnapshot snapshot, String networkId) {
+        List<Map<String, Object>> rows = new ArrayList<>(snapshot.items().size());
+        for (StorageSnapshot.ItemRowSnapshot item : snapshot.items()) {
+            rows.add(itemRow(item, networkId));
         }
+        return rows;
+    }
+
+    static Map<String, Object> itemRow(StorageSnapshot.ItemRowSnapshot item, String networkId) {
+        ItemNameResolver.Resolved name = ItemNameResolver.resolve(item.itemId());
+        double consumption = Math.max(0.0d, item.burnRatePerMin());
+        double production = Math.max(0.0d, item.delta() + consumption);
+        double remainingMinutes = item.localAmount() / Math.max(consumption, 1.0d);
+        Map<String, Object> row = new LinkedHashMap<>();
+        row.put("id", item.itemId());
+        row.put("displayName", item.displayName());
+        if (name.translationKey() != null) row.put("translationKey", name.translationKey());
+        row.put("amount", item.localAmount());
+        row.put("production", production);
+        row.put("consumption", consumption);
+        row.put("net", item.delta());
+        row.put("capacity", Math.max(item.localAmount() * 1.5d, 1000.0d));
+        row.put("remainingMinutes", remainingMinutes);
+        row.put("networkId", networkId);
+        row.put("localAmount", item.localAmount());
+        row.put("globalAmount", item.globalAmount());
+        row.put("delta", item.delta());
+        row.put("alertLevel", item.alertLevel().name());
+        row.put("groupKey", item.groupKey());
+        row.put("burnRatePerMin", item.burnRatePerMin());
+        row.put("estimatedBufferText", item.estimatedBufferText());
+        row.put("bufferRatio", item.bufferRatio());
+        row.put("iconSprite", item.iconSprite());
+        return row;
+    }
+
+    static List<Map<String, Object>> kpis(StorageSnapshot snapshot) {
+        List<Map<String, Object>> out = new ArrayList<>(snapshot.kpis().size());
+        for (StorageSnapshot.KpiSnapshot kpi : snapshot.kpis()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("label", kpi.labelKey());
+            row.put("value", kpi.value());
+            row.put("status", kpi.status().name());
+            out.add(row);
+        }
+        return out;
+    }
+
+    static List<Map<String, Object>> usageSegments(StorageSnapshot snapshot) {
+        List<Map<String, Object>> out = new ArrayList<>(snapshot.usageSegments().size());
+        for (StorageSnapshot.UsageSegmentSnapshot segment : snapshot.usageSegments()) {
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("groupKey", segment.groupKey());
+            row.put("displayName", segment.fallbackName());
+            row.put("percentage", segment.percentage());
+            row.put("color", colorForSlot(segment.colorSlot()));
+            out.add(row);
+        }
+        return out;
+    }
+
+    static @Nullable Map<String, Object> nodeSummary(StorageSnapshot snapshot, String networkId) {
+        for (StorageSnapshot.NodeSnapshot node : snapshot.nodes()) {
+            if (!node.nodeId().equals(networkId)) {
+                continue;
+            }
+            Map<String, Object> row = new LinkedHashMap<>();
+            row.put("nodeId", node.nodeId());
+            row.put("displayName", node.displayName());
+            row.put("networkType", node.networkType());
+            row.put("iconSprite", node.iconSprite());
+            row.put("itemCount", node.itemCount());
+            row.put("capacityRatio", node.capacityRatio());
+            row.put("selected", node.selected());
+            row.put("usedFormatted", node.usedFormatted());
+            row.put("totalFormatted", node.totalFormatted());
+            row.put("statusKey", node.statusKey());
+            row.put("statusAlert", node.statusAlert());
+            row.put("coordinatesText", node.coordinatesText());
+            return row;
+        }
+        return null;
+    }
+
+    private static String colorForSlot(StorageSnapshot.GroupColorSlot slot) {
+        return switch (slot) {
+            case RAW -> "#06b6d4";
+            case INTERMEDIATE -> "#f59e0b";
+            case FINISHED -> "#10b981";
+            case OTHER -> "#3b82f6";
+        };
     }
 
     private static Comparator<Map<String, Object>> comparator(String sort, String dir) {
@@ -162,28 +230,6 @@ public final class ItemsHandler extends BaseApiHandler implements HttpHandler {
             return raw == null ? fallback : Integer.parseInt(raw);
         } catch (NumberFormatException e) {
             return fallback;
-        }
-    }
-
-    private static Map<String, String> parseQuery(@Nullable String raw) {
-        Map<String, String> out = new LinkedHashMap<>();
-        if (raw == null || raw.isEmpty()) return out;
-        for (String pair : raw.split("&")) {
-            int eq = pair.indexOf('=');
-            if (eq < 0) {
-                out.put(urlDecode(pair), "");
-            } else {
-                out.put(urlDecode(pair.substring(0, eq)), urlDecode(pair.substring(eq + 1)));
-            }
-        }
-        return out;
-    }
-
-    private static String urlDecode(String s) {
-        try {
-            return java.net.URLDecoder.decode(s, java.nio.charset.StandardCharsets.UTF_8);
-        } catch (Exception e) {
-            return s;
         }
     }
 }

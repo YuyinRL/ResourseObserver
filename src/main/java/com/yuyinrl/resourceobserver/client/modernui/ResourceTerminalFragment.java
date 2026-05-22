@@ -1,5 +1,6 @@
 package com.yuyinrl.resourceobserver.client.modernui;
 
+import com.yuyinrl.resourceobserver.DevMode;
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
 import com.yuyinrl.resourceobserver.client.ui.OverviewViewModel;
 import com.yuyinrl.resourceobserver.client.ui.PowerNetworkViewModel;
@@ -7,6 +8,13 @@ import com.yuyinrl.resourceobserver.client.ui.StorageNetworkViewModel;
 import com.yuyinrl.resourceobserver.client.ui.TerminalPage;
 import com.yuyinrl.resourceobserver.client.ui.UiThemeTokens;
 import com.yuyinrl.resourceobserver.client.ui.render.ChartRenderer;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartDataType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartHoverPoint;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartPage;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.ChartSeriesType;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.LineMode;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.RenderResult;
+import com.yuyinrl.resourceobserver.client.ui.render.chart.SmoothingMode;
 import com.yuyinrl.resourceobserver.network.ChartScope;
 import com.yuyinrl.resourceobserver.network.ChartWindow;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
@@ -74,10 +82,10 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
     private final ViewModelBridge bridge;
     private TerminalPage activePage = TerminalPage.OVERVIEW;
     private ChartWindow chartWindow;
-    private ChartRenderer.ChartPage chartPage = ChartRenderer.ChartPage.THROUGHPUT;
-    private ChartRenderer.LineMode chartLineMode = ChartRenderer.LineMode.ALL;
-    private ChartRenderer.SmoothingMode chartSmoothingMode = ChartRenderer.SmoothingMode.SMOOTH;
-    private ChartRenderer.ChartDataType chartDataType = ChartRenderer.ChartDataType.ITEMS;
+    private ChartPage chartPage = ChartPage.THROUGHPUT;
+    private LineMode chartLineMode = LineMode.ALL;
+    private SmoothingMode chartSmoothingMode = SmoothingMode.SMOOTH;
+    private ChartDataType chartDataType = ChartDataType.ITEMS;
     private String selectedItemId;
     private final Set<String> selectedItemIds = new LinkedHashSet<>();
 
@@ -271,6 +279,31 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         }
     }
 
+    /**
+     * 向服务端请求 Web 访问 Token；服务端回传 {@link com.yuyinrl.resourceobserver.network.WebTokenPayload}
+     * 后由 {@link #applyWebToken} 弹出 {@link WebAccessDialog}。
+     *
+     * @param regenerate true 表示强制重新签发，作废旧 Token
+     */
+    public void requestWebToken(boolean regenerate) {
+        try {
+            PacketDistributor.sendToServer(
+                    new com.yuyinrl.resourceobserver.network.RequestWebTokenPayload(regenerate));
+        } catch (Throwable e) {
+            ResourceObserverMod.LOGGER.debug("Web token request failed", e);
+        }
+    }
+
+    /** 收到服务端推送的 Token 数据后弹出 Web 访问对话框。 */
+    public void applyWebToken(com.yuyinrl.resourceobserver.network.WebTokenPayload payload) {
+        View root = getView();
+        if (root == null) {
+            WebAccessDialog.show(this, payload);
+            return;
+        }
+        root.post(() -> WebAccessDialog.show(this, payload));
+    }
+
     public boolean isTextInputActive() { return textInputActive; }
     public void setTextInputActive(boolean active) { this.textInputActive = active; }
 
@@ -305,17 +338,17 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
     public ChartWindow getChartWindow() { return chartWindow; }
     public void setChartWindow(ChartWindow w) { this.chartWindow = w; }
 
-    public ChartRenderer.ChartPage getChartPage() { return chartPage; }
-    public void setChartPage(ChartRenderer.ChartPage p) { this.chartPage = p; }
+    public ChartPage getChartPage() { return chartPage; }
+    public void setChartPage(ChartPage p) { this.chartPage = p; }
 
-    public ChartRenderer.LineMode getChartLineMode() { return chartLineMode; }
-    public void setChartLineMode(ChartRenderer.LineMode m) { this.chartLineMode = m; }
+    public LineMode getChartLineMode() { return chartLineMode; }
+    public void setChartLineMode(LineMode m) { this.chartLineMode = m; }
 
-    public ChartRenderer.SmoothingMode getChartSmoothingMode() { return chartSmoothingMode; }
-    public void setChartSmoothingMode(ChartRenderer.SmoothingMode s) { this.chartSmoothingMode = s; }
+    public SmoothingMode getChartSmoothingMode() { return chartSmoothingMode; }
+    public void setChartSmoothingMode(SmoothingMode s) { this.chartSmoothingMode = s; }
 
-    public ChartRenderer.ChartDataType getChartDataType() { return chartDataType; }
-    public void setChartDataType(ChartRenderer.ChartDataType dt) { this.chartDataType = dt; }
+    public ChartDataType getChartDataType() { return chartDataType; }
+    public void setChartDataType(ChartDataType dt) { this.chartDataType = dt; }
 
     public String getSelectedItemId() { return selectedItemId; }
     public void setSelectedItemId(String id) {
@@ -671,11 +704,20 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         tabPower.setOnClickListener(v -> switchPage(TerminalPage.POWER_NETWORK));
         chrome.addView(tabPower, leftGap(dp(4)));
 
-        tabDev = tabButton("Dev", activePage == TerminalPage.DEV_COMPONENTS, tabHeight);
-        tabDev.setOnClickListener(v -> switchPage(TerminalPage.DEV_COMPONENTS));
-        chrome.addView(tabDev, leftGap(dp(4)));
+        // Dev 标签页仅在开发环境下显示
+        if (DevMode.isDev()) {
+            tabDev = tabButton("Dev", activePage == TerminalPage.DEV_COMPONENTS, tabHeight);
+            tabDev.setOnClickListener(v -> switchPage(TerminalPage.DEV_COMPONENTS));
+            chrome.addView(tabDev, leftGap(dp(4)));
+        }
 
         chrome.addView(spacer(chrome), spacerParams());
+
+        // Web Dashboard 访问 Token 入口（预渲染 emoji PNG，ModernUI 字体不支持 emoji）
+        GlobeIconView globeIcon = new GlobeIconView(getContext());
+        View webBtn = chromeDrawableButton(this, globeIcon, false);
+        webBtn.setOnClickListener(v -> requestWebToken(false));
+        chrome.addView(webBtn);
 
         TextView sizeBtn = chromeIconButton(this, SCALE_LABELS[scaleModeIndex], false);
         sizeBtn.setOnClickListener(v -> {
@@ -702,7 +744,9 @@ public class ResourceTerminalFragment extends Fragment implements ViewModelBridg
         applyTabStyle(tabOverview, activePage == TerminalPage.OVERVIEW);
         applyTabStyle(tabStorage, activePage == TerminalPage.STORAGE_NETWORK);
         applyTabStyle(tabPower, activePage == TerminalPage.POWER_NETWORK);
-        applyTabStyle(tabDev, activePage == TerminalPage.DEV_COMPONENTS);
+        if (tabDev != null) {
+            applyTabStyle(tabDev, activePage == TerminalPage.DEV_COMPONENTS);
+        }
     }
 
     private void applyTabStyle(TextView tab, boolean active) {
