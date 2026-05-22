@@ -182,4 +182,46 @@ public final class KpiRenderer {
 
     public record RenderResult(List<KpiHitbox> kpiHitboxes) {
     }
+
+    /**
+     * 简单 KPI 卡片数据 —— 仅包含标签、数值和状态，用于电力/存储页面的 KPI 渲染。
+     */
+    public record SimpleKpiCard(String label, String value, OverviewViewModel.Status status) {
+    }
+
+    /**
+     * 渲染简化版 KPI 卡片行（无图标、无交互态）。
+     * 供电力页面和存储页面的 KPI 渲染器复用。
+     */
+    public static void renderSimpleCards(
+            GuiGraphics gfx,
+            Font font,
+            UiRect area,
+            List<SimpleKpiCard> cards
+    ) {
+        RenderUtils.fillPanel(gfx, area, UiThemeTokens.SECTION_BG, UiThemeTokens.SECTION_BORDER);
+        UiRect content = area.inset(6);
+
+        int gap = 8;
+        int cardCount = Math.max(1, cards.size());
+        int totalGap = (cardCount - 1) * gap;
+        int cardW = Math.max(40, (content.width() - totalGap) / cardCount);
+
+        for (int i = 0; i < cards.size(); i++) {
+            SimpleKpiCard card = cards.get(i);
+            int cardX = content.x() + i * (cardW + gap);
+            UiRect cardRect = new UiRect(cardX, content.y(), cardW, content.height());
+
+            RenderUtils.fillPanel(gfx, cardRect, UiThemeTokens.CARD_BG, UiThemeTokens.CARD_BORDER);
+
+            int valueColor = statusColor(card.status());
+            String label = Component.translatable(card.label()).getString();
+            gfx.drawString(font,
+                    RenderUtils.ellipsis(font, label, cardRect.width() - 12),
+                    cardRect.x() + 6, cardRect.y() + 5, UiThemeTokens.TEXT_MUTED);
+            gfx.drawString(font,
+                    RenderUtils.ellipsis(font, card.value(), cardRect.width() - 12),
+                    cardRect.x() + 6, cardRect.y() + 17, valueColor);
+        }
+    }
 }

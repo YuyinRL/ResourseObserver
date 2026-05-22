@@ -1,6 +1,7 @@
 package com.yuyinrl.resourceobserver.world.item;
 
 import com.yuyinrl.resourceobserver.ResourceObserverMod;
+import com.yuyinrl.resourceobserver.world.block.entity.NetworkRef;
 import com.yuyinrl.resourceobserver.world.block.entity.ObserverBlockEntity;
 import com.yuyinrl.resourceobserver.world.block.ObserverBlock;
 import net.minecraft.core.BlockPos;
@@ -108,7 +109,7 @@ public class BindingToolItem extends Item {
         }
 
         // 生成网络唯一 ID 并尝试添加绑定
-        String networkId = targetBlockId + "@" + clickedPos.asLong();
+        String networkId = NetworkRef.format(targetBlockId.toString(), clickedPos);
         boolean added = observer.addBinding(networkType, networkId, targetBlockId);
         clearSelectedObserver(player); // 无论成功与否，清除选择状态
 

@@ -1,238 +1,361 @@
 package com.yuyinrl.resourceobserver.client.ui;
 
+import com.yuyinrl.resourceobserver.client.ui.snapshot.ClientPowerLocalizer;
 import com.yuyinrl.resourceobserver.network.ObserverDataPayload;
-import net.minecraft.network.chat.Component;
+import com.yuyinrl.resourceobserver.service.snapshot.overview.OverviewSnapshot;
+import com.yuyinrl.resourceobserver.service.snapshot.power.PowerSnapshot;
+import com.yuyinrl.resourceobserver.service.snapshot.power.PowerSnapshotBuilder;
 
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.LinkedHashMap;
-import java.util.LinkedHashSet;
 import java.util.List;
-import java.util.Locale;
 import java.util.Map;
 
 /**
- * Maps payload data to the power network page view model.
+ * 电力网络视图模型映射器 —— Snapshot → 客户端 ViewModel 的薄壳适配器。
+ *
+ * <p>F3.B 起：用户面向的数据塑形由 {@link PowerSnapshotBuilder} 完成；本类只负责
+ * 本地化、颜色槽映射、枚举 1:1 转换，以及临时保留 Debug Terminal 专用数据。</p>
  */
 public final class PowerNetworkViewModelMapper {
+
+    private static final int[] CONSUMER_COLORS = {
+            UiThemeTokens.CYAN,
+            UiThemeTokens.AMBER,
+            UiThemeTokens.EMERALD,
+            UiThemeTokens.BLUE,
+            UiThemeTokens.ROSE,
+            0xFF818CF8,
+            0xFFA78BFA,
+            0xFF2DD4BF,
+    };
+
     private PowerNetworkViewModelMapper() {
     }
 
-    private static final double OVERLOAD_CRITICAL_THRESHOLD = 0.95;
-    private static final double OVERLOAD_WARNING_THRESHOLD = 0.80;
-
     public static PowerNetworkViewModel fromPayload(ObserverDataPayload payload) {
-        List<ObserverDataPayload.BindingEntry> fluxBindings = new ArrayList<>();
-        for (ObserverDataPayload.BindingEntry binding : payload.bindings()) {
-            if ("FLUX_ENERGY".equals(binding.networkType())) {
-                fluxBindings.add(binding);
-            }
+        PowerSnapshot snapshot = PowerSnapshotBuilder.fromPayload(payload);
+        PowerNetworkViewModel.DebugSnapshot debugSnapshot = buildDebugSnapshot(payload);
+        return fromSnapshot(snapshot, debugSnapshot);
+    }
+
+    /** Snapshot → ViewModel 转换入口，供 V2 / 测试直接复用。 */
+    public static PowerNetworkViewModel fromSnapshot(PowerSnapshot snapshot) {
+        return fromSnapshot(snapshot, PowerNetworkViewModel.DebugSnapshot.empty());
+    }
+
+    private static PowerNetworkViewModel fromSnapshot(
+            PowerSnapshot snapshot,
+            PowerNetworkViewModel.DebugSnapshot debugSnapshot
+    ) {
+        if (snapshot == null) {
+            snapshot = PowerSnapshotBuilder.fromPayload(null);
         }
-
-        List<PowerNetworkViewModel.DeviceEntry> devices = new ArrayList<>();
-        long totalInputPerTick = 0L;
-        long totalOutputPerTick = 0L;
-        long totalStored = 0L;
-        long totalCapacity = 0L;
-
-        long debugInputRate = 0L;
-        long debugOutputRate = 0L;
-        long debugTotalBuffer = 0L;
-        int debugPlugCount = 0;
-        int debugPointCount = 0;
-        int debugStorageCount = 0;
-        int debugControllerCount = 0;
-
-        Map<String, DeviceDebugPartial> debugDeviceBaseMap = new LinkedHashMap<>();
-        Map<String, long[]> debugDeviceLegacyExtMap = new LinkedHashMap<>();
-        Map<String, Map<String, long[]>> debugDeviceRefMetricMap = new LinkedHashMap<>();
-        Map<String, Map<String, String>> debugDeviceRefNameMap = new LinkedHashMap<>();
-        List<String> debugInputDeviceKeys = new ArrayList<>();
-        List<String> debugOutputDeviceKeys = new ArrayList<>();
-
-        for (ObserverDataPayload.BindingEntry binding : fluxBindings) {
-            long stored = binding.currentValue();
-            long capacity = Math.max(1L, binding.capacity());
-
-            long inputPerTick = computeEnergyPerTick(binding, true);
-            long outputPerTick = computeEnergyPerTick(binding, false);
-
-            totalInputPerTick = saturatingAdd(totalInputPerTick, inputPerTick);
-            totalOutputPerTick = saturatingAdd(totalOutputPerTick, outputPerTick);
-            totalStored = saturatingAdd(totalStored, stored);
-            totalCapacity = saturatingAdd(totalCapacity, capacity);
-
-            if (binding.itemDeltas() != null) {
-                for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
-                    switch (item.itemId()) {
-                        case "flux.input_per_tick" -> debugInputRate = saturatingAdd(debugInputRate, Math.abs(item.amount()));
-                        case "flux.output_per_tick" -> debugOutputRate = saturatingAdd(debugOutputRate, Math.abs(item.amount()));
-                        case "flux.max_energy_storage" -> debugTotalBuffer = saturatingAdd(debugTotalBuffer, Math.abs(item.amount()));
-                        case "flux.plug_count" -> debugPlugCount += (int) item.amount();
-                        case "flux.point_count" -> debugPointCount += (int) item.amount();
-                        case "flux.storage_count" -> debugStorageCount += (int) item.amount();
-                        case "flux.controller_count" -> debugControllerCount += (int) item.amount();
-                        default -> parseDebugDeviceItem(
-                                binding,
-                                item,
-                                debugDeviceBaseMap,
-                                debugDeviceLegacyExtMap,
-                                debugDeviceRefMetricMap,
-                                debugDeviceRefNameMap,
-                                debugInputDeviceKeys,
-                                debugOutputDeviceKeys
-                        );
-                    }
-                }
-            }
-
-            double usageRatio = Math.min(1.0, (double) stored / capacity);
-            String category = inferCategory(binding.targetBlockId());
-            PowerNetworkViewModel.AlertLevel alertLevel = computeAlertLevel(usageRatio, inputPerTick, outputPerTick);
-
-            devices.add(new PowerNetworkViewModel.DeviceEntry(
-                    binding.networkId(),
-                    binding.displayName(),
-                    category,
-                    outputPerTick > 0 ? outputPerTick : inputPerTick,
-                    stored,
-                    capacity,
-                    usageRatio,
-                    alertLevel
-            ));
-        }
-
-        devices.sort(Comparator.comparingLong(PowerNetworkViewModel.DeviceEntry::energyPerTick).reversed());
-
-        List<PowerNetworkViewModel.LoadSegment> loadSegments = buildLoadSegments(devices);
-        List<PowerNetworkViewModel.OverloadAlert> overloadAlerts = buildOverloadAlerts(devices);
-        List<PowerNetworkViewModel.PowerKpi> kpiCards = buildKpiCards(
-                totalInputPerTick, totalOutputPerTick, totalStored, totalCapacity
-        );
-
-        double headroomPercent = totalInputPerTick > 0
-                ? Math.max(0.0, (totalInputPerTick - totalOutputPerTick) * 100.0 / totalInputPerTick)
-                : 0.0;
-        long reservePerTick = Math.max(0, totalInputPerTick - totalOutputPerTick);
-        PowerNetworkViewModel.OverloadInfo overloadInfo = new PowerNetworkViewModel.OverloadInfo(
-                headroomPercent, reservePerTick
-        );
-
-        List<PowerNetworkViewModel.DeviceDebugEntry> debugInputDevices = new ArrayList<>();
-        for (String key : debugInputDeviceKeys) {
-            debugInputDevices.add(buildDeviceWithExt(
-                    key,
-                    debugDeviceBaseMap.get(key),
-                    debugDeviceLegacyExtMap.get(key),
-                    debugDeviceRefMetricMap.get(key),
-                    debugDeviceRefNameMap.get(key)
-            ));
-        }
-
-        List<PowerNetworkViewModel.DeviceDebugEntry> debugOutputDevices = new ArrayList<>();
-        for (String key : debugOutputDeviceKeys) {
-            debugOutputDevices.add(buildDeviceWithExt(
-                    key,
-                    debugDeviceBaseMap.get(key),
-                    debugDeviceLegacyExtMap.get(key),
-                    debugDeviceRefMetricMap.get(key),
-                    debugDeviceRefNameMap.get(key)
-            ));
-        }
-
-        List<PowerNetworkViewModel.ExternalGroup> externalGroups = buildExternalGroups(debugInputDevices, debugOutputDevices);
-
-        PowerNetworkViewModel.DebugSnapshot debugSnapshot = new PowerNetworkViewModel.DebugSnapshot(
-                debugInputRate,
-                debugOutputRate,
-                debugTotalBuffer,
-                debugPlugCount,
-                debugPointCount,
-                debugStorageCount,
-                debugControllerCount,
-                List.copyOf(debugInputDevices),
-                List.copyOf(debugOutputDevices),
-                externalGroups
-        );
-
         return new PowerNetworkViewModel(
-                devices,
-                kpiCards,
-                loadSegments,
-                overloadAlerts,
-                overloadInfo,
-                totalInputPerTick,
-                totalOutputPerTick,
-                totalStored,
-                totalCapacity,
-                totalOutputPerTick,
-                debugSnapshot
+                mapDevices(snapshot.devices()),
+                mapKpis(snapshot.kpiCards()),
+                mapLoadSegments(snapshot.loadSegments()),
+                mapOverloadAlerts(snapshot.overloadAlerts()),
+                mapOverloadInfo(snapshot.overloadInfo()),
+                snapshot.totalInputPerTick(),
+                snapshot.totalOutputPerTick(),
+                snapshot.totalStored(),
+                snapshot.totalCapacity(),
+                snapshot.totalOutputPerTick(),
+                debugSnapshot == null ? PowerNetworkViewModel.DebugSnapshot.empty() : debugSnapshot,
+                mapConsumers(snapshot.consumers())
         );
+    }
+
+    private static List<PowerNetworkViewModel.DeviceEntry> mapDevices(
+            List<PowerSnapshot.DeviceSnapshot> source
+    ) {
+        List<PowerNetworkViewModel.DeviceEntry> result = new ArrayList<>(source.size());
+        for (PowerSnapshot.DeviceSnapshot device : source) {
+            result.add(new PowerNetworkViewModel.DeviceEntry(
+                    device.nodeId(),
+                    device.displayName(),
+                    categoryKey(device.category()),
+                    device.modName(),
+                    device.energyPerTick(),
+                    device.storedEnergy(),
+                    device.maxCapacity(),
+                    device.usageRatio(),
+                    mapAlert(device.alertLevel())
+            ));
+        }
+        return result;
+    }
+
+    private static List<PowerNetworkViewModel.PowerKpi> mapKpis(List<PowerSnapshot.KpiSnapshot> source) {
+        List<PowerNetworkViewModel.PowerKpi> result = new ArrayList<>(source.size());
+        for (PowerSnapshot.KpiSnapshot kpi : source) {
+            result.add(new PowerNetworkViewModel.PowerKpi(
+                    ClientPowerLocalizer.INSTANCE.localizeKey(kpi.labelKey()),
+                    kpi.value(),
+                    mapStatus(kpi.status())
+            ));
+        }
+        return result;
+    }
+
+    private static List<PowerNetworkViewModel.LoadSegment> mapLoadSegments(
+            List<PowerSnapshot.LoadSegmentSnapshot> source
+    ) {
+        List<PowerNetworkViewModel.LoadSegment> result = new ArrayList<>(source.size());
+        for (PowerSnapshot.LoadSegmentSnapshot segment : source) {
+            result.add(new PowerNetworkViewModel.LoadSegment(
+                    categoryKey(segment.category()),
+                    ClientPowerLocalizer.INSTANCE.localizeKey(segment.displayNameKey()),
+                    segment.percentage(),
+                    categoryColor(segment.category())
+            ));
+        }
+        return result;
+    }
+
+    private static List<PowerNetworkViewModel.OverloadAlert> mapOverloadAlerts(
+            List<PowerSnapshot.OverloadAlertSnapshot> source
+    ) {
+        List<PowerNetworkViewModel.OverloadAlert> result = new ArrayList<>(source.size());
+        for (PowerSnapshot.OverloadAlertSnapshot alert : source) {
+            result.add(new PowerNetworkViewModel.OverloadAlert(
+                    alert.nodeId(),
+                    alert.displayName(),
+                    mapAlert(alert.alertLevel()),
+                    alert.throughputLoss(),
+                    ClientPowerLocalizer.INSTANCE.localizeKey(
+                            alert.descriptionKey(), alert.descriptionArgs().toArray())
+            ));
+        }
+        return result;
+    }
+
+    private static PowerNetworkViewModel.OverloadInfo mapOverloadInfo(PowerSnapshot.OverloadInfoSnapshot info) {
+        if (info == null) {
+            return new PowerNetworkViewModel.OverloadInfo(0.0, 0L);
+        }
+        return new PowerNetworkViewModel.OverloadInfo(info.headroomPercent(), info.reservePerTick());
+    }
+
+    private static List<PowerNetworkViewModel.ConsumerEntry> mapConsumers(
+            List<PowerSnapshot.ConsumerSnapshot> source
+    ) {
+        List<PowerNetworkViewModel.ConsumerEntry> result = new ArrayList<>(source.size());
+        for (PowerSnapshot.ConsumerSnapshot consumer : source) {
+            result.add(new PowerNetworkViewModel.ConsumerEntry(
+                    consumer.deviceName(),
+                    consumer.modName(),
+                    consumer.consumptionPerTick(),
+                    consumer.percentage(),
+                    consumer.supplyRatio(),
+                    consumerColor(consumer.paletteIndex()),
+                    consumer.count()
+            ));
+        }
+        return result;
+    }
+
+    // ===== Debug Terminal 专用路径：暂未进入 PowerSnapshot 契约 =====
+
+    private static PowerNetworkViewModel.DebugSnapshot buildDebugSnapshot(ObserverDataPayload payload) {
+        if (payload == null) {
+            return PowerNetworkViewModel.DebugSnapshot.empty();
+        }
+
+        DebugParseState state = new DebugParseState();
+        for (ObserverDataPayload.BindingEntry binding : payload.bindings()) {
+            if (!"FLUX_ENERGY".equals(binding.networkType()) || binding.itemDeltas() == null) {
+                continue;
+            }
+            for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
+                parseDebugItem(binding, item, state);
+            }
+        }
+
+        List<PowerNetworkViewModel.DeviceDebugEntry> inputDevices = buildDebugDevices(state.inputKeys, state);
+        List<PowerNetworkViewModel.DeviceDebugEntry> outputDevices = buildDebugDevices(state.outputKeys, state);
+        return new PowerNetworkViewModel.DebugSnapshot(
+                state.inputRate,
+                state.outputRate,
+                state.totalBuffer,
+                state.plugCount,
+                state.pointCount,
+                state.storageCount,
+                state.controllerCount,
+                inputDevices,
+                outputDevices,
+                buildExternalGroups(inputDevices, outputDevices)
+        );
+    }
+
+    private static void parseDebugItem(
+            ObserverDataPayload.BindingEntry binding,
+            ObserverDataPayload.ItemDeltaEntry item,
+            DebugParseState state
+    ) {
+        switch (item.itemId()) {
+            case "flux.input_per_tick" -> state.inputRate = saturatingAdd(state.inputRate, Math.abs(item.amount()));
+            case "flux.output_per_tick" -> state.outputRate = saturatingAdd(state.outputRate, Math.abs(item.amount()));
+            case "flux.max_energy_storage" -> state.totalBuffer = saturatingAdd(state.totalBuffer, Math.abs(item.amount()));
+            case "flux.plug_count" -> state.plugCount += (int) item.amount();
+            case "flux.point_count" -> state.pointCount += (int) item.amount();
+            case "flux.storage_count" -> state.storageCount += (int) item.amount();
+            case "flux.controller_count" -> state.controllerCount += (int) item.amount();
+            default -> parseDebugDeviceItem(binding, item, state);
+        }
     }
 
     private static void parseDebugDeviceItem(
             ObserverDataPayload.BindingEntry binding,
             ObserverDataPayload.ItemDeltaEntry item,
-            Map<String, DeviceDebugPartial> baseMap,
-            Map<String, long[]> legacyExtMap,
-            Map<String, Map<String, long[]>> refMetricMap,
-            Map<String, Map<String, String>> refNameMap,
-            List<String> inputKeys,
-            List<String> outputKeys
+            DebugParseState state
     ) {
         if (item.itemId() == null || !item.itemId().startsWith("flux.device.")) {
             return;
         }
-
         String suffix = item.itemId().substring("flux.device.".length());
         int dotPos = suffix.indexOf('.');
         if (dotPos < 0) {
             return;
         }
 
-        String idxStr = suffix.substring(0, dotPos);
+        String deviceKey = binding.networkId() + ":" + suffix.substring(0, dotPos);
         String tail = suffix.substring(dotPos + 1);
-        String deviceKey = binding.networkId() + ":" + idxStr;
-
         if ("ext_stored".equals(tail)) {
-            legacyExtMap.computeIfAbsent(deviceKey, k -> new long[2])[0] = item.amount();
+            state.legacyExtMap.computeIfAbsent(deviceKey, k -> new long[2])[0] = item.amount();
             return;
         }
         if ("ext_cap".equals(tail)) {
-            legacyExtMap.computeIfAbsent(deviceKey, k -> new long[2])[1] = item.amount();
+            state.legacyExtMap.computeIfAbsent(deviceKey, k -> new long[2])[1] = item.amount();
+            return;
+        }
+        ExtRefMetricToken extToken = parseExtToken(tail);
+        if (extToken != null) {
+            recordExternalRef(item, deviceKey, extToken, state);
             return;
         }
 
-        ExtRefMetricToken extToken = parseExtToken(tail);
-        if (extToken != null) {
-            Map<String, long[]> metricsByExtId = refMetricMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>());
-            long[] metrics = metricsByExtId.computeIfAbsent(extToken.extId(), k -> new long[2]);
-            if ("stored".equals(extToken.metric())) {
-                metrics[0] = item.amount();
-            } else {
-                metrics[1] = item.amount();
-            }
+        String interfaceKey = deviceKey + ":" + tail;
+        state.baseMap.put(deviceKey, new DeviceDebugPartial(
+                interfaceKey, item.displayName(), tail, Math.round(item.delta()), item.amount()
+        ));
+        if ("plug".equals(tail)) {
+            addKeyOnce(state.inputKeys, deviceKey);
+        } else if ("point".equals(tail)) {
+            addKeyOnce(state.outputKeys, deviceKey);
+        }
+    }
+
+    private static void recordExternalRef(
+            ObserverDataPayload.ItemDeltaEntry item,
+            String deviceKey,
+            ExtRefMetricToken extToken,
+            DebugParseState state
+    ) {
+        Map<String, long[]> metricsByExtId = state.refMetricMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>());
+        long[] metrics = metricsByExtId.computeIfAbsent(extToken.extId(), k -> new long[3]);
+        switch (extToken.metric()) {
+            case "stored" -> metrics[0] = item.amount();
+            case "cap" -> metrics[1] = item.amount();
+            case "maxAccept" -> metrics[2] = item.amount();
+            default -> { }
+        }
+        if ("stored".equals(extToken.metric())) {
             String name = item.displayName() == null || item.displayName().isBlank()
                     ? extToken.extId()
                     : item.displayName();
-            refNameMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>()).put(extToken.extId(), name);
-            return;
+            state.refNameMap.computeIfAbsent(deviceKey, k -> new LinkedHashMap<>()).putIfAbsent(extToken.extId(), name);
+        }
+    }
+
+    private static List<PowerNetworkViewModel.DeviceDebugEntry> buildDebugDevices(
+            List<String> keys,
+            DebugParseState state
+    ) {
+        List<PowerNetworkViewModel.DeviceDebugEntry> result = new ArrayList<>(keys.size());
+        for (String key : keys) {
+            result.add(buildDeviceWithExt(
+                    key,
+                    state.baseMap.get(key),
+                    state.legacyExtMap.get(key),
+                    state.refMetricMap.get(key),
+                    state.refNameMap.get(key)
+            ));
+        }
+        return List.copyOf(result);
+    }
+
+    private static PowerNetworkViewModel.DeviceDebugEntry buildDeviceWithExt(
+            String deviceKey,
+            DeviceDebugPartial base,
+            long[] legacyExt,
+            Map<String, long[]> refMetricByExtId,
+            Map<String, String> refNameByExtId
+    ) {
+        if (base == null) {
+            return new PowerNetworkViewModel.DeviceDebugEntry(deviceKey, "?", "unknown", 0L, 0L, 0L, 0L, List.of());
         }
 
-        String deviceType = tail;
-        String interfaceKey = deviceKey + ":" + deviceType;
-        baseMap.put(deviceKey, new DeviceDebugPartial(
-                interfaceKey,
-                item.displayName(),
-                deviceType,
-                item.delta(),
-                item.amount()
-        ));
-        if ("plug".equals(deviceType)) {
-            addKeyOnce(inputKeys, deviceKey);
-        } else if ("point".equals(deviceType)) {
-            addKeyOnce(outputKeys, deviceKey);
+        List<PowerNetworkViewModel.ExternalRef> refs = new ArrayList<>();
+        long aggregatedStored = 0L;
+        long aggregatedCap = 0L;
+        if (refMetricByExtId != null && !refMetricByExtId.isEmpty()) {
+            List<Map.Entry<String, long[]>> entries = new ArrayList<>(refMetricByExtId.entrySet());
+            entries.sort(Comparator.comparing(Map.Entry::getKey));
+            for (Map.Entry<String, long[]> entry : entries) {
+                String extId = entry.getKey();
+                long[] metrics = entry.getValue();
+                long stored = metrics != null ? metrics[0] : 0L;
+                long cap = metrics != null ? metrics[1] : 0L;
+                long maxAccept = metrics != null && metrics.length > 2 ? metrics[2] : 0L;
+                refs.add(new PowerNetworkViewModel.ExternalRef(
+                        extId, externalName(extId, refNameByExtId), stored, cap, maxAccept
+                ));
+                aggregatedStored = saturatingAdd(aggregatedStored, Math.max(0L, stored));
+                aggregatedCap = saturatingAdd(aggregatedCap, Math.max(0L, cap));
+            }
         }
+        if (refs.isEmpty() && legacyExt != null) {
+            aggregatedStored = Math.max(0L, legacyExt[0]);
+            aggregatedCap = Math.max(0L, legacyExt[1]);
+        }
+        return new PowerNetworkViewModel.DeviceDebugEntry(
+                base.interfaceKey(), base.deviceName(), base.deviceType(), base.transferRate(), base.bufferStored(),
+                aggregatedStored, aggregatedCap, List.copyOf(refs)
+        );
+    }
+
+    private static List<PowerNetworkViewModel.ExternalGroup> buildExternalGroups(
+            List<PowerNetworkViewModel.DeviceDebugEntry> inputDevices,
+            List<PowerNetworkViewModel.DeviceDebugEntry> outputDevices
+    ) {
+        Map<String, ExternalGroupAccumulator> grouped = new LinkedHashMap<>();
+        List<PowerNetworkViewModel.DeviceDebugEntry> all = new ArrayList<>(inputDevices.size() + outputDevices.size());
+        all.addAll(inputDevices);
+        all.addAll(outputDevices);
+        for (PowerNetworkViewModel.DeviceDebugEntry device : all) {
+            for (PowerNetworkViewModel.ExternalRef ref : device.externalRefs()) {
+                if (ref.extId() == null || ref.extId().isBlank()) {
+                    continue;
+                }
+                ExternalGroupAccumulator acc = grouped.computeIfAbsent(ref.extId(), ExternalGroupAccumulator::new);
+                acc.displayName = cleanExternalDisplayName(ref.displayName(), acc.extId);
+                acc.stored = Math.max(acc.stored, Math.max(0L, ref.stored()));
+                acc.capacity = Math.max(acc.capacity, Math.max(0L, ref.capacity()));
+                addKeyOnce(acc.interfaceKeys, device.interfaceKey());
+            }
+        }
+        List<PowerNetworkViewModel.ExternalGroup> result = new ArrayList<>(grouped.size());
+        for (ExternalGroupAccumulator acc : grouped.values()) {
+            result.add(new PowerNetworkViewModel.ExternalGroup(
+                    acc.extId, acc.displayName, acc.stored, acc.capacity, List.copyOf(acc.interfaceKeys)
+            ));
+        }
+        result.sort(Comparator.comparingLong(PowerNetworkViewModel.ExternalGroup::capacity)
+                .reversed().thenComparing(PowerNetworkViewModel.ExternalGroup::displayName));
+        return List.copyOf(result);
     }
 
     private static ExtRefMetricToken parseExtToken(String tail) {
@@ -244,337 +367,84 @@ public final class PowerNetworkViewModelMapper {
         if (split <= 0 || split >= payload.length() - 1) {
             return null;
         }
-        String extId = payload.substring(0, split);
         String metric = payload.substring(split + 1);
-        if (!"stored".equals(metric) && !"cap".equals(metric)) {
+        if (!"stored".equals(metric) && !"cap".equals(metric) && !"maxAccept".equals(metric)) {
             return null;
         }
-        return new ExtRefMetricToken(extId, metric);
+        return new ExtRefMetricToken(payload.substring(0, split), metric);
     }
 
     private static void addKeyOnce(List<String> keys, String key) {
-        if (key == null || key.isBlank()) {
-            return;
-        }
-        if (!keys.contains(key)) {
+        if (key != null && !key.isBlank() && !keys.contains(key)) {
             keys.add(key);
         }
     }
 
-    private static PowerNetworkViewModel.DeviceDebugEntry buildDeviceWithExt(
-            String deviceKey,
-            DeviceDebugPartial base,
-            long[] legacyExt,
-            Map<String, long[]> refMetricByExtId,
-            Map<String, String> refNameByExtId
-    ) {
-        if (base == null) {
-            return new PowerNetworkViewModel.DeviceDebugEntry(
-                    deviceKey,
-                    "?",
-                    "unknown",
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    List.of()
-            );
+    private static String externalName(String extId, Map<String, String> names) {
+        if (names == null) {
+            return extId;
         }
-
-        List<PowerNetworkViewModel.ExternalRef> refs = new ArrayList<>();
-        long aggregatedStored = 0L;
-        long aggregatedCap = 0L;
-
-        if (refMetricByExtId != null && !refMetricByExtId.isEmpty()) {
-            List<Map.Entry<String, long[]>> entries = new ArrayList<>(refMetricByExtId.entrySet());
-            entries.sort(Comparator.comparing(Map.Entry::getKey));
-            for (Map.Entry<String, long[]> entry : entries) {
-                String extId = entry.getKey();
-                long[] metrics = entry.getValue();
-                long stored = metrics != null ? metrics[0] : 0L;
-                long cap = metrics != null ? metrics[1] : 0L;
-                String name = extId;
-                if (refNameByExtId != null && refNameByExtId.containsKey(extId)) {
-                    String n = refNameByExtId.get(extId);
-                    if (n != null && !n.isBlank()) {
-                        name = n;
-                    }
-                }
-                refs.add(new PowerNetworkViewModel.ExternalRef(extId, name, stored, cap));
-                aggregatedStored = saturatingAdd(aggregatedStored, Math.max(0L, stored));
-                aggregatedCap = saturatingAdd(aggregatedCap, Math.max(0L, cap));
-            }
-        }
-
-        if (refs.isEmpty() && legacyExt != null) {
-            aggregatedStored = Math.max(0L, legacyExt[0]);
-            aggregatedCap = Math.max(0L, legacyExt[1]);
-        }
-
-        return new PowerNetworkViewModel.DeviceDebugEntry(
-                base.interfaceKey(),
-                base.deviceName(),
-                base.deviceType(),
-                base.transferRate(),
-                base.bufferStored(),
-                aggregatedStored,
-                aggregatedCap,
-                List.copyOf(refs)
-        );
+        String name = names.get(extId);
+        return name == null || name.isBlank() ? extId : name;
     }
 
-    private static List<PowerNetworkViewModel.ExternalGroup> buildExternalGroups(
-            List<PowerNetworkViewModel.DeviceDebugEntry> inputDevices,
-            List<PowerNetworkViewModel.DeviceDebugEntry> outputDevices
-    ) {
-        Map<String, ExternalGroupAccumulator> grouped = new LinkedHashMap<>();
-
-        List<PowerNetworkViewModel.DeviceDebugEntry> all = new ArrayList<>(inputDevices.size() + outputDevices.size());
-        all.addAll(inputDevices);
-        all.addAll(outputDevices);
-
-        for (PowerNetworkViewModel.DeviceDebugEntry device : all) {
-            if (device.externalRefs() == null || device.externalRefs().isEmpty()) {
-                continue;
-            }
-            for (PowerNetworkViewModel.ExternalRef ref : device.externalRefs()) {
-                if (ref.extId() == null || ref.extId().isBlank()) {
-                    continue;
-                }
-                ExternalGroupAccumulator acc = grouped.computeIfAbsent(
-                        ref.extId(),
-                        k -> new ExternalGroupAccumulator(ref.extId())
-                );
-                acc.displayName = (ref.displayName() == null || ref.displayName().isBlank())
-                        ? acc.displayName
-                        : ref.displayName();
-                acc.stored = Math.max(acc.stored, Math.max(0L, ref.stored()));
-                acc.capacity = Math.max(acc.capacity, Math.max(0L, ref.capacity()));
-                if (device.interfaceKey() != null && !device.interfaceKey().isBlank()) {
-                    acc.interfaceKeys.add(device.interfaceKey());
-                }
-            }
+    private static String cleanExternalDisplayName(String rawDisplay, String fallback) {
+        if (rawDisplay == null || rawDisplay.isBlank()) {
+            return fallback;
         }
-
-        List<PowerNetworkViewModel.ExternalGroup> result = new ArrayList<>();
-        for (ExternalGroupAccumulator acc : grouped.values()) {
-            String name = (acc.displayName == null || acc.displayName.isBlank()) ? acc.extId : acc.displayName;
-            result.add(new PowerNetworkViewModel.ExternalGroup(
-                    acc.extId,
-                    name,
-                    acc.stored,
-                    acc.capacity,
-                    List.copyOf(acc.interfaceKeys)
-            ));
-        }
-        result.sort(Comparator
-                .comparingLong(PowerNetworkViewModel.ExternalGroup::capacity)
-                .reversed()
-                .thenComparing(PowerNetworkViewModel.ExternalGroup::displayName));
-        return List.copyOf(result);
+        int pipeIdx = rawDisplay.indexOf('|');
+        return pipeIdx >= 0 ? rawDisplay.substring(pipeIdx + 1) : rawDisplay;
     }
 
-    private static long computeEnergyPerTick(ObserverDataPayload.BindingEntry binding, boolean isInput) {
-        if (binding.itemDeltas() != null) {
-            for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
-                String key = isInput ? "flux.input_per_tick" : "flux.output_per_tick";
-                if (key.equals(item.itemId())) {
-                    return Math.abs(item.amount());
-                }
-            }
-            for (ObserverDataPayload.ItemDeltaEntry item : binding.itemDeltas()) {
-                if ("flux.energy_stored".equals(item.itemId())) {
-                    if (isInput && item.delta() > 0) {
-                        return item.delta();
-                    }
-                    if (!isInput && item.delta() < 0) {
-                        return Math.abs(item.delta());
-                    }
-                }
-            }
+    private static PowerNetworkViewModel.AlertLevel mapAlert(PowerSnapshot.AlertLevel alert) {
+        if (alert == null) {
+            return PowerNetworkViewModel.AlertLevel.NORMAL;
         }
-        return isInput ? binding.totalProduced() : binding.totalConsumed();
+        return switch (alert) {
+            case NORMAL -> PowerNetworkViewModel.AlertLevel.NORMAL;
+            case WARNING -> PowerNetworkViewModel.AlertLevel.WARNING;
+            case CRITICAL -> PowerNetworkViewModel.AlertLevel.CRITICAL;
+        };
     }
 
-    private static String inferCategory(String targetBlockId) {
-        if (targetBlockId == null || targetBlockId.isBlank()) {
+    private static OverviewViewModel.Status mapStatus(OverviewSnapshot.KpiStatus status) {
+        if (status == null) {
+            return OverviewViewModel.Status.NEUTRAL;
+        }
+        return switch (status) {
+            case POSITIVE -> OverviewViewModel.Status.POSITIVE;
+            case WARNING -> OverviewViewModel.Status.WARNING;
+            case NEGATIVE -> OverviewViewModel.Status.NEGATIVE;
+            case NEUTRAL -> OverviewViewModel.Status.NEUTRAL;
+        };
+    }
+
+    private static String categoryKey(PowerSnapshot.LoadCategory category) {
+        if (category == null) {
             return "other";
         }
-        String lower = targetBlockId.toLowerCase(Locale.ROOT);
-        if (lower.contains("miner") || lower.contains("quarry") || lower.contains("drill")
-                || lower.contains("pump") || lower.contains("excavat")) {
-            return "mining";
-        }
-        if (lower.contains("assembl") || lower.contains("craft") || lower.contains("inscriber")
-                || lower.contains("press") || lower.contains("furnace") || lower.contains("smelter")
-                || lower.contains("grinder") || lower.contains("crusher") || lower.contains("machine")) {
-            return "assembly";
-        }
-        if (lower.contains("bus") || lower.contains("interface") || lower.contains("import")
-                || lower.contains("export") || lower.contains("pipe") || lower.contains("duct")
-                || lower.contains("conveyor") || lower.contains("router")) {
-            return "logistics";
-        }
-        return "other";
-    }
-
-    private static PowerNetworkViewModel.AlertLevel computeAlertLevel(
-            double usageRatio, long inputPerTick, long outputPerTick
-    ) {
-        if (usageRatio <= 0.05 && outputPerTick > 0) {
-            return PowerNetworkViewModel.AlertLevel.CRITICAL;
-        }
-        if (usageRatio >= OVERLOAD_CRITICAL_THRESHOLD) {
-            return PowerNetworkViewModel.AlertLevel.CRITICAL;
-        }
-        if (usageRatio >= OVERLOAD_WARNING_THRESHOLD) {
-            return PowerNetworkViewModel.AlertLevel.WARNING;
-        }
-        if (outputPerTick > 0 && inputPerTick > 0 && outputPerTick > inputPerTick * 2) {
-            return PowerNetworkViewModel.AlertLevel.WARNING;
-        }
-        return PowerNetworkViewModel.AlertLevel.NORMAL;
-    }
-
-    private static List<PowerNetworkViewModel.LoadSegment> buildLoadSegments(
-            List<PowerNetworkViewModel.DeviceEntry> devices
-    ) {
-        if (devices.isEmpty()) {
-            return List.of();
-        }
-
-        Map<String, Long> categoryTotals = new LinkedHashMap<>();
-        long grandTotal = 0L;
-        for (PowerNetworkViewModel.DeviceEntry device : devices) {
-            String cat = device.category() == null ? "other" : device.category();
-            categoryTotals.merge(cat, Math.max(0, device.energyPerTick()), Long::sum);
-            grandTotal += Math.max(0, device.energyPerTick());
-        }
-        if (grandTotal <= 0L) {
-            return List.of();
-        }
-
-        List<PowerNetworkViewModel.LoadSegment> segments = new ArrayList<>();
-        for (Map.Entry<String, Long> entry : categoryTotals.entrySet()) {
-            double pct = (entry.getValue() * 100.0) / grandTotal;
-            if (pct < 0.5) {
-                continue;
-            }
-            String displayName = categoryDisplayName(entry.getKey());
-            int color = categoryColor(entry.getKey());
-            segments.add(new PowerNetworkViewModel.LoadSegment(entry.getKey(), displayName, pct, color));
-        }
-        segments.sort(Comparator.comparingDouble(PowerNetworkViewModel.LoadSegment::percentage).reversed());
-        return segments;
-    }
-
-    private static List<PowerNetworkViewModel.OverloadAlert> buildOverloadAlerts(
-            List<PowerNetworkViewModel.DeviceEntry> devices
-    ) {
-        List<PowerNetworkViewModel.OverloadAlert> alerts = new ArrayList<>();
-        for (PowerNetworkViewModel.DeviceEntry device : devices) {
-            if (device.alertLevel() == PowerNetworkViewModel.AlertLevel.NORMAL) {
-                continue;
-            }
-            double throughputLoss = 0.0;
-            if (device.usageRatio() >= OVERLOAD_CRITICAL_THRESHOLD) {
-                throughputLoss = (device.usageRatio() - OVERLOAD_CRITICAL_THRESHOLD)
-                        / (1.0 - OVERLOAD_CRITICAL_THRESHOLD) * 50.0;
-                throughputLoss = Math.min(100.0, Math.max(0.0, throughputLoss));
-            } else if (device.storedEnergy() <= 0 && device.energyPerTick() > 0) {
-                throughputLoss = 100.0;
-            }
-
-            String desc = Component.translatable(
-                    "screen.resourceobserver.power.alert.description",
-                    device.displayName(),
-                    String.format(Locale.ROOT, "%.0f%%", throughputLoss)
-            ).getString();
-
-            alerts.add(new PowerNetworkViewModel.OverloadAlert(
-                    device.nodeId(),
-                    device.displayName(),
-                    device.alertLevel(),
-                    throughputLoss,
-                    desc
-            ));
-        }
-        return alerts;
-    }
-
-    private static List<PowerNetworkViewModel.PowerKpi> buildKpiCards(
-            long totalInput,
-            long totalOutput,
-            long totalStored,
-            long totalCapacity
-    ) {
-        OverviewViewModel.Status inputStatus = totalInput > 0
-                ? OverviewViewModel.Status.POSITIVE
-                : OverviewViewModel.Status.NEUTRAL;
-
-        OverviewViewModel.Status outputStatus = totalOutput > totalInput
-                ? OverviewViewModel.Status.WARNING
-                : (totalOutput > 0 ? OverviewViewModel.Status.POSITIVE : OverviewViewModel.Status.NEUTRAL);
-
-        double storedRatio = totalCapacity > 0 ? (double) totalStored / totalCapacity : 0.0;
-        OverviewViewModel.Status storedStatus;
-        if (storedRatio <= 0.1) {
-            storedStatus = OverviewViewModel.Status.NEGATIVE;
-        } else if (storedRatio >= 0.9) {
-            storedStatus = OverviewViewModel.Status.WARNING;
-        } else {
-            storedStatus = OverviewViewModel.Status.POSITIVE;
-        }
-
-        return List.of(
-                new PowerNetworkViewModel.PowerKpi(
-                        "screen.resourceobserver.power.kpi.total_input",
-                        formatCompact(totalInput) + " FE/t",
-                        inputStatus
-                ),
-                new PowerNetworkViewModel.PowerKpi(
-                        "screen.resourceobserver.power.kpi.total_output",
-                        formatCompact(totalOutput) + " FE/t",
-                        outputStatus
-                ),
-                new PowerNetworkViewModel.PowerKpi(
-                        "screen.resourceobserver.power.kpi.stored_energy",
-                        formatCompact(totalStored) + " / " + formatCompact(totalCapacity) + " FE",
-                        storedStatus
-                )
-        );
-    }
-
-    private static String categoryDisplayName(String category) {
-        return switch (category.toLowerCase(Locale.ROOT)) {
-            case "mining" -> Component.translatable("screen.resourceobserver.power.category.mining").getString();
-            case "assembly" -> Component.translatable("screen.resourceobserver.power.category.assembly").getString();
-            case "logistics" -> Component.translatable("screen.resourceobserver.power.category.logistics").getString();
-            default -> Component.translatable("screen.resourceobserver.power.category.other").getString();
+        return switch (category) {
+            case MINING -> "mining";
+            case ASSEMBLY -> "assembly";
+            case LOGISTICS -> "logistics";
+            case OTHER -> "other";
         };
     }
 
-    private static int categoryColor(String category) {
-        return switch (category.toLowerCase(Locale.ROOT)) {
-            case "mining" -> UiThemeTokens.CYAN;
-            case "assembly" -> UiThemeTokens.AMBER;
-            case "logistics" -> UiThemeTokens.EMERALD;
-            default -> UiThemeTokens.BLUE;
+    private static int categoryColor(PowerSnapshot.LoadCategory category) {
+        if (category == null) {
+            return UiThemeTokens.BLUE;
+        }
+        return switch (category) {
+            case MINING -> UiThemeTokens.CYAN;
+            case ASSEMBLY -> UiThemeTokens.AMBER;
+            case LOGISTICS -> UiThemeTokens.EMERALD;
+            case OTHER -> UiThemeTokens.BLUE;
         };
     }
 
-    private static String formatCompact(long value) {
-        long abs = Math.abs(value);
-        if (abs >= 1_000_000_000L) {
-            return String.format(Locale.ROOT, "%.1fB", value / 1_000_000_000.0);
-        }
-        if (abs >= 1_000_000L) {
-            return String.format(Locale.ROOT, "%.1fM", value / 1_000_000.0);
-        }
-        if (abs >= 1_000L) {
-            return String.format(Locale.ROOT, "%.1fK", value / 1_000.0);
-        }
-        return Long.toString(value);
+    private static int consumerColor(int paletteIndex) {
+        return CONSUMER_COLORS[Math.floorMod(paletteIndex, CONSUMER_COLORS.length)];
     }
 
     private static long saturatingAdd(long left, long right) {
@@ -599,12 +469,28 @@ public final class PowerNetworkViewModelMapper {
     private record ExtRefMetricToken(String extId, String metric) {
     }
 
+    private static final class DebugParseState {
+        private long inputRate;
+        private long outputRate;
+        private long totalBuffer;
+        private int plugCount;
+        private int pointCount;
+        private int storageCount;
+        private int controllerCount;
+        private final Map<String, DeviceDebugPartial> baseMap = new LinkedHashMap<>();
+        private final Map<String, long[]> legacyExtMap = new LinkedHashMap<>();
+        private final Map<String, Map<String, long[]>> refMetricMap = new LinkedHashMap<>();
+        private final Map<String, Map<String, String>> refNameMap = new LinkedHashMap<>();
+        private final List<String> inputKeys = new ArrayList<>();
+        private final List<String> outputKeys = new ArrayList<>();
+    }
+
     private static final class ExternalGroupAccumulator {
         private final String extId;
         private String displayName;
         private long stored;
         private long capacity;
-        private final LinkedHashSet<String> interfaceKeys = new LinkedHashSet<>();
+        private final List<String> interfaceKeys = new ArrayList<>();
 
         private ExternalGroupAccumulator(String extId) {
             this.extId = extId;

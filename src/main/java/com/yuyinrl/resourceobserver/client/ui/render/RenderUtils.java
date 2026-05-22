@@ -231,7 +231,7 @@ public final class RenderUtils {
     }
 
     /** 从物品 ID 字符串获取 ItemStack，无效 ID 返回空栈 */
-    private static ItemStack itemStackFromItemId(String itemId) {
+    public static ItemStack itemStackFromItemId(String itemId) {
         if (itemId == null || itemId.isBlank()) {
             return ItemStack.EMPTY;
         }
@@ -244,6 +244,22 @@ public final class RenderUtils {
             return new ItemStack(item);
         } catch (Exception ignored) {
             return ItemStack.EMPTY;
+        }
+    }
+
+    /**
+     * 从 "fluid:minecraft:water" 形式的 itemId 创建 FluidStack。
+     * 非流体 ID 或解析失败返回 {@code FluidStack.EMPTY}。
+     */
+    public static FluidStack fluidStackFromItemId(String itemId) {
+        if (itemId == null || !itemId.startsWith(FLUID_PREFIX)) return FluidStack.EMPTY;
+        try {
+            ResourceLocation fluidId = ResourceLocation.parse(itemId.substring(FLUID_PREFIX.length()));
+            Fluid fluid = BuiltInRegistries.FLUID.getOptional(fluidId).orElse(null);
+            if (fluid == null || fluid == Fluids.EMPTY) return FluidStack.EMPTY;
+            return new FluidStack(fluid, 1000);
+        } catch (Exception ignored) {
+            return FluidStack.EMPTY;
         }
     }
 }

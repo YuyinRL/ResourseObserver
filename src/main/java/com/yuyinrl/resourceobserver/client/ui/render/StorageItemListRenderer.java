@@ -157,8 +157,8 @@ public final class StorageItemListRenderer {
                     }
                 }
 
-                // Item icon
-                ResourceLocation fallbackSprite = TerminalSprites.TABLE_ITEM;
+                // Item icon (resolve custom sprite, matching Overview's TableRenderer pattern)
+                ResourceLocation fallbackSprite = TerminalSprites.resolve(item.iconSprite(), TerminalSprites.TABLE_ITEM);
                 RenderUtils.drawItemIconOrSprite(gfx, item.itemId(), colIconX, y + 2, ICON_SIZE, fallbackSprite);
 
                 // Item name
@@ -173,7 +173,7 @@ public final class StorageItemListRenderer {
 
                 // Burn Rate (/m)
                 String burnText = item.burnRatePerMin() > 0
-                        ? "-" + formatCompact(item.burnRatePerMin()) + "/m"
+                        ? "-" + formatCompact(Math.round(item.burnRatePerMin())) + "/m"
                         : "0/m";
                 gfx.drawString(font, burnText, colBurnX, y + 3, UiThemeTokens.TEXT);
 

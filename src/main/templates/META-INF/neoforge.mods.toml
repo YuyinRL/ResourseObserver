@@ -97,6 +97,29 @@ registration and network target binding.
     ordering="NONE"
     side="BOTH"
 
+[[dependencies.${mod_id}]]
+    modId="modernui"
+    type="required"
+    versionRange="[${modernui_mc_version},)"
+    ordering="NONE"
+    side="CLIENT"
+
+[[dependencies.${mod_id}]]
+    modId="brandonscore"
+    type="optional"
+    reason="Enables long-precision energy reading for Draconic Evolution Energy Core"
+    versionRange="[3.0.0,)"
+    ordering="AFTER"
+    side="BOTH"
+
+[[dependencies.${mod_id}]]
+    modId="jecharacters"
+    type="optional"
+    reason="Enables advanced Chinese pinyin search (full pinyin, fuzzy tones) in search bar"
+    versionRange="[4.5.0,)"
+    ordering="AFTER"
+    side="CLIENT"
+
 # Features are specific properties of the game environment, that you may want to declare you require. This example declares
 # that your mod requires GL version 3.2 or higher. Other features will be added. They are side aware so declaring this won't
 # stop your mod loading on the server for example.

@@ -32,7 +32,7 @@ public record ObserverRefreshRequestPayload(
                     BlockPos observerPos = buf.readBlockPos();
                     ChartWindow chartWindow = ChartWindow.fromId(buf.readVarInt());
                     ChartScope chartScope = ChartScope.fromId(buf.readVarInt());
-                    String scopeItemId = buf.readBoolean() ? buf.readUtf(256) : "";
+                    String scopeItemId = PayloadCodecUtils.readOptionalString(buf, 256);
                     return new ObserverRefreshRequestPayload(observerPos, chartWindow, chartScope, scopeItemId);
                 }
 
@@ -41,11 +41,7 @@ public record ObserverRefreshRequestPayload(
                     buf.writeBlockPos(payload.observerPos());
                     buf.writeVarInt(payload.chartWindow().id());
                     buf.writeVarInt(payload.chartScope().id());
-                    boolean hasScope = payload.scopeItemId() != null && !payload.scopeItemId().isBlank();
-                    buf.writeBoolean(hasScope);
-                    if (hasScope) {
-                        buf.writeUtf(payload.scopeItemId(), 256);
-                    }
+                    PayloadCodecUtils.writeOptionalString(buf, payload.scopeItemId(), 256);
                 }
             };
 

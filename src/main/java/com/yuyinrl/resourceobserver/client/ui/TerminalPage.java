@@ -7,7 +7,8 @@ package com.yuyinrl.resourceobserver.client.ui;
 public enum TerminalPage {
     OVERVIEW("screen.resourceobserver.storage.tab.overview"),
     STORAGE_NETWORK("screen.resourceobserver.storage.tab.storage_network"),
-    POWER_NETWORK("screen.resourceobserver.storage.tab.power_network");
+    POWER_NETWORK("screen.resourceobserver.storage.tab.power_network"),
+    DEV_COMPONENTS("screen.resourceobserver.storage.tab.dev");
 
     private final String translationKey;
 
@@ -24,7 +25,8 @@ public enum TerminalPage {
         return switch (this) {
             case OVERVIEW -> STORAGE_NETWORK;
             case STORAGE_NETWORK -> POWER_NETWORK;
-            case POWER_NETWORK -> OVERVIEW;
+            case POWER_NETWORK -> DEV_COMPONENTS;
+            case DEV_COMPONENTS -> OVERVIEW;
         };
     }
 }

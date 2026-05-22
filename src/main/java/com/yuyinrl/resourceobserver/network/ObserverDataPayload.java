@@ -59,7 +59,8 @@ public record ObserverDataPayload(
         int watchlistLimit,
         List<String> watchlistItemIds,
         List<GroupEntry> groups,
-        List<BindingEntry> bindings
+        List<BindingEntry> bindings,
+        List<CraftingBindingData> craftingBindings
 ) implements CustomPacketPayload {
     private static final int MAX_DEBUG_INFO_UTF = 2048;
 
@@ -158,32 +159,33 @@ public record ObserverDataPayload(
         }
     }
 
+    /**
+     * KPI 时间窗口统计 —— 包含服务端预计算的每分钟速率（items/min 或 bytes/min）。
+     * <p>
+     * 速率公式（服务端计算）：rate = (区间内总增量 ÷ (bucketCount × bucketTicks)) × 1200
+     * 其中 1200 ticks = 1 分钟（20 ticks/s × 60s）。
+     * <p>
+     * recent = 最近 1/4 窗口的速率；previous = 倒数第二个 1/4 窗口的速率。
+     * trendAvailable = 两个区间都有完整数据时为 true。
+     */
     public record KpiWindowStats(
-            long itemProducedRecent,
-            long itemConsumedRecent,
-            long itemProducedPrevious,
-            long itemConsumedPrevious,
-            long fluidProducedRecent,
-            long fluidConsumedRecent,
-            long fluidProducedPrevious,
-            long fluidConsumedPrevious,
-            int recentBucketCount,
-            int previousBucketCount,
+            double itemProducedRecentRate,
+            double itemConsumedRecentRate,
+            double itemProducedPreviousRate,
+            double itemConsumedPreviousRate,
+            double fluidProducedRecentRate,
+            double fluidConsumedRecentRate,
+            double fluidProducedPreviousRate,
+            double fluidConsumedPreviousRate,
+            boolean recentAvailable,
+            boolean previousAvailable,
             boolean trendAvailable
     ) {
         public static KpiWindowStats unavailable() {
             return new KpiWindowStats(
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0L,
-                    0,
-                    0,
-                    false
+                    0.0d, 0.0d, 0.0d, 0.0d,
+                    0.0d, 0.0d, 0.0d, 0.0d,
+                    false, false, false
             );
         }
     }
@@ -237,31 +239,91 @@ public record ObserverDataPayload(
             String groupKey,
             String iconSprite,
             long amount,
-            long delta,
-            long productionRate,
-            long consumptionRate
+            double delta,
+            double productionRate,
+            double consumptionRate
     ) {
     }
 
     /**
      * 图表数据点 —— 一个时间桶的聚合数据。
      * @param slotIndex   桶索引（X 轴位置）
+     * @param bucket      服务端绝对 bucket 编号，用于 Web 侧精确对齐时间轴
      * @param production  该桶内的生产总量
      * @param consumption 该桶内的消耗总量
      * @param net         净变化量（production - consumption）
      * @param stock       该桶的库存快照
      * @param hasFlow     是否有流量数据（用于区分"无数据"和"数据为0"）
      * @param hasStock    是否有库存数据
+     * @param sampleCount  该桶内实际采样次数，用于 Web 侧按真实采样时长换算速率
      */
     public record ChartPoint(
             int slotIndex,
+            long bucket,
             double production,
             double consumption,
             double net,
             double stock,
             boolean hasFlow,
-            boolean hasStock
+            boolean hasStock,
+            int sampleCount
     ) {
+    }
+
+    /**
+     * 合成数据 —— 单个 AE2_ITEMS 绑定网络的合成信息快照。
+     *
+     * @param networkId  AE2 网络 ID（与 BindingEntry.networkId 对应）
+     * @param jobs       当前所有 CPU 的任务状态
+     * @param craftables 可合成物品列表（已在服务端排序，最多 256 条）
+     * @param storage    合成存储容量汇总
+     */
+    public record CraftingBindingData(
+            String networkId,
+            List<CraftingJobSnapshot> jobs,
+            List<CraftableSnapshot> craftables,
+            CraftingStorageSnapshot storage
+    ) {
+        public static CraftingBindingData empty(String networkId) {
+            return new CraftingBindingData(networkId, List.of(), List.of(),
+                    CraftingStorageSnapshot.empty());
+        }
+    }
+
+    /**
+     * 合成任务快照。
+     */
+    public record CraftingJobSnapshot(
+            String cpuName,
+            String outputItemId,
+            String outputDisplayName,
+            long totalAmount,
+            long remainingAmount,
+            boolean busy,
+            String jobId,
+            long storageBytes,
+            int coProcessors,
+            double progressFraction,
+            long elapsedMillis,
+            String treeId
+    ) {
+    }
+
+    /** 可合成物品快照。 */
+    public record CraftableSnapshot(String itemId, String displayName) {
+    }
+
+    /** 合成存储容量汇总快照。 */
+    public record CraftingStorageSnapshot(
+            int cpuCount,
+            int busyCpuCount,
+            long totalStorageBytes,
+            int totalCoProcessors,
+            boolean reliable
+    ) {
+        public static CraftingStorageSnapshot empty() {
+            return new CraftingStorageSnapshot(0, 0, 0L, 0, true);
+        }
     }
 
     /** 数据包类型标识 */
@@ -283,7 +345,7 @@ public record ObserverDataPayload(
                     boolean debugPreferred = buf.readBoolean();
                     ChartWindow chartWindow = ChartWindow.fromId(buf.readVarInt());
                     ChartScope chartScope = ChartScope.fromId(buf.readVarInt());
-                    String chartScopeItemId = buf.readBoolean() ? buf.readUtf(256) : "";
+                    String chartScopeItemId = PayloadCodecUtils.readOptionalString(buf, 256);
                     List<ChartPoint> chartSeries = readChartSeries(buf);
                     List<ChartPoint> energyChartSeries = readChartSeries(buf);
                     String tableGroupFilterKey = buf.readUtf(64);
@@ -312,6 +374,7 @@ public record ObserverDataPayload(
                                 buf.readUtf(MAX_DEBUG_INFO_UTF)
                         ));
                     }
+                    List<CraftingBindingData> craftingBindings = readCraftingBindings(buf);
                     return new ObserverDataPayload(
                             pos,
                             bound,
@@ -328,7 +391,8 @@ public record ObserverDataPayload(
                             watchlistLimit,
                             watchlistItemIds,
                             groups,
-                            entries
+                            entries,
+                            craftingBindings
                     );
                 }
 
@@ -340,11 +404,7 @@ public record ObserverDataPayload(
                     buf.writeBoolean(payload.debugPreferred);
                     buf.writeVarInt(payload.chartWindow.id());
                     buf.writeVarInt(payload.chartScope.id());
-                    boolean hasScopeItem = payload.chartScopeItemId != null && !payload.chartScopeItemId.isBlank();
-                    buf.writeBoolean(hasScopeItem);
-                    if (hasScopeItem) {
-                        buf.writeUtf(payload.chartScopeItemId, 256);
-                    }
+                    PayloadCodecUtils.writeOptionalString(buf, payload.chartScopeItemId, 256);
                     writeChartSeries(buf, payload.chartSeries);
                     writeChartSeries(buf, payload.energyChartSeries);
                     buf.writeUtf(payload.tableGroupFilterKey == null ? "" : payload.tableGroupFilterKey, 64);
@@ -368,20 +428,12 @@ public record ObserverDataPayload(
                         buf.writeLong(entry.totalConsumed);
                         writeKpiWindowStats(buf, entry.kpiWindowStats());
                         writeItemDeltas(buf, entry.itemDeltas());
-                        buf.writeUtf(clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
+                        buf.writeUtf(PayloadCodecUtils.clampUtf(entry.debugInfo(), MAX_DEBUG_INFO_UTF), MAX_DEBUG_INFO_UTF);
                     }
+                    writeCraftingBindings(buf, payload.craftingBindings);
                 }
 
-                /** 截断 UTF 字符串至指定最大长度，防止超长调试信息导致数据包溢出 */
-                private static String clampUtf(String text, int maxLength) {
-                    if (text == null || text.isBlank()) {
-                        return "";
-                    }
-                    if (text.length() <= maxLength) {
-                        return text;
-                    }
-                    return text.substring(0, maxLength);
-                }
+
 
                 /** 反序列化存储单元容量指标（12 个 long + 1 个字符串 + 2 个布尔值） */
                 private static CellCapacityMetrics readCellCapacityMetrics(FriendlyByteBuf buf) {
@@ -438,32 +490,32 @@ public record ObserverDataPayload(
 
                 private static KpiWindowStats readKpiWindowStats(FriendlyByteBuf buf) {
                     return new KpiWindowStats(
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readLong(),
-                            buf.readVarInt(),
-                            buf.readVarInt(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readDouble(),
+                            buf.readBoolean(),
+                            buf.readBoolean(),
                             buf.readBoolean()
                     );
                 }
 
                 private static void writeKpiWindowStats(FriendlyByteBuf buf, KpiWindowStats stats) {
                     KpiWindowStats safeStats = stats == null ? KpiWindowStats.unavailable() : stats;
-                    buf.writeLong(safeStats.itemProducedRecent());
-                    buf.writeLong(safeStats.itemConsumedRecent());
-                    buf.writeLong(safeStats.itemProducedPrevious());
-                    buf.writeLong(safeStats.itemConsumedPrevious());
-                    buf.writeLong(safeStats.fluidProducedRecent());
-                    buf.writeLong(safeStats.fluidConsumedRecent());
-                    buf.writeLong(safeStats.fluidProducedPrevious());
-                    buf.writeLong(safeStats.fluidConsumedPrevious());
-                    buf.writeVarInt(Math.max(0, safeStats.recentBucketCount()));
-                    buf.writeVarInt(Math.max(0, safeStats.previousBucketCount()));
+                    buf.writeDouble(safeStats.itemProducedRecentRate());
+                    buf.writeDouble(safeStats.itemConsumedRecentRate());
+                    buf.writeDouble(safeStats.itemProducedPreviousRate());
+                    buf.writeDouble(safeStats.itemConsumedPreviousRate());
+                    buf.writeDouble(safeStats.fluidProducedRecentRate());
+                    buf.writeDouble(safeStats.fluidConsumedRecentRate());
+                    buf.writeDouble(safeStats.fluidProducedPreviousRate());
+                    buf.writeDouble(safeStats.fluidConsumedPreviousRate());
+                    buf.writeBoolean(safeStats.recentAvailable());
+                    buf.writeBoolean(safeStats.previousAvailable());
                     buf.writeBoolean(safeStats.trendAvailable());
                 }
 
@@ -479,9 +531,9 @@ public record ObserverDataPayload(
                                 buf.readUtf(128),
                                 buf.readUtf(256),
                                 buf.readLong(),
-                                buf.readLong(),
-                                buf.readLong(),
-                                buf.readLong()
+                                buf.readDouble(),
+                                buf.readDouble(),
+                                buf.readDouble()
                         ));
                     }
                     return result;
@@ -498,9 +550,9 @@ public record ObserverDataPayload(
                         buf.writeUtf(itemDelta.groupKey(), 128);
                         buf.writeUtf(itemDelta.iconSprite(), 256);
                         buf.writeLong(itemDelta.amount());
-                        buf.writeLong(itemDelta.delta());
-                        buf.writeLong(itemDelta.productionRate());
-                        buf.writeLong(itemDelta.consumptionRate());
+                        buf.writeDouble(itemDelta.delta());
+                        buf.writeDouble(itemDelta.productionRate());
+                        buf.writeDouble(itemDelta.consumptionRate());
                     }
                 }
 
@@ -511,12 +563,14 @@ public record ObserverDataPayload(
                     for (int i = 0; i < count; i++) {
                         points.add(new ChartPoint(
                                 buf.readVarInt(),
+                                buf.readLong(),
                                 buf.readDouble(),
                                 buf.readDouble(),
                                 buf.readDouble(),
                                 buf.readDouble(),
                                 buf.readBoolean(),
-                                buf.readBoolean()
+                                buf.readBoolean(),
+                                buf.readVarInt()
                         ));
                     }
                     return points;
@@ -527,12 +581,14 @@ public record ObserverDataPayload(
                     buf.writeVarInt(chartSeries.size());
                     for (ChartPoint point : chartSeries) {
                         buf.writeVarInt(point.slotIndex());
+                        buf.writeLong(point.bucket());
                         buf.writeDouble(point.production());
                         buf.writeDouble(point.consumption());
                         buf.writeDouble(point.net());
                         buf.writeDouble(point.stock());
                         buf.writeBoolean(point.hasFlow());
                         buf.writeBoolean(point.hasStock());
+                        buf.writeVarInt(point.sampleCount());
                     }
                 }
 
@@ -576,6 +632,92 @@ public record ObserverDataPayload(
                         buf.writeUtf(group.displayName(), 128);
                         buf.writeBoolean(group.systemGroup());
                     }
+                }
+
+                /** 反序列化合成数据列表 */
+                private static List<CraftingBindingData> readCraftingBindings(FriendlyByteBuf buf) {
+                    int count = buf.readVarInt();
+                    List<CraftingBindingData> list = new ArrayList<>(count);
+                    for (int i = 0; i < count; i++) {
+                        String networkId = buf.readUtf(512);
+                        int jobCount = buf.readVarInt();
+                        List<CraftingJobSnapshot> jobs = new ArrayList<>(jobCount);
+                        for (int j = 0; j < jobCount; j++) {
+                            jobs.add(new CraftingJobSnapshot(
+                                    buf.readUtf(128),
+                                    buf.readUtf(256),
+                                    buf.readUtf(256),
+                                    buf.readLong(),
+                                    buf.readLong(),
+                                    buf.readBoolean(),
+                                    buf.readUtf(64),
+                                    buf.readLong(),
+                                    buf.readVarInt(),
+                                    buf.readDouble(),
+                                    buf.readVarLong(),
+                                    buf.readUtf(64)
+                            ));
+                        }
+                        int craftCount = buf.readVarInt();
+                        List<CraftableSnapshot> craftables = new ArrayList<>(craftCount);
+                        for (int k = 0; k < craftCount; k++) {
+                            craftables.add(new CraftableSnapshot(
+                                    buf.readUtf(256),
+                                    buf.readUtf(256)
+                            ));
+                        }
+                        CraftingStorageSnapshot storage = new CraftingStorageSnapshot(
+                                buf.readVarInt(),
+                                buf.readVarInt(),
+                                buf.readLong(),
+                                buf.readVarInt(),
+                                buf.readBoolean()
+                        );
+                        list.add(new CraftingBindingData(networkId, jobs, craftables, storage));
+                    }
+                    return list;
+                }
+
+                /** 序列化合成数据列表 */
+                private static void writeCraftingBindings(FriendlyByteBuf buf, List<CraftingBindingData> list) {
+                    List<CraftingBindingData> safe = list == null ? List.of() : list;
+                    buf.writeVarInt(safe.size());
+                    for (CraftingBindingData data : safe) {
+                        buf.writeUtf(data.networkId() == null ? "" : data.networkId(), 512);
+                        List<CraftingJobSnapshot> jobs = data.jobs() == null ? List.of() : data.jobs();
+                        buf.writeVarInt(jobs.size());
+                        for (CraftingJobSnapshot job : jobs) {
+                            buf.writeUtf(nullSafe(job.cpuName()), 128);
+                            buf.writeUtf(nullSafe(job.outputItemId()), 256);
+                            buf.writeUtf(nullSafe(job.outputDisplayName()), 256);
+                            buf.writeLong(job.totalAmount());
+                            buf.writeLong(job.remainingAmount());
+                            buf.writeBoolean(job.busy());
+                            buf.writeUtf(nullSafe(job.jobId()), 64);
+                            buf.writeLong(job.storageBytes());
+                            buf.writeVarInt(job.coProcessors());
+                            buf.writeDouble(job.progressFraction());
+                            buf.writeVarLong(job.elapsedMillis());
+                            buf.writeUtf(nullSafe(job.treeId()), 64);
+                        }
+                        List<CraftableSnapshot> craftables = data.craftables() == null ? List.of() : data.craftables();
+                        buf.writeVarInt(craftables.size());
+                        for (CraftableSnapshot c : craftables) {
+                            buf.writeUtf(nullSafe(c.itemId()), 256);
+                            buf.writeUtf(nullSafe(c.displayName()), 256);
+                        }
+                        CraftingStorageSnapshot storage = data.storage() == null
+                                ? CraftingStorageSnapshot.empty() : data.storage();
+                        buf.writeVarInt(storage.cpuCount());
+                        buf.writeVarInt(storage.busyCpuCount());
+                        buf.writeLong(storage.totalStorageBytes());
+                        buf.writeVarInt(storage.totalCoProcessors());
+                        buf.writeBoolean(storage.reliable());
+                    }
+                }
+
+                private static String nullSafe(String s) {
+                    return s == null ? "" : s;
                 }
             };
 

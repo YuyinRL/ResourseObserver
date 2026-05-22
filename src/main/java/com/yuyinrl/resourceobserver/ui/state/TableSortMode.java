@@ -1,5 +1,7 @@
 package com.yuyinrl.resourceobserver.ui.state;
 
+import com.yuyinrl.resourceobserver.network.EnumLookup;
+
 import java.util.Locale;
 
 /**
@@ -37,29 +39,15 @@ public enum TableSortMode {
 
     /** 根据 ID 查找排序模式，未找到时默认返回 NET */
     public static TableSortMode fromId(int id) {
-        for (TableSortMode value : values()) {
-            if (value.id == id) {
-                return sanitize(value);
-            }
-        }
-        return NET;
+        return sanitize(EnumLookup.fromId(values(), TableSortMode::id, id, NET));
     }
 
     /** 根据键名查找排序模式（不区分大小写），未找到时默认返回 NET */
     public static TableSortMode fromKey(String key) {
-        if (key == null || key.isBlank()) {
-            return NET;
-        }
-        String normalized = key.toLowerCase(Locale.ROOT);
-        if ("stock_ratio".equals(normalized)) {
+        if (key != null && "stock_ratio".equals(key.toLowerCase(Locale.ROOT))) {
             return STOCK;
         }
-        for (TableSortMode value : values()) {
-            if (value.key.equals(normalized)) {
-                return sanitize(value);
-            }
-        }
-        return NET;
+        return sanitize(EnumLookup.fromKey(values(), TableSortMode::key, key, NET));
     }
 
     private static TableSortMode sanitize(TableSortMode mode) {
